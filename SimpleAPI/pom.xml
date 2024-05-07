@@ -3,7 +3,7 @@
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.bencodez</groupId>
-	<artifactId>SimpleAPI</artifactId>
+	<artifactId>simpleapi</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>SimpleAPI</name>
 	<properties>
@@ -135,12 +135,31 @@
 	</dependencies>
 	<profiles>
 		<profile>
+			<id>normal</id>
+			<properties>
+				<build.profile.id>normal</build.profile.id>
+				<maven.compiler.source>1.8</maven.compiler.source>
+				<maven.compiler.target>1.8</maven.compiler.target>
+				<version.art>simpleapi</version.art>
+			</properties>
+			<activation>
+				<activeByDefault>true</activeByDefault>
+			</activation>
+			<distributionManagement>
+				<repository>
+					<id>internal.repo</id>
+					<name>Temporary Staging Repository</name>
+					<url>file://${project.build.directory}/mvn-repo</url>
+				</repository>
+			</distributionManagement>
+		</profile>
+		<profile>
 			<id>deploy</id>
 			<properties>
 				<build.profile.id>deploy</build.profile.id>
 				<maven.compiler.source>1.8</maven.compiler.source>
 				<maven.compiler.target>1.8</maven.compiler.target>
-				<version.art>SimpleAPI</version.art>
+				<version.art>simpleapi</version.art>
 			</properties>
 			<distributionManagement>
 				<snapshotRepository>
@@ -235,7 +254,7 @@
 				<build.profile.id>javadoc</build.profile.id>
 				<maven.compiler.source>1.8</maven.compiler.source>
 				<maven.compiler.target>1.8</maven.compiler.target>
-				<version.art>SimpleAPI</version.art>
+				<version.art>simpleapi</version.art>
 			</properties>
 			<distributionManagement>
 				<repository>
