@@ -233,6 +233,7 @@ public class NMSManager {
 	 *
 	 * @return the version
 	 */
+	@Deprecated
 	public String getVersion() {
 		String name = Bukkit.getServer().getClass().getPackage().getName();
 		return name.substring(name.lastIndexOf('.') + 1) + ".";
