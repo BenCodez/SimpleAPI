@@ -65,7 +65,7 @@ public class TabCompleteHandler {
 		return tabCompleteOptions;
 	}
 
-	public ArrayList<String> getTabCompleteOptions(ArrayList<? extends CommandHandler> handles, CommandSender sender,
+	public ArrayList<String> getTabCompleteOptions(ArrayList<CommandHandler> handles, CommandSender sender,
 			String[] args, int argNum) {
 		ArrayList<String> tabComplete = new ArrayList<String>();
 		ConcurrentHashMap<String, ArrayList<String>> options = getTabCompleteOptions();
