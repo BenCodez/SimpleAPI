@@ -251,7 +251,7 @@ public class ArrayUtils {
 			return array;
 		}
 	}
-	
+
 	public static String makeString(HashMap<String, String> placeholders) {
 		String str = "";
 		int count = 0;
@@ -265,6 +265,21 @@ public class ArrayUtils {
 			}
 		}
 		return str;
+	}
+
+	public static HashMap<String, String> fromString(String str) {
+		HashMap<String, String> map = new HashMap<String, String>();
+		if (!str.equals("")) {
+			for (String entry : str.split("%entry%")) {
+				String[] values = entry.split("%pair%");
+				if (values.length > 1) {
+					String key = values[0];
+					String value = values[1];
+					map.put(key, value);
+				}
+			}
+		}
+		return map;
 	}
 
 	/**
