@@ -251,6 +251,21 @@ public class ArrayUtils {
 			return array;
 		}
 	}
+	
+	public static String makeString(HashMap<String, String> placeholders) {
+		String str = "";
+		int count = 0;
+		if (placeholders != null && !placeholders.isEmpty()) {
+			for (Entry<String, String> entry : placeholders.entrySet()) {
+				str += entry.getKey() + "%pair%" + entry.getValue();
+				count++;
+				if (count != placeholders.size()) {
+					str += "%entry%";
+				}
+			}
+		}
+		return str;
+	}
 
 	/**
 	 * Make string.
