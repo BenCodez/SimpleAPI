@@ -103,7 +103,7 @@
 								<relocation>
 									<pattern>com.tcoded.folialib</pattern>
 									<shadedPattern>
-										${project.groupId}.advancedcore.folialib</shadedPattern>
+										${project.groupId}.simpleapi.folialib</shadedPattern>
 								</relocation>
 							</relocations>
 							<artifactSet>
@@ -123,13 +123,38 @@
 			<id>spigot-repo</id>
 			<url>https://hub.spigotmc.org/nexus/content/repositories/snapshots/</url>
 		</repository>
-
+		<repository>
+			<id>devmart-other</id>
+			<url>https://nexuslite.gcnt.net/repos/other/</url>
+		</repository>
+		<repository>
+			<id>papermc</id>
+			<url>https://repo.papermc.io/repository/maven-public/</url>
+		</repository>
 	</repositories>
 	<dependencies>
 		<dependency>
 			<groupId>org.spigotmc</groupId>
 			<artifactId>spigot-api</artifactId>
 			<version>1.20.6-R0.1-SNAPSHOT</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.tcoded</groupId>
+			<artifactId>FoliaLib</artifactId>
+			<version>LATEST</version>
+			<scope>compile</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<version>1.18.32</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.velocitypowered</groupId>
+			<artifactId>velocity-api</artifactId>
+			<version>3.1.1</version>
 			<scope>provided</scope>
 		</dependency>
 	</dependencies>

@@ -20,12 +20,29 @@ import org.bukkit.metadata.MetadataValue;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import com.bencodez.simpleapi.serverhandle.CraftBukkitHandle;
+import com.bencodez.simpleapi.serverhandle.IServerHandle;
+import com.bencodez.simpleapi.serverhandle.SpigotHandle;
 import com.google.common.collect.Iterables;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import lombok.Getter;
+
 public class PlayerUtils {
+	@Getter
+	private static IServerHandle serverHandle = loadHandle();
+
+	public static IServerHandle loadHandle() {
+		try {
+			Class.forName("org.spigotmc.SpigotConfig");
+			return new SpigotHandle();
+		} catch (Exception ex) {
+			return serverHandle = new CraftBukkitHandle();
+		}
+	}
+
 	private static final BlockFace[] axis = { BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST };
 
 	private static final BlockFace[] radial = { BlockFace.NORTH, BlockFace.NORTH_EAST, BlockFace.EAST,
@@ -72,6 +89,28 @@ public class PlayerUtils {
 
 		// Return UUID
 		return parseUUIDFromString(uuidAsString);
+	}
+
+	public static boolean hasEitherPermission(CommandSender sender, String perm) {
+		if (sender instanceof Player) {
+
+			if (perm.equals("")) {
+				return true;
+			}
+
+			boolean hasPerm = false;
+
+			for (String permission : perm.split("\\|")) {
+				if (sender.hasPermission(permission)) {
+					hasPerm = true;
+				}
+			}
+
+			return hasPerm;
+
+		} else {
+			return true;
+		}
 	}
 
 	/**

@@ -1,13 +1,26 @@
 package com.bencodez.simpleapi.messages;
 
 import java.text.DecimalFormat;
+import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.bukkit.entity.Player;
+
+import com.bencodez.simpleapi.array.ArrayUtils;
+import com.bencodez.simpleapi.messages.hover.HoverEventSupport;
+import com.bencodez.simpleapi.player.PlayerUtils;
+
+import lombok.Getter;
 import net.md_5.bungee.api.ChatColor;
+import net.md_5.bungee.api.chat.BaseComponent;
 import net.md_5.bungee.api.chat.TextComponent;
+import net.md_5.bungee.chat.ComponentSerializer;
 
 public class MessageAPI {
+	@Getter
+	private static final HoverEventSupport hoverEventSupport = HoverEventSupport.findInstance();
+
 	public static final char COLOR_CHAR = ChatColor.COLOR_CHAR;
 
 	public static String colorize(String format) {
@@ -28,6 +41,55 @@ public class MessageAPI {
 		// hex format: &#FF0000
 		format = translateHexColorCodes("&#", "", format);
 		return ChatColor.translateAlternateColorCodes('&', format);
+	}
+
+	public static void sendJson(Player player, TextComponent message) {
+		if ((player != null) && (message != null)) {
+			message.setText(message.getText());
+			PlayerUtils.getServerHandle().sendMessage(player, message);
+		}
+	}
+
+	public static void sendJson(Player player, ArrayList<TextComponent> messages) {
+		if ((player != null) && (messages != null)) {
+			ArrayList<BaseComponent> texts = new ArrayList<BaseComponent>();
+			TextComponent newLine = new TextComponent(ComponentSerializer.parse("{text: \"\n\"}"));
+			for (int i = 0; i < messages.size(); i++) {
+				TextComponent txt = messages.get(i);
+
+				texts.add(txt);
+				if (i + 1 < messages.size()) {
+					texts.add(newLine);
+				}
+
+			}
+
+			PlayerUtils.getServerHandle().sendMessage(player, ArrayUtils.convertBaseComponent(texts));
+		}
+
+	}
+
+	/**
+	 * Replace ignore case.
+	 *
+	 * @param str         the str
+	 * @param toReplace   the to replace
+	 * @param replaceWith the replace with
+	 * @return the string
+	 */
+	public static String replaceIgnoreCase(String str, String toReplace, String replaceWith) {
+		if (str == null) {
+			return "";
+		}
+		if ((toReplace == null) || (replaceWith == null)) {
+			return str;
+		}
+
+		try {
+			return Pattern.compile(toReplace, Pattern.CASE_INSENSITIVE).matcher(str).replaceAll(replaceWith);
+		} catch (IndexOutOfBoundsException e) {
+			return str.replace(toReplace, replaceWith);
+		}
 	}
 
 	public static String translateHexColorCodes(String startTag, String endTag, String message) {
