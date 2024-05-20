@@ -43,7 +43,8 @@ public class TabCompleteHandler {
 	public void addTabCompleteOption(TabCompleteHandle handle) {
 		for (TabCompleteHandle h : tabCompletes) {
 			if (h.getToReplace().equals(handle.getToReplace())) {
-				//plugin.debug("Tabcompletehandle not added, one already exists for " + handle.getToReplace());
+				// plugin.debug("Tabcompletehandle not added, one already exists for " +
+				// handle.getToReplace());
 				return;
 			}
 		}
@@ -64,7 +65,7 @@ public class TabCompleteHandler {
 		return tabCompleteOptions;
 	}
 
-	public ArrayList<String> getTabCompleteOptions(ArrayList<CommandHandler> handles, CommandSender sender,
+	public ArrayList<String> getTabCompleteOptions(ArrayList<? extends CommandHandler> handles, CommandSender sender,
 			String[] args, int argNum) {
 		ArrayList<String> tabComplete = new ArrayList<String>();
 		ConcurrentHashMap<String, ArrayList<String>> options = getTabCompleteOptions();
