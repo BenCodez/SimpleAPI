@@ -3,6 +3,8 @@ package com.bencodez.simpleapi.player;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
@@ -15,6 +17,8 @@ import org.bukkit.event.Event;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.metadata.MetadataValue;
 import org.bukkit.plugin.Plugin;
@@ -55,6 +59,22 @@ public class PlayerUtils {
 			return true;
 		}
 		return false;
+	}
+
+	public static Inventory getTopInventory(Player player) {
+		InventoryView oInv = player.getOpenInventory();
+		if (oInv == null) {
+			return null;
+		}
+		Method method;
+		try {
+			method = InventoryView.class.getDeclaredMethod("getTopInventory");
+			return (Inventory) method.invoke(oInv);
+		} catch (NoSuchMethodException | SecurityException | IllegalAccessException | IllegalArgumentException
+				| InvocationTargetException e) {
+			e.printStackTrace();
+		}
+		return oInv.getTopInventory();
 	}
 
 	public static boolean canInteract(Player p, Block clickedBlock, Action action, ItemStack item,
