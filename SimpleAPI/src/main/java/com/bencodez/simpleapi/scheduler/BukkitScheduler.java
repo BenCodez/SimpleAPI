@@ -20,6 +20,7 @@ public class BukkitScheduler {
 	}
 
 	public void executeOrScheduleSync(Plugin plugin, Runnable task) {
+		
 		getFoliaLib().getImpl().runNextTick(task);
 	}
 
