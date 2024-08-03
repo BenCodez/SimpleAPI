@@ -20,68 +20,99 @@ public class BukkitScheduler {
 	}
 
 	public void executeOrScheduleSync(Plugin plugin, Runnable task) {
-		
-		getFoliaLib().getImpl().runNextTick(task);
+		getFoliaLib().getImpl().runNextTick(run -> {
+			task.run();
+		});
 	}
 
 	public void executeOrScheduleSync(Plugin plugin, Runnable task, Entity entity) {
-		getFoliaLib().getImpl().runAtEntity(entity, task);
+		getFoliaLib().getImpl().runAtEntity(entity, run -> {
+			task.run();
+		});
 	}
 
 	public void executeOrScheduleSync(Plugin plugin, Runnable task, Location location) {
-		getFoliaLib().getImpl().runAtLocation(location, task);
+		getFoliaLib().getImpl().runAtLocation(location, run -> {
+			task.run();
+		});
 	}
 
 	public void runTask(Plugin plugin, Runnable task, Entity entity) {
-		getFoliaLib().getImpl().runAtEntity(entity, task);
+		getFoliaLib().getImpl().runAtEntity(entity, run -> {
+			task.run();
+		});
 	}
 
 	public void runTaskLater(Plugin plugin, Runnable task, long delay, Entity entity) {
-		getFoliaLib().getImpl().runAtEntityLater(entity, task, delay, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runAtEntityLater(entity, run -> {
+			task.run();
+		}, delay, TimeUnit.SECONDS);
 	}
 
 	public void runTaskTimer(Plugin plugin, Runnable task, long delay, long period, Entity entity) {
-		getFoliaLib().getImpl().runTimer(task, delay, period, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runTimer(run -> {
+			task.run();
+		}, delay, period, TimeUnit.SECONDS);
 	}
 
 	public void runTask(Plugin plugin, Runnable task, Location location) {
-		getFoliaLib().getImpl().runAtLocation(location, task);
+		getFoliaLib().getImpl().runAtLocation(location, run -> {
+			task.run();
+		});
 	}
 
 	public void runTaskLater(Plugin plugin, Runnable task, long delay, Location location) {
-		getFoliaLib().getImpl().runAtLocationLater(location, task, delay, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runAtLocationLater(location, run -> {
+			task.run();
+		}, delay, TimeUnit.SECONDS);
 	}
 
 	public void runTaskTimer(Plugin plugin, Runnable task, long delay, long period, Location location) {
-		getFoliaLib().getImpl().runAtLocationTimer(location, task, delay, period, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runAtLocationTimer(location, run -> {
+			task.run();
+		}, delay, period, TimeUnit.SECONDS);
 	}
 
 	public void runTask(Plugin plugin, Runnable task) {
-		getFoliaLib().getImpl().runNextTick(task);
+		getFoliaLib().getImpl().runNextTick(run -> {
+			task.run();
+		});
 	}
 
 	public void runTaskLater(Plugin plugin, Runnable task, long delay) {
-		getFoliaLib().getImpl().runLater(task, delay, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runLater(run -> {
+			task.run();
+		}, delay, TimeUnit.SECONDS);
 	}
 
 	public void runTaskLater(Plugin plugin, Runnable task, long delay, TimeUnit time) {
-		getFoliaLib().getImpl().runLater(task, delay, time);
+		getFoliaLib().getImpl().runLater(run -> {
+			task.run();
+		}, delay, time);
 	}
 
 	public void runTaskTimer(Plugin plugin, Runnable task, long delay, long period) {
-		getFoliaLib().getImpl().runTimer(task, delay, period, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runTimer(run -> {
+			task.run();
+		}, delay, period, TimeUnit.SECONDS);
 	}
 
 	public void runTaskAsynchronously(Plugin plugin, Runnable task) {
-		getFoliaLib().getImpl().runAsync(task);
+		getFoliaLib().getImpl().runAsync(run -> {
+			task.run();
+		});
 	}
 
 	public void runTaskLaterAsynchronously(Plugin plugin, Runnable task, long delay) {
-		getFoliaLib().getImpl().runLaterAsync(task, delay, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runLaterAsync(run -> {
+			task.run();
+		}, delay, TimeUnit.SECONDS);
 	}
 
 	public void runTaskTimerAsynchronously(Plugin plugin, Runnable task, long delay, long period) {
-		getFoliaLib().getImpl().runTimerAsync(task, delay, period, TimeUnit.SECONDS);
+		getFoliaLib().getImpl().runTimerAsync(run -> {
+			task.run();
+		}, delay, period, TimeUnit.SECONDS);
 	}
 
 }

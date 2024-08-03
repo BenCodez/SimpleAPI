@@ -80,7 +80,7 @@
 				<version>3.5.3</version>
 				<configuration>
 					<shadedArtifactAttached>false</shadedArtifactAttached>
-					<minimizeJar>true</minimizeJar>
+					<minimizeJar>false</minimizeJar>
 				</configuration>
 				<executions>
 					<execution>
@@ -142,7 +142,7 @@
 		<dependency>
 			<groupId>com.tcoded</groupId>
 			<artifactId>FoliaLib</artifactId>
-			<version>0.2.6</version>
+			<version>0.3.4</version>
 			<scope>compile</scope>
 		</dependency>
 		<dependency>
