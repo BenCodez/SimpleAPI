@@ -151,7 +151,7 @@ public class SkullCache {
 	/**
 	 * Get an array of player skulls from uuids.
 	 * 
-	 * @param uuids Array of uuids.
+	 * @param players Array of uuids.
 	 * @return ItemStack array of skulls.
 	 */
 	public static ItemStack[] getSkulls(HashMap<UUID, String> players) {
