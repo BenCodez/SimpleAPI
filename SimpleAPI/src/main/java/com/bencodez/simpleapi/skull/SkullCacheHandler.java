@@ -35,10 +35,14 @@ public abstract class SkullCacheHandler {
 	}
 
 	public ItemStack getSkull(UUID uuid, String playerName) {
-		if (playerName.length()>16) {
+		if (playerName.length() > 16) {
 			return new ItemStack(Material.PLAYER_HEAD);
 		}
-		return SkullCache.getSkull(uuid, playerName);
+		try {
+			return SkullCache.getSkull(uuid, playerName);
+		} catch (Exception e) {
+			return new ItemStack(Material.PLAYER_HEAD);
+		}
 	}
 
 	public void close() {
