@@ -10,7 +10,16 @@ import java.util.concurrent.TimeUnit;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 
+import lombok.Getter;
+
 public abstract class SkullCacheHandler {
+	@Getter
+	private int skullDelayTime = 2000;
+
+	public SkullCacheHandler(int skullDelayTime) {
+		this.skullDelayTime = skullDelayTime;
+	}
+
 	public SkullCacheHandler() {
 
 	}
@@ -67,6 +76,6 @@ public abstract class SkullCacheHandler {
 					}
 				}
 			}
-		}, 30, 3, TimeUnit.SECONDS);
+		}, 20000, skullDelayTime, TimeUnit.MILLISECONDS);
 	}
 }
