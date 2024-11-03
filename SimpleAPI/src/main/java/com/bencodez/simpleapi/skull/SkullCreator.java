@@ -1,15 +1,5 @@
 package com.bencodez.simpleapi.skull;
 
-import com.mojang.authlib.GameProfile;
-import com.mojang.authlib.properties.Property;
-import org.bukkit.Bukkit;
-import org.bukkit.Material;
-import org.bukkit.SkullType;
-import org.bukkit.block.Block;
-import org.bukkit.block.Skull;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.SkullMeta;
-
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -18,13 +8,24 @@ import java.net.URISyntaxException;
 import java.util.Base64;
 import java.util.UUID;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.SkullType;
+import org.bukkit.block.Block;
+import org.bukkit.block.Skull;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.SkullMeta;
+
+import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.properties.Property;
+
 /**
  * A library for the Bukkit API to create player skulls from names, base64
  * strings, and texture URLs.
  * <p>
  * Does not use any NMS code, and should work across all versions.
  *
- * @author Dean B on 12/28/2016.
+ * @author deanveloper on 12/28/2016.
  */
 @SuppressWarnings("deprecation")
 public class SkullCreator {
@@ -41,8 +42,6 @@ public class SkullCreator {
 
 	/**
 	 * Creates a player skull, should work in both legacy and new Bukkit APIs.
-	 * 
-	 * @return Itemstack with blank skull
 	 */
 	public static ItemStack createSkull() {
 		checkLegacy();
@@ -59,6 +58,7 @@ public class SkullCreator {
 	 *
 	 * @param name The Player's name.
 	 * @return The head of the Player.
+	 * @deprecated names don't make for good identifiers.
 	 */
 	public static ItemStack itemFromName(String name) {
 		return itemWithName(createSkull(), name);
@@ -87,7 +87,7 @@ public class SkullCreator {
 	/**
 	 * Creates a player skull item with the skin based on a base64 string.
 	 *
-	 * @param base64 The Mojang URL.
+	 * @param base64 The Base64 string.
 	 * @return The head of the Player.
 	 */
 	public static ItemStack itemFromBase64(String base64) {
@@ -304,7 +304,6 @@ public class SkullCreator {
 	}
 
 	// suppress warning since PLAYER_HEAD doesn't exist in 1.12.2,
-	// but we expect this and catch the error at runtime.
 	private static void checkLegacy() {
 		try {
 			// if both of these succeed, then we are running
