@@ -1,9 +1,17 @@
 package com.bencodez.simpleapi.skull;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map.Entry;
 import java.util.UUID;
 import java.util.logging.Level;
+
+import javax.net.ssl.HttpsURLConnection;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -13,6 +21,10 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.SkullMeta;
+import org.bukkit.profile.PlayerProfile;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 public class SkullCache {
 
@@ -239,6 +251,59 @@ public class SkullCache {
 		return null;
 	}
 
+	@SuppressWarnings("deprecation")
+	static private JsonParser parser = new JsonParser();
+	static private String API_PROFILE_LINK = "https://sessionserver.mojang.com/session/minecraft/profile/";
+
+	@SuppressWarnings("deprecation")
+	public static String getSkinUrl(String uuid) {
+		String json = getContent(API_PROFILE_LINK + uuid);
+		JsonObject o = parser.parse(json).getAsJsonObject();
+		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
+
+		o = parser.parse(new String(Base64.getDecoder().decode(jsonBase64))).getAsJsonObject();
+		String skinUrl = o.get("textures").getAsJsonObject().get("SKIN").getAsJsonObject().get("url").getAsString();
+		return skinUrl;
+	}
+
+	public static String getContent(String link) {
+		try {
+			URL url = new URL(link);
+			HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+			BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+			String outputLine = "";
+
+			String inputLine;
+			while ((inputLine = br.readLine()) != null) {
+				outputLine += inputLine;
+			}
+			br.close();
+			return outputLine;
+
+		} catch (MalformedURLException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	public static ItemStack getSkull(String url, UUID uuid) {
+		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
+		if (url == null || url.isEmpty())
+			return skull;
+		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
+		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(uuid);
+		try {
+			profile.getTextures().setSkin(new URL(getSkinUrl(uuid.toString())));
+		} catch (MalformedURLException e) {
+			e.printStackTrace();
+		}
+		skullMeta.setOwnerProfile(profile);
+		skull.setItemMeta(skullMeta);
+		return skull;
+	}
+
 	/**
 	 * Modifies a skull to use the skin of the player with a given uuid.
 	 *
@@ -246,23 +311,11 @@ public class SkullCache {
 	 * @param id   The player's uuid.
 	 * @return The head of the player.
 	 */
-	@SuppressWarnings("deprecation")
 	public static ItemStack itemWithUuid(ItemStack item, UUID id, String playerName) throws Exception {
 		notNull(item, "item");
 		notNull(id, "id");
-		SkullMeta meta = (SkullMeta) item.getItemMeta();
-		if (Bukkit.getOfflinePlayer(id).hasPlayedBefore()) {
-			// Bukkit.getLogger().log(Level.INFO, ChatColor.GREEN + "[SkullCache] Cached " +
-			// id + "/" + playerName);
-			meta.setOwningPlayer(Bukkit.getOfflinePlayer(id));
 
-		} else {
-			meta.setOwningPlayer(Bukkit.getOfflinePlayer(playerName));
-		}
-
-		item.setItemMeta(meta);
-
-		return item;
+		return getSkull(getSkinUrl(id.toString()), id);
 	}
 
 	private static void notNull(Object o, String name) {
