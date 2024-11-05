@@ -33,6 +33,10 @@ public class SkullCache {
 	 * accessed.
 	 */
 	private static final HashMap<UUID, ItemStack> skullMap = new HashMap<>();
+	private static final HashMap<String, ItemStack> skullBase64Map = new HashMap<>();
+	private static final HashMap<String, Long> timeBase64Map = new HashMap<>();
+	private static final HashMap<String, ItemStack> skullURLMap = new HashMap<>();
+	private static final HashMap<String, Long> timeURLMap = new HashMap<>();
 	private static final HashMap<UUID, Long> timeMap = new HashMap<>();
 
 	/**
@@ -41,8 +45,18 @@ public class SkullCache {
 	 * @param uuid The player's uuid.
 	 */
 	public static void cacheSkull(UUID uuid, String name) {
-		skullMap.put(uuid, skullFromUuid(uuid, name));
+		skullMap.put(uuid, itemWithUuid(uuid, name));
 		timeMap.put(uuid, System.currentTimeMillis());
+	}
+
+	public static void cacheSkullBase64(String base64) {
+		skullBase64Map.put(base64, itemWithBase64(base64));
+		timeBase64Map.put(base64, System.currentTimeMillis());
+	}
+
+	public static void cacheSkullURL(String url) {
+		skullURLMap.put(url, itemWithURL(url));
+		timeURLMap.put(url, System.currentTimeMillis());
 	}
 
 	/**
@@ -73,7 +87,7 @@ public class SkullCache {
 		new Thread(() -> {
 			long start = System.currentTimeMillis();
 			for (Entry<UUID, String> entry : uuids.entrySet()) {
-				skullMap.put(entry.getKey(), skullFromUuid(entry.getKey(), entry.getValue()));
+				skullMap.put(entry.getKey(), itemWithUuid(entry.getKey(), entry.getValue()));
 				timeMap.put(entry.getKey(), System.currentTimeMillis());
 			}
 			// Generate an inventory off the rip to try to fix the hashmap
@@ -128,7 +142,7 @@ public class SkullCache {
 		timeMap.put(uuid, System.currentTimeMillis());
 		ItemStack skull = skullMap.get(uuid);
 		if (skull == null) {
-			skull = skullFromUuid(uuid, name);
+			skull = itemWithUuid(uuid, name);
 			cacheSkull(uuid, name);
 		}
 		return skull;
@@ -158,6 +172,26 @@ public class SkullCache {
 	 */
 	public static ItemStack getSkull(Player player) {
 		return getSkull(player.getUniqueId(), player.getName());
+	}
+
+	public static ItemStack getSkullBase64(String base64) {
+		timeBase64Map.put(base64, System.currentTimeMillis());
+		ItemStack skull = skullBase64Map.get(base64);
+		if (skull == null) {
+			skull = itemWithBase64(base64);
+			cacheSkullBase64(base64);
+		}
+		return skull;
+	}
+
+	public static ItemStack getSkullURL(String url) {
+		timeURLMap.put(url, System.currentTimeMillis());
+		ItemStack skull = skullURLMap.get(url);
+		if (skull == null) {
+			skull = itemWithURL(url);
+			cacheSkullURL(url);
+		}
+		return skull;
 	}
 
 	/**
@@ -227,30 +261,6 @@ public class SkullCache {
 		flush(604800000);
 	}
 
-	/**
-	 * Creates a new player head item stack.
-	 * 
-	 * @return Player head.
-	 */
-	public static ItemStack createSkull() {
-		return new ItemStack(Material.PLAYER_HEAD);
-	}
-
-	/**
-	 * Creates a player skull item with the skin based on a player's UUID.
-	 *
-	 * @param id The player's UUID.
-	 * @return The head of the player.
-	 */
-	public static ItemStack skullFromUuid(UUID id, String name) {
-		try {
-			return itemWithUuid(createSkull(), id, name);
-		} catch (Exception exception) {
-			exception.printStackTrace();
-		}
-		return null;
-	}
-
 	@SuppressWarnings("deprecation")
 	static private JsonParser parser = new JsonParser();
 	static private String API_PROFILE_LINK = "https://sessionserver.mojang.com/session/minecraft/profile/";
@@ -304,6 +314,39 @@ public class SkullCache {
 		return skull;
 	}
 
+	public static ItemStack getSkull(String url) {
+		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
+		if (url == null || url.isEmpty())
+			return skull;
+		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
+		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(UUID.randomUUID());
+		try {
+			profile.getTextures().setSkin(new URL(url));
+		} catch (MalformedURLException e) {
+			e.printStackTrace();
+		}
+		skullMeta.setOwnerProfile(profile);
+		skull.setItemMeta(skullMeta);
+		return skull;
+	}
+
+	public static String getUrlFromBase64(String base64) {
+		String decoded = new String(Base64.getDecoder().decode(base64));
+		// We simply remove the "beginning" and "ending" part of the JSON, so we're left
+		// with only the URL. You could use a proper
+		// JSON parser for this, but that's not worth it. The String will always start
+		// exactly with this stuff anyway
+		return decoded.substring("{\"textures\":{\"SKIN\":{\"url\":\"".length(), decoded.length() - "\"}}}".length());
+	}
+
+	public static ItemStack itemWithBase64(String base64) {
+		return getSkull(getUrlFromBase64(base64));
+	}
+
+	public static ItemStack itemWithURL(String url) {
+		return getSkull(url);
+	}
+
 	/**
 	 * Modifies a skull to use the skin of the player with a given uuid.
 	 *
@@ -311,8 +354,7 @@ public class SkullCache {
 	 * @param id   The player's uuid.
 	 * @return The head of the player.
 	 */
-	public static ItemStack itemWithUuid(ItemStack item, UUID id, String playerName) throws Exception {
-		notNull(item, "item");
+	public static ItemStack itemWithUuid(UUID id, String playerName) {
 		notNull(id, "id");
 
 		return getSkull(getSkinUrl(id.toString()), id);
