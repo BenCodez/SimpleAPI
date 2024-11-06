@@ -33,11 +33,13 @@ public class SkullCache {
 	 * accessed.
 	 */
 	private static final HashMap<UUID, ItemStack> skullMap = new HashMap<>();
+	private static final HashMap<UUID, Long> timeMap = new HashMap<>();
+
 	private static final HashMap<String, ItemStack> skullBase64Map = new HashMap<>();
 	private static final HashMap<String, Long> timeBase64Map = new HashMap<>();
+
 	private static final HashMap<String, ItemStack> skullURLMap = new HashMap<>();
 	private static final HashMap<String, Long> timeURLMap = new HashMap<>();
-	private static final HashMap<UUID, Long> timeMap = new HashMap<>();
 
 	/**
 	 * Cache a skull from a uuid.
@@ -250,6 +252,18 @@ public class SkullCache {
 			if (System.currentTimeMillis() - timeMap.get(uuid) > milliseconds) {
 				skullMap.remove(uuid);
 				timeMap.remove(uuid);
+			}
+		}
+		for (String base64 : skullBase64Map.keySet()) {
+			if (System.currentTimeMillis() - timeBase64Map.get(base64) > milliseconds) {
+				skullBase64Map.remove(base64);
+				timeBase64Map.remove(base64);
+			}
+		}
+		for (String url : skullURLMap.keySet()) {
+			if (System.currentTimeMillis() - timeURLMap.get(url) > milliseconds) {
+				skullURLMap.remove(url);
+				timeURLMap.remove(url);
 			}
 		}
 	}

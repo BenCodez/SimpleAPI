@@ -53,6 +53,10 @@ public abstract class SkullCacheHandler {
 			return new ItemStack(Material.PLAYER_HEAD);
 		}
 	}
+	
+	public void flushCache() {
+		SkullCache.flushWeek();
+	}
 
 	public void close() {
 		timer.shutdownNow();
