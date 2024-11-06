@@ -361,13 +361,6 @@ public class SkullCache {
 		return getSkull(url);
 	}
 
-	/**
-	 * Modifies a skull to use the skin of the player with a given uuid.
-	 *
-	 * @param item The item to apply the name to. Must be a player skull.
-	 * @param id   The player's uuid.
-	 * @return The head of the player.
-	 */
 	public static ItemStack itemWithUuid(UUID id, String playerName) {
 		notNull(id, "id");
 
