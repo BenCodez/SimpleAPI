@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.bencodez</groupId>
 	<artifactId>simpleapi</artifactId>
-	<version>0.0.2-SNAPSHOT</version>
+	<version>0.0.3</version>
 	<name>SimpleAPI</name>
 	<properties>
 		<!-- github server corresponds to entry in ~/.m2/settings.xml -->
@@ -13,6 +13,8 @@
 		<timestamp>${maven.build.timestamp}</timestamp>
 		<maven.build.timestamp.format>yyyy-MM-dd HH:mm</maven.build.timestamp.format>
 		<build.number>NOTSET</build.number>
+		<maven.compiler.source>17</maven.compiler.source>
+		<maven.compiler.target>17</maven.compiler.target>
 	</properties>
 	<build>
 		<sourceDirectory>src/main/java</sourceDirectory>
@@ -181,9 +183,6 @@
 			<id>normal</id>
 			<properties>
 				<build.profile.id>normal</build.profile.id>
-				<maven.compiler.source>1.8</maven.compiler.source>
-				<maven.compiler.target>1.8</maven.compiler.target>
-				<version.art>simpleapi</version.art>
 			</properties>
 			<activation>
 				<activeByDefault>true</activeByDefault>
@@ -200,9 +199,6 @@
 			<id>deploy</id>
 			<properties>
 				<build.profile.id>deploy</build.profile.id>
-				<maven.compiler.source>1.8</maven.compiler.source>
-				<maven.compiler.target>1.8</maven.compiler.target>
-				<version.art>simpleapi</version.art>
 			</properties>
 			<distributionManagement>
 				<snapshotRepository>
@@ -295,9 +291,6 @@
 			<id>javadoc</id>
 			<properties>
 				<build.profile.id>javadoc</build.profile.id>
-				<maven.compiler.source>1.8</maven.compiler.source>
-				<maven.compiler.target>1.8</maven.compiler.target>
-				<version.art>simpleapi</version.art>
 			</properties>
 			<distributionManagement>
 				<repository>
