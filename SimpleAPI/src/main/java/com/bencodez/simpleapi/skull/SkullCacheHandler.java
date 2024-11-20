@@ -14,7 +14,7 @@ import lombok.Getter;
 
 public abstract class SkullCacheHandler {
 	@Getter
-	private int skullDelayTime = 2000;
+	private int skullDelayTime = 3000;
 
 	public SkullCacheHandler(int skullDelayTime) {
 		this.skullDelayTime = skullDelayTime;
@@ -28,7 +28,28 @@ public abstract class SkullCacheHandler {
 
 	public abstract void debugException(Exception e);
 
+	public abstract void log(String log);
+
 	Queue<String> skullsToLoad = new ConcurrentLinkedQueue<String>();
+
+	private boolean pause = false;
+
+	public void pauseCaching() {
+		log("Pausing skull caching due to hitting rate limit or an error, increasing delay for caching");
+		pause = true;
+		skullDelayTime += 3000;
+		timer.schedule(new Runnable() {
+
+			@Override
+			public void run() {
+				unPuase();
+			}
+		}, 15, TimeUnit.MINUTES);
+	}
+
+	private void unPuase() {
+		pause = false;
+	}
 
 	private ScheduledExecutorService timer = Executors.newScheduledThreadPool(1);
 
@@ -44,16 +65,17 @@ public abstract class SkullCacheHandler {
 	}
 
 	public ItemStack getSkull(UUID uuid, String playerName) {
-		if (playerName.length() > 16) {
+		if (playerName.length() > 16 || (pause && !SkullCache.isLoaded(uuid))) {
 			return new ItemStack(Material.PLAYER_HEAD);
 		}
 		try {
 			return SkullCache.getSkull(uuid, playerName);
 		} catch (Exception e) {
+			pauseCaching();
 			return new ItemStack(Material.PLAYER_HEAD);
 		}
 	}
-	
+
 	public void flushCache() {
 		SkullCache.flushWeek();
 	}
@@ -67,7 +89,7 @@ public abstract class SkullCacheHandler {
 
 			@Override
 			public void run() {
-				if (!skullsToLoad.isEmpty()) {
+				if (!skullsToLoad.isEmpty() && !pause) {
 					String text = skullsToLoad.remove();
 					try {
 						String[] data = text.split("/");

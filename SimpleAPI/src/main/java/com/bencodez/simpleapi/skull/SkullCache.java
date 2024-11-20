@@ -47,8 +47,14 @@ public class SkullCache {
 	 * @param uuid The player's uuid.
 	 */
 	public static void cacheSkull(UUID uuid, String name) {
-		skullMap.put(uuid, itemWithUuid(uuid, name));
-		timeMap.put(uuid, System.currentTimeMillis());
+		try {
+			skullMap.put(uuid, itemWithUuid(uuid, name));
+			timeMap.put(uuid, System.currentTimeMillis());
+		} catch (IOException e) {
+			e.printStackTrace();
+			skullMap.remove(uuid);
+		}
+
 	}
 
 	public static void cacheSkullBase64(String base64) {
@@ -89,15 +95,24 @@ public class SkullCache {
 		new Thread(() -> {
 			long start = System.currentTimeMillis();
 			for (Entry<UUID, String> entry : uuids.entrySet()) {
-				skullMap.put(entry.getKey(), itemWithUuid(entry.getKey(), entry.getValue()));
-				timeMap.put(entry.getKey(), System.currentTimeMillis());
+				try {
+					skullMap.put(entry.getKey(), itemWithUuid(entry.getKey(), entry.getValue()));
+					timeMap.put(entry.getKey(), System.currentTimeMillis());
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+
 			}
 			// Generate an inventory off the rip to try to fix the hashmap
 			Inventory inventory = Bukkit.createInventory(null, 54, "Skull Cache Test");
 			int i = 0;
 			for (Entry<UUID, String> entry : uuids.entrySet()) {
 				if (i < Math.min(54, uuids.size())) {
-					inventory.setItem(i, SkullCache.getSkull(entry.getKey(), entry.getValue()));
+					try {
+						inventory.setItem(i, SkullCache.getSkull(entry.getKey(), entry.getValue()));
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
 					i++;
 				}
 			}
@@ -139,8 +154,9 @@ public class SkullCache {
 	 * 
 	 * @param uuid The player's uuid.
 	 * @return ItemStack of the player's skull.
+	 * @throws IOException
 	 */
-	public static ItemStack getSkull(UUID uuid, String name) {
+	public static ItemStack getSkull(UUID uuid, String name) throws IOException {
 		timeMap.put(uuid, System.currentTimeMillis());
 		ItemStack skull = skullMap.get(uuid);
 		if (skull == null) {
@@ -160,8 +176,9 @@ public class SkullCache {
 	 * 
 	 * @param offlinePlayer The offline player.
 	 * @return ItemStack of the offline player's skull.
+	 * @throws IOException
 	 */
-	public static ItemStack getSkull(OfflinePlayer offlinePlayer) {
+	public static ItemStack getSkull(OfflinePlayer offlinePlayer) throws IOException {
 		return getSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
 	}
 
@@ -171,8 +188,9 @@ public class SkullCache {
 	 * 
 	 * @param player The online player.
 	 * @return ItemStack of the online player's skull.
+	 * @throws IOException
 	 */
-	public static ItemStack getSkull(Player player) {
+	public static ItemStack getSkull(Player player) throws IOException {
 		return getSkull(player.getUniqueId(), player.getName());
 	}
 
@@ -201,8 +219,9 @@ public class SkullCache {
 	 * 
 	 * @param players Array of uuids.
 	 * @return ItemStack array of skulls.
+	 * @throws IOException
 	 */
-	public static ItemStack[] getSkulls(HashMap<UUID, String> players) {
+	public static ItemStack[] getSkulls(HashMap<UUID, String> players) throws IOException {
 		ItemStack[] itemStacks = new ItemStack[players.size()];
 		int i = 0;
 		for (Entry<UUID, String> entry : players.entrySet()) {
@@ -218,8 +237,9 @@ public class SkullCache {
 	 * 
 	 * @param offlinePlayers Array of offline players.
 	 * @return ItemStack array of skulls.
+	 * @throws IOException
 	 */
-	public static ItemStack[] getSkulls(OfflinePlayer[] offlinePlayers) {
+	public static ItemStack[] getSkulls(OfflinePlayer[] offlinePlayers) throws IOException {
 		HashMap<UUID, String> map = new HashMap<UUID, String>();
 		for (OfflinePlayer p : offlinePlayers) {
 			map.put(p.getUniqueId(), p.getName());
@@ -232,8 +252,9 @@ public class SkullCache {
 	 * 
 	 * @param players Array of online players.
 	 * @return ItemStack array of skulls.
+	 * @throws IOException
 	 */
-	public static ItemStack[] getSkulls(Player[] players) {
+	public static ItemStack[] getSkulls(Player[] players) throws IOException {
 		HashMap<UUID, String> map = new HashMap<UUID, String>();
 		for (Player p : players) {
 			map.put(p.getUniqueId(), p.getName());
@@ -280,7 +301,7 @@ public class SkullCache {
 	static private String API_PROFILE_LINK = "https://sessionserver.mojang.com/session/minecraft/profile/";
 
 	@SuppressWarnings("deprecation")
-	public static String getSkinUrl(String uuid) {
+	public static String getSkinUrl(String uuid) throws IOException {
 		String json = getContent(API_PROFILE_LINK + uuid);
 		JsonObject o = parser.parse(json).getAsJsonObject();
 		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
@@ -290,7 +311,7 @@ public class SkullCache {
 		return skinUrl;
 	}
 
-	public static String getContent(String link) {
+	public static String getContent(String link) throws IOException {
 		try {
 			URL url = new URL(link);
 			HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
@@ -306,23 +327,17 @@ public class SkullCache {
 
 		} catch (MalformedURLException e) {
 			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
 		}
 		return null;
 	}
 
-	public static ItemStack getSkull(String url, UUID uuid) {
+	public static ItemStack getSkull(String url, UUID uuid) throws MalformedURLException, IOException {
 		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
 		if (url == null || url.isEmpty())
 			return skull;
 		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
 		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(uuid);
-		try {
-			profile.getTextures().setSkin(new URL(getSkinUrl(uuid.toString())));
-		} catch (MalformedURLException e) {
-			e.printStackTrace();
-		}
+		profile.getTextures().setSkin(new URL(getSkinUrl(uuid.toString())));
 		skullMeta.setOwnerProfile(profile);
 		skull.setItemMeta(skullMeta);
 		return skull;
@@ -361,7 +376,7 @@ public class SkullCache {
 		return getSkull(url);
 	}
 
-	public static ItemStack itemWithUuid(UUID id, String playerName) {
+	public static ItemStack itemWithUuid(UUID id, String playerName) throws IOException {
 		notNull(id, "id");
 
 		return getSkull(getSkinUrl(id.toString()), id);
