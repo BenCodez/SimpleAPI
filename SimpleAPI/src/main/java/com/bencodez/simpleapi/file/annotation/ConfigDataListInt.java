@@ -9,7 +9,7 @@ import java.lang.annotation.Target;
 @Inherited
 @Target({ ElementType.METHOD, ElementType.FIELD })
 @Retention(RetentionPolicy.RUNTIME)
-public @interface ConfigDataListString {
+public @interface ConfigDataListInt {
 	String path();
 
 	String secondPath() default "";

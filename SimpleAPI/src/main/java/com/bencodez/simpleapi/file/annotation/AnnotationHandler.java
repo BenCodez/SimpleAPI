@@ -146,6 +146,40 @@ public class AnnotationHandler {
 					 */
 				}
 
+				ConfigDataListInt intListAnnotation = field.getAnnotation(ConfigDataListInt.class);
+				if (intListAnnotation != null) {
+					ArrayList<Integer> defaultValue = new ArrayList<Integer>();
+					try {
+						ArrayList<Integer> v = (ArrayList<Integer>) field.get(classToLoad);
+						defaultValue = v;
+					} catch (Exception e) {
+
+					}
+
+					List<Integer> list = config.getIntegerList(intListAnnotation.path());
+
+					if (list.isEmpty()) {
+						list = config.getIntegerList(intListAnnotation.secondPath());
+					}
+
+					ArrayList<Integer> list1 = new ArrayList<>(list);
+					// use default value
+					if (list.isEmpty()) {
+						list1 = defaultValue;
+					}
+
+					field.set(classToLoad, list1);
+
+					/*
+					 * ArrayList<String> value = null; if (!listAnnotation.secondPath().isEmpty()) {
+					 * value = (ArrayList<String>) config.getList(listAnnotation.path(),
+					 * config.getList(listAnnotation.secondPath(), defaultValue)); } else { value =
+					 * (ArrayList<String>) config.getList(listAnnotation.path(), defaultValue); }
+					 * 
+					 * field.set(classToLoad, value);
+					 */
+				}
+
 				ConfigDataKeys setAnnotation = field.getAnnotation(ConfigDataKeys.class);
 				if (setAnnotation != null) {
 					Set<String> value = new HashSet<String>();
