@@ -13,4 +13,6 @@ public @interface ConfigDataListString {
 	String path();
 
 	String secondPath() default "";
+	
+	String[] options() default "";
 }
