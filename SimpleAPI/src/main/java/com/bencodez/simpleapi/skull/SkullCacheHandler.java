@@ -80,6 +80,10 @@ public abstract class SkullCacheHandler {
 		SkullCache.flushWeek();
 	}
 
+	public void changeApiProfileURL(String url) {
+		SkullCache.setApi_profile_link(url);
+	}
+
 	public void close() {
 		timer.shutdownNow();
 	}

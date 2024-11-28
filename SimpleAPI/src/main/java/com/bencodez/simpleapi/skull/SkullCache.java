@@ -26,6 +26,9 @@ import org.bukkit.profile.PlayerProfile;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import lombok.Getter;
+import lombok.Setter;
+
 public class SkullCache {
 
 	/**
@@ -298,11 +301,13 @@ public class SkullCache {
 
 	@SuppressWarnings("deprecation")
 	static private JsonParser parser = new JsonParser();
-	static private String API_PROFILE_LINK = "https://sessionserver.mojang.com/session/minecraft/profile/";
+	@Getter
+	@Setter
+	static private String api_profile_link = "https://sessionserver.mojang.com/session/minecraft/profile/";
 
 	@SuppressWarnings("deprecation")
 	public static String getSkinUrl(String uuid) throws IOException {
-		String json = getContent(API_PROFILE_LINK + uuid);
+		String json = getContent(api_profile_link + uuid);
 		JsonObject o = parser.parse(json).getAsJsonObject();
 		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
 
