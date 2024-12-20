@@ -14,7 +14,7 @@ import lombok.Getter;
 
 public abstract class SkullCacheHandler {
 	@Getter
-	private int skullDelayTime = 3000;
+	private int skullDelayTime = 4000;
 
 	public SkullCacheHandler(int skullDelayTime) {
 		this.skullDelayTime = skullDelayTime;
