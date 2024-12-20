@@ -103,6 +103,7 @@ public abstract class SkullCacheHandler {
 						debugLog("Loaded skull: " + uuid + "/" + name);
 					} catch (Exception e) {
 						debugException(e);
+						pauseCaching();
 					}
 				}
 			}
