@@ -55,6 +55,10 @@ public abstract class SkullCacheHandler {
 
 	public void addToCache(UUID uuid, String name) {
 		String text = uuid.toString() + "/" + name;
+		if (uuid.toString().charAt(14) == '3') {
+			debugLog("Can't cache skull of offline player uuid: " + uuid.toString() + "/" + name);
+			return;
+		}
 		if (!skullsToLoad.contains(text) && !SkullCache.isLoaded(uuid)) {
 			if (name.length() <= 16) {
 				skullsToLoad.add(text);
@@ -65,7 +69,7 @@ public abstract class SkullCacheHandler {
 	}
 
 	public ItemStack getSkull(UUID uuid, String playerName) {
-		if (playerName.length() > 16 || (pause && !SkullCache.isLoaded(uuid))) {
+		if (playerName.length() > 16 || (pause && !SkullCache.isLoaded(uuid)) || uuid.toString().charAt(14) == '3') {
 			return new ItemStack(Material.PLAYER_HEAD);
 		}
 		try {
