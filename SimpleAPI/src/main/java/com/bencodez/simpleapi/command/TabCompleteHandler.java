@@ -17,11 +17,11 @@ public class TabCompleteHandler {
 		return instance;
 	}
 
-	private ConcurrentHashMap<String, ArrayList<String>> tabCompleteOptions = new ConcurrentHashMap<String, ArrayList<String>>();
+	private ConcurrentHashMap<String, ArrayList<String>> tabCompleteOptions = new ConcurrentHashMap<>();
 
-	private ArrayList<String> tabCompleteReplaces = new ArrayList<String>();
+	private ArrayList<String> tabCompleteReplaces = new ArrayList<>();
 
-	private ConcurrentLinkedQueue<TabCompleteHandle> tabCompletes = new ConcurrentLinkedQueue<TabCompleteHandle>();
+	private ConcurrentLinkedQueue<TabCompleteHandle> tabCompletes = new ConcurrentLinkedQueue<>();
 
 	public void addTabCompleteOption(String toReplace, ArrayList<String> options) {
 		addTabCompleteOption(new TabCompleteHandle(toReplace, options) {
@@ -52,7 +52,7 @@ public class TabCompleteHandler {
 		tabCompletes.add(handle);
 		loadTabCompleteOptions();
 
-		ArrayList<String> list = new ArrayList<String>();
+		ArrayList<String> list = new ArrayList<>();
 		for (TabCompleteHandle h : tabCompletes) {
 			list.add(h.getToReplace());
 			h.updateReplacements();
@@ -67,7 +67,7 @@ public class TabCompleteHandler {
 
 	public ArrayList<String> getTabCompleteOptions(ArrayList<CommandHandler> handles, CommandSender sender,
 			String[] args, int argNum) {
-		ArrayList<String> tabComplete = new ArrayList<String>();
+		ArrayList<String> tabComplete = new ArrayList<>();
 		ConcurrentHashMap<String, ArrayList<String>> options = getTabCompleteOptions();
 		for (CommandHandler h : handles) {
 			tabComplete.addAll(h.getTabCompleteOptions(sender, args, argNum, options));
@@ -77,6 +77,16 @@ public class TabCompleteHandler {
 
 	public ArrayList<String> getTabCompleteReplaces() {
 		return tabCompleteReplaces;
+	}
+
+	public void loadTabCompleteOptions() {
+		for (TabCompleteHandle h : tabCompletes) {
+			h.updateReplacements();
+		}
+		tabCompleteOptions.clear();
+		for (TabCompleteHandle h : tabCompletes) {
+			tabCompleteOptions.put(h.getToReplace(), h.getReplace());
+		}
 	}
 
 	public void loadTimer(ScheduledExecutorService timer) {
@@ -95,16 +105,6 @@ public class TabCompleteHandler {
 			if (h.isUpdateOnLoginLogout()) {
 				h.updateReplacements();
 			}
-		}
-		tabCompleteOptions.clear();
-		for (TabCompleteHandle h : tabCompletes) {
-			tabCompleteOptions.put(h.getToReplace(), h.getReplace());
-		}
-	}
-
-	public void loadTabCompleteOptions() {
-		for (TabCompleteHandle h : tabCompletes) {
-			h.updateReplacements();
 		}
 		tabCompleteOptions.clear();
 		for (TabCompleteHandle h : tabCompletes) {

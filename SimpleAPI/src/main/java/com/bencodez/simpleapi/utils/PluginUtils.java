@@ -8,9 +8,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public class PluginUtils {
 
-	private PluginUtils() {
-	}
-
 	public static long getFreeMemory() {
 		return Runtime.getRuntime().freeMemory() / (1024 * 1024);
 	}
@@ -19,15 +16,19 @@ public class PluginUtils {
 		return Runtime.getRuntime().totalMemory() / (1024 * 1024);
 	}
 
-	public static void registerCommands(JavaPlugin plugin, String commandText, CommandExecutor executor, TabCompleter tab) {
+	public static void registerCommands(JavaPlugin plugin, String commandText, CommandExecutor executor,
+			TabCompleter tab) {
 		plugin.getCommand(commandText).setExecutor(executor);
 		if (tab != null) {
 			plugin.getCommand(commandText).setTabCompleter(tab);
 		}
 	}
 
-	public static  void registerEvents(Listener listener, JavaPlugin plugin) {
+	public static void registerEvents(Listener listener, JavaPlugin plugin) {
 		Bukkit.getPluginManager().registerEvents(listener, plugin);
+	}
+
+	private PluginUtils() {
 	}
 
 }

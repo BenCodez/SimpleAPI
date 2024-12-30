@@ -114,7 +114,7 @@ public class AnnotationHandler {
 
 				ConfigDataListString listAnnotation = field.getAnnotation(ConfigDataListString.class);
 				if (listAnnotation != null) {
-					ArrayList<String> defaultValue = new ArrayList<String>();
+					ArrayList<String> defaultValue = new ArrayList<>();
 					try {
 						ArrayList<String> v = (ArrayList<String>) field.get(classToLoad);
 						defaultValue = v;
@@ -141,14 +141,14 @@ public class AnnotationHandler {
 					 * value = (ArrayList<String>) config.getList(listAnnotation.path(),
 					 * config.getList(listAnnotation.secondPath(), defaultValue)); } else { value =
 					 * (ArrayList<String>) config.getList(listAnnotation.path(), defaultValue); }
-					 * 
+					 *
 					 * field.set(classToLoad, value);
 					 */
 				}
 
 				ConfigDataListInt intListAnnotation = field.getAnnotation(ConfigDataListInt.class);
 				if (intListAnnotation != null) {
-					ArrayList<Integer> defaultValue = new ArrayList<Integer>();
+					ArrayList<Integer> defaultValue = new ArrayList<>();
 					try {
 						ArrayList<Integer> v = (ArrayList<Integer>) field.get(classToLoad);
 						defaultValue = v;
@@ -175,14 +175,14 @@ public class AnnotationHandler {
 					 * value = (ArrayList<String>) config.getList(listAnnotation.path(),
 					 * config.getList(listAnnotation.secondPath(), defaultValue)); } else { value =
 					 * (ArrayList<String>) config.getList(listAnnotation.path(), defaultValue); }
-					 * 
+					 *
 					 * field.set(classToLoad, value);
 					 */
 				}
 
 				ConfigDataKeys setAnnotation = field.getAnnotation(ConfigDataKeys.class);
 				if (setAnnotation != null) {
-					Set<String> value = new HashSet<String>();
+					Set<String> value = new HashSet<>();
 					if (config.isConfigurationSection(setAnnotation.path())) {
 						value = config.getConfigurationSection(setAnnotation.path()).getKeys(false);
 					} else if (config.isConfigurationSection(setAnnotation.secondPath())

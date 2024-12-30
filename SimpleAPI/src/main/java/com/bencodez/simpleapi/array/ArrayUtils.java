@@ -81,7 +81,7 @@ public class ArrayUtils {
 	 * @return the array list
 	 */
 	public static ArrayList<String> comptoString(ArrayList<TextComponent> comps) {
-		ArrayList<String> txt = new ArrayList<String>();
+		ArrayList<String> txt = new ArrayList<>();
 		for (TextComponent comp : comps) {
 			txt.add(MessageAPI.compToString(comp));
 		}
@@ -146,32 +146,6 @@ public class ArrayUtils {
 
 	}
 
-	public static ItemStack[] convertItems(List<Item> list) {
-		if (list == null) {
-			return null;
-		}
-		ItemStack[] string = new ItemStack[list.size()];
-		for (int i = 0; i < list.size(); i++) {
-			string[i] = list.get(i).getItemStack();
-		}
-		return string;
-
-	}
-
-	public static ItemStack[] convertItems(Collection<ItemStack> list) {
-		if (list == null) {
-			return null;
-		}
-		ItemStack[] string = new ItemStack[list.size()];
-		int i = 0;
-		for (ItemStack item : list) {
-			string[i] = item;
-			i++;
-		}
-		return string;
-
-	}
-
 	/**
 	 * Convert.
 	 *
@@ -179,8 +153,8 @@ public class ArrayUtils {
 	 * @return the array list
 	 */
 	public static ArrayList<String> convert(Set<String> set1) {
-		Set<String> set = new HashSet<String>(set1);
-		ArrayList<String> list = new ArrayList<String>();
+		Set<String> set = new HashSet<>(set1);
+		ArrayList<String> list = new ArrayList<>();
 		for (String st : set) {
 			list.add(st);
 		}
@@ -198,15 +172,14 @@ public class ArrayUtils {
 		if (list == null) {
 			return null;
 		}
-		ArrayList<String> newlist = new ArrayList<String>();
+		ArrayList<String> newlist = new ArrayList<>();
 		for (String element : list) {
 			newlist.add(element);
 		}
 		if (newlist == null) {
 			return null;
-		} else {
-			return newlist;
 		}
+		return newlist;
 	}
 
 	public static BaseComponent[] convertBaseComponent(ArrayList<BaseComponent> list) {
@@ -224,11 +197,37 @@ public class ArrayUtils {
 		if (list == null) {
 			return null;
 		}
-		ArrayList<BaseComponent> newlist = new ArrayList<BaseComponent>();
+		ArrayList<BaseComponent> newlist = new ArrayList<>();
 		for (BaseComponent element : list) {
 			newlist.add(element);
 		}
 		return newlist;
+	}
+
+	public static ItemStack[] convertItems(Collection<ItemStack> list) {
+		if (list == null) {
+			return null;
+		}
+		ItemStack[] string = new ItemStack[list.size()];
+		int i = 0;
+		for (ItemStack item : list) {
+			string[i] = item;
+			i++;
+		}
+		return string;
+
+	}
+
+	public static ItemStack[] convertItems(List<Item> list) {
+		if (list == null) {
+			return null;
+		}
+		ItemStack[] string = new ItemStack[list.size()];
+		for (int i = 0; i < list.size(); i++) {
+			string[i] = list.get(i).getItemStack();
+		}
+		return string;
+
 	}
 
 	/**
@@ -247,9 +246,23 @@ public class ArrayUtils {
 		}
 		if (array == null) {
 			return null;
-		} else {
-			return array;
 		}
+		return array;
+	}
+
+	public static HashMap<String, String> fromString(String str) {
+		HashMap<String, String> map = new HashMap<>();
+		if (!str.equals("")) {
+			for (String entry : str.split("%entry%")) {
+				String[] values = entry.split("%pair%");
+				if (values.length > 1) {
+					String key = values[0];
+					String value = values[1];
+					map.put(key, value);
+				}
+			}
+		}
+		return map;
 	}
 
 	public static String makeString(HashMap<String, String> placeholders) {
@@ -265,21 +278,6 @@ public class ArrayUtils {
 			}
 		}
 		return str;
-	}
-
-	public static HashMap<String, String> fromString(String str) {
-		HashMap<String, String> map = new HashMap<String, String>();
-		if (!str.equals("")) {
-			for (String entry : str.split("%entry%")) {
-				String[] values = entry.split("%pair%");
-				if (values.length > 1) {
-					String key = values[0];
-					String value = values[1];
-					map.put(key, value);
-				}
-			}
-		}
-		return map;
 	}
 
 	/**
@@ -341,7 +339,7 @@ public class ArrayUtils {
 	 * @return the array list
 	 */
 	public static ArrayList<String> removeDuplicates(ArrayList<String> list) {
-		Set<String> set = new HashSet<String>();
+		Set<String> set = new HashSet<>();
 		set.addAll(list);
 		list.clear();
 		list.addAll(set);
@@ -378,7 +376,7 @@ public class ArrayUtils {
 	 * @return the array list
 	 */
 	public static ArrayList<String> replaceIgnoreCase(ArrayList<String> list, String toReplace, String replaceWith) {
-		ArrayList<String> newList = new ArrayList<String>();
+		ArrayList<String> newList = new ArrayList<>();
 		for (String msg : list) {
 			newList.add(MessageAPI.replaceIgnoreCase(msg, toReplace, replaceWith));
 		}
@@ -392,7 +390,7 @@ public class ArrayUtils {
 
 	public static HashMap<String, Integer> sortByValuesStr(HashMap<String, Integer> unsortMap, final boolean order) {
 
-		List<Entry<String, Integer>> list = new LinkedList<Entry<String, Integer>>(unsortMap.entrySet());
+		List<Entry<String, Integer>> list = new LinkedList<>(unsortMap.entrySet());
 
 		// Sorting the list based on values
 		Collections.sort(list, new Comparator<Entry<String, Integer>>() {
@@ -400,15 +398,13 @@ public class ArrayUtils {
 			public int compare(Entry<String, Integer> o1, Entry<String, Integer> o2) {
 				if (order) {
 					return o1.getValue().compareTo(o2.getValue());
-				} else {
-					return o2.getValue().compareTo(o1.getValue());
-
 				}
+				return o2.getValue().compareTo(o1.getValue());
 			}
 		});
 
 		// Maintaining insertion order with the help of LinkedList
-		HashMap<String, Integer> sortedMap = new LinkedHashMap<String, Integer>();
+		HashMap<String, Integer> sortedMap = new LinkedHashMap<>();
 		for (Entry<String, Integer> entry : list) {
 			sortedMap.put(entry.getKey(), entry.getValue());
 		}
@@ -418,10 +414,10 @@ public class ArrayUtils {
 
 	public static LinkedHashMap<String, ItemStack> sortByValuesStrItem(HashMap<String, ItemStack> unsortMap) {
 
-		ArrayList<String> sortedKeys = sort(new ArrayList<String>(unsortMap.keySet()));
+		ArrayList<String> sortedKeys = sort(new ArrayList<>(unsortMap.keySet()));
 
 		// Maintaining insertion order with the help of LinkedList
-		LinkedHashMap<String, ItemStack> sortedMap = new LinkedHashMap<String, ItemStack>();
+		LinkedHashMap<String, ItemStack> sortedMap = new LinkedHashMap<>();
 		for (String key : sortedKeys) {
 			sortedMap.put(key, unsortMap.get(key));
 		}

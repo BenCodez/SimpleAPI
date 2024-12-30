@@ -44,9 +44,34 @@ public class SkullCache {
 	private static final HashMap<String, ItemStack> skullURLMap = new HashMap<>();
 	private static final HashMap<String, Long> timeURLMap = new HashMap<>();
 
+	@SuppressWarnings("deprecation")
+	static private JsonParser parser = new JsonParser();
+
+	@Getter
+	@Setter
+	static private String api_profile_link = "https://sessionserver.mojang.com/session/minecraft/profile/";
+
+	/**
+	 * Cache a skull from an offline player.
+	 *
+	 * @param offlinePlayer The offline player.
+	 */
+	public static void cacheSkull(OfflinePlayer offlinePlayer) {
+		cacheSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
+	}
+
+	/**
+	 * Cache a skull from an online player.
+	 *
+	 * @param player The online player.
+	 */
+	public static void cacheSkull(Player player) {
+		cacheSkull(player.getUniqueId(), player.getName());
+	}
+
 	/**
 	 * Cache a skull from a uuid.
-	 * 
+	 *
 	 * @param uuid The player's uuid.
 	 */
 	public static void cacheSkull(UUID uuid, String name) {
@@ -65,33 +90,10 @@ public class SkullCache {
 		timeBase64Map.put(base64, System.currentTimeMillis());
 	}
 
-	public static void cacheSkullURL(String url) {
-		skullURLMap.put(url, itemWithURL(url));
-		timeURLMap.put(url, System.currentTimeMillis());
-	}
-
-	/**
-	 * Cache a skull from an offline player.
-	 * 
-	 * @param offlinePlayer The offline player.
-	 */
-	public static void cacheSkull(OfflinePlayer offlinePlayer) {
-		cacheSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
-	}
-
-	/**
-	 * Cache a skull from an online player.
-	 * 
-	 * @param player The online player.
-	 */
-	public static void cacheSkull(Player player) {
-		cacheSkull(player.getUniqueId(), player.getName());
-	}
-
 	/**
 	 * Cache an array of skulls from uuids. Task will run asynchronously in an
 	 * attempt to prevent server lag.
-	 * 
+	 *
 	 * @param uuids Array of uuids.
 	 */
 	public static void cacheSkulls(HashMap<UUID, String> uuids) {
@@ -127,11 +129,11 @@ public class SkullCache {
 
 	/**
 	 * Cache an array of skulls from offline players.
-	 * 
+	 *
 	 * @param offlinePlayers Array of offline players.
 	 */
 	public static void cacheSkulls(OfflinePlayer[] offlinePlayers) {
-		HashMap<UUID, String> map = new HashMap<UUID, String>();
+		HashMap<UUID, String> map = new HashMap<>();
 		for (OfflinePlayer p : offlinePlayers) {
 			map.put(p.getUniqueId(), p.getName());
 		}
@@ -140,135 +142,26 @@ public class SkullCache {
 
 	/**
 	 * Cache an array of skulls from online players.
-	 * 
+	 *
 	 * @param players Array of online players.
 	 */
 	public static void cacheSkulls(Player[] players) {
-		HashMap<UUID, String> map = new HashMap<UUID, String>();
+		HashMap<UUID, String> map = new HashMap<>();
 		for (Player p : players) {
 			map.put(p.getUniqueId(), p.getName());
 		}
 		cacheSkulls(map);
 	}
 
-	/**
-	 * Get a skull from a uuid. If the skull is not saved in memory it will be
-	 * fetched from Mojang and then cached for future use.
-	 * 
-	 * @param uuid The player's uuid.
-	 * @return ItemStack of the player's skull.
-	 * @throws IOException
-	 */
-	public static ItemStack getSkull(UUID uuid, String name) throws IOException {
-		timeMap.put(uuid, System.currentTimeMillis());
-		ItemStack skull = skullMap.get(uuid);
-		if (skull == null) {
-			skull = itemWithUuid(uuid, name);
-			cacheSkull(uuid, name);
-		}
-		return skull;
-	}
-
-	public static boolean isLoaded(UUID uuid) {
-		return skullMap.containsKey(uuid);
-	}
-
-	/**
-	 * Get a skull from an offline player. If the skull is not saved in memory it
-	 * will be fetched from Mojang and then cached for future use.
-	 * 
-	 * @param offlinePlayer The offline player.
-	 * @return ItemStack of the offline player's skull.
-	 * @throws IOException
-	 */
-	public static ItemStack getSkull(OfflinePlayer offlinePlayer) throws IOException {
-		return getSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
-	}
-
-	/**
-	 * Get a skull from an online player. If the skull is not saved in memory it
-	 * will be fetched from Mojang and then cached for future use.
-	 * 
-	 * @param player The online player.
-	 * @return ItemStack of the online player's skull.
-	 * @throws IOException
-	 */
-	public static ItemStack getSkull(Player player) throws IOException {
-		return getSkull(player.getUniqueId(), player.getName());
-	}
-
-	public static ItemStack getSkullBase64(String base64) {
-		timeBase64Map.put(base64, System.currentTimeMillis());
-		ItemStack skull = skullBase64Map.get(base64);
-		if (skull == null) {
-			skull = itemWithBase64(base64);
-			cacheSkullBase64(base64);
-		}
-		return skull;
-	}
-
-	public static ItemStack getSkullURL(String url) {
+	public static void cacheSkullURL(String url) {
+		skullURLMap.put(url, itemWithURL(url));
 		timeURLMap.put(url, System.currentTimeMillis());
-		ItemStack skull = skullURLMap.get(url);
-		if (skull == null) {
-			skull = itemWithURL(url);
-			cacheSkullURL(url);
-		}
-		return skull;
-	}
-
-	/**
-	 * Get an array of player skulls from uuids.
-	 * 
-	 * @param players Array of uuids.
-	 * @return ItemStack array of skulls.
-	 * @throws IOException
-	 */
-	public static ItemStack[] getSkulls(HashMap<UUID, String> players) throws IOException {
-		ItemStack[] itemStacks = new ItemStack[players.size()];
-		int i = 0;
-		for (Entry<UUID, String> entry : players.entrySet()) {
-			timeMap.put(entry.getKey(), System.currentTimeMillis());
-			itemStacks[i] = getSkull(entry.getKey(), entry.getValue());
-			i++;
-		}
-		return itemStacks;
-	}
-
-	/**
-	 * Get an array of offline player skulls from offline players.
-	 * 
-	 * @param offlinePlayers Array of offline players.
-	 * @return ItemStack array of skulls.
-	 * @throws IOException
-	 */
-	public static ItemStack[] getSkulls(OfflinePlayer[] offlinePlayers) throws IOException {
-		HashMap<UUID, String> map = new HashMap<UUID, String>();
-		for (OfflinePlayer p : offlinePlayers) {
-			map.put(p.getUniqueId(), p.getName());
-		}
-		return getSkulls(map);
-	}
-
-	/**
-	 * Get an array of online player skulls from online players.
-	 * 
-	 * @param players Array of online players.
-	 * @return ItemStack array of skulls.
-	 * @throws IOException
-	 */
-	public static ItemStack[] getSkulls(Player[] players) throws IOException {
-		HashMap<UUID, String> map = new HashMap<UUID, String>();
-		for (Player p : players) {
-			map.put(p.getUniqueId(), p.getName());
-		}
-		return getSkulls(map);
 	}
 
 	/**
 	 * Remove skulls from memory if they haven't been cached or accessed within the
 	 * specified amount of time.
-	 * 
+	 *
 	 * @param milliseconds Duration of time given in milliseconds.
 	 */
 	public static void flush(long milliseconds) {
@@ -299,23 +192,6 @@ public class SkullCache {
 		flush(604800000);
 	}
 
-	@SuppressWarnings("deprecation")
-	static private JsonParser parser = new JsonParser();
-	@Getter
-	@Setter
-	static private String api_profile_link = "https://sessionserver.mojang.com/session/minecraft/profile/";
-
-	@SuppressWarnings("deprecation")
-	public static String getSkinUrl(String uuid) throws IOException {
-		String json = getContent(api_profile_link + uuid);
-		JsonObject o = parser.parse(json).getAsJsonObject();
-		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
-
-		o = parser.parse(new String(Base64.getDecoder().decode(jsonBase64))).getAsJsonObject();
-		String skinUrl = o.get("textures").getAsJsonObject().get("SKIN").getAsJsonObject().get("url").getAsString();
-		return skinUrl;
-	}
-
 	public static String getContent(String link) throws IOException {
 		try {
 			URL url = new URL(link);
@@ -336,22 +212,46 @@ public class SkullCache {
 		return null;
 	}
 
-	public static ItemStack getSkull(String url, UUID uuid) throws MalformedURLException, IOException {
-		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
-		if (url == null || url.isEmpty())
-			return skull;
-		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
-		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(uuid);
-		profile.getTextures().setSkin(new URL(getSkinUrl(uuid.toString())));
-		skullMeta.setOwnerProfile(profile);
-		skull.setItemMeta(skullMeta);
-		return skull;
+	@SuppressWarnings("deprecation")
+	public static String getSkinUrl(String uuid) throws IOException {
+		String json = getContent(api_profile_link + uuid);
+		JsonObject o = parser.parse(json).getAsJsonObject();
+		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
+
+		o = parser.parse(new String(Base64.getDecoder().decode(jsonBase64))).getAsJsonObject();
+		String skinUrl = o.get("textures").getAsJsonObject().get("SKIN").getAsJsonObject().get("url").getAsString();
+		return skinUrl;
+	}
+
+	/**
+	 * Get a skull from an offline player. If the skull is not saved in memory it
+	 * will be fetched from Mojang and then cached for future use.
+	 *
+	 * @param offlinePlayer The offline player.
+	 * @return ItemStack of the offline player's skull.
+	 * @throws IOException
+	 */
+	public static ItemStack getSkull(OfflinePlayer offlinePlayer) throws IOException {
+		return getSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
+	}
+
+	/**
+	 * Get a skull from an online player. If the skull is not saved in memory it
+	 * will be fetched from Mojang and then cached for future use.
+	 *
+	 * @param player The online player.
+	 * @return ItemStack of the online player's skull.
+	 * @throws IOException
+	 */
+	public static ItemStack getSkull(Player player) throws IOException {
+		return getSkull(player.getUniqueId(), player.getName());
 	}
 
 	public static ItemStack getSkull(String url) {
 		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
-		if (url == null || url.isEmpty())
+		if (url == null || url.isEmpty()) {
 			return skull;
+		}
 		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
 		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(UUID.randomUUID());
 		try {
@@ -364,6 +264,105 @@ public class SkullCache {
 		return skull;
 	}
 
+	public static ItemStack getSkull(String url, UUID uuid) throws MalformedURLException, IOException {
+		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
+		if (url == null || url.isEmpty()) {
+			return skull;
+		}
+		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
+		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(uuid);
+		profile.getTextures().setSkin(new URL(getSkinUrl(uuid.toString())));
+		skullMeta.setOwnerProfile(profile);
+		skull.setItemMeta(skullMeta);
+		return skull;
+	}
+
+	/**
+	 * Get a skull from a uuid. If the skull is not saved in memory it will be
+	 * fetched from Mojang and then cached for future use.
+	 *
+	 * @param uuid The player's uuid.
+	 * @return ItemStack of the player's skull.
+	 * @throws IOException
+	 */
+	public static ItemStack getSkull(UUID uuid, String name) throws IOException {
+		timeMap.put(uuid, System.currentTimeMillis());
+		ItemStack skull = skullMap.get(uuid);
+		if (skull == null) {
+			skull = itemWithUuid(uuid, name);
+			cacheSkull(uuid, name);
+		}
+		return skull;
+	}
+
+	public static ItemStack getSkullBase64(String base64) {
+		timeBase64Map.put(base64, System.currentTimeMillis());
+		ItemStack skull = skullBase64Map.get(base64);
+		if (skull == null) {
+			skull = itemWithBase64(base64);
+			cacheSkullBase64(base64);
+		}
+		return skull;
+	}
+
+	/**
+	 * Get an array of player skulls from uuids.
+	 *
+	 * @param players Array of uuids.
+	 * @return ItemStack array of skulls.
+	 * @throws IOException
+	 */
+	public static ItemStack[] getSkulls(HashMap<UUID, String> players) throws IOException {
+		ItemStack[] itemStacks = new ItemStack[players.size()];
+		int i = 0;
+		for (Entry<UUID, String> entry : players.entrySet()) {
+			timeMap.put(entry.getKey(), System.currentTimeMillis());
+			itemStacks[i] = getSkull(entry.getKey(), entry.getValue());
+			i++;
+		}
+		return itemStacks;
+	}
+
+	/**
+	 * Get an array of offline player skulls from offline players.
+	 *
+	 * @param offlinePlayers Array of offline players.
+	 * @return ItemStack array of skulls.
+	 * @throws IOException
+	 */
+	public static ItemStack[] getSkulls(OfflinePlayer[] offlinePlayers) throws IOException {
+		HashMap<UUID, String> map = new HashMap<>();
+		for (OfflinePlayer p : offlinePlayers) {
+			map.put(p.getUniqueId(), p.getName());
+		}
+		return getSkulls(map);
+	}
+
+	/**
+	 * Get an array of online player skulls from online players.
+	 *
+	 * @param players Array of online players.
+	 * @return ItemStack array of skulls.
+	 * @throws IOException
+	 */
+	public static ItemStack[] getSkulls(Player[] players) throws IOException {
+		HashMap<UUID, String> map = new HashMap<>();
+		for (Player p : players) {
+			map.put(p.getUniqueId(), p.getName());
+		}
+		return getSkulls(map);
+	}
+
+	public static ItemStack getSkullURL(String url) {
+		timeURLMap.put(url, System.currentTimeMillis());
+		ItemStack skull = skullURLMap.get(url);
+		if (skull == null) {
+			skull = itemWithURL(url);
+			cacheSkullURL(url);
+		}
+		return skull;
+	}
+
 	public static String getUrlFromBase64(String base64) {
 		String decoded = new String(Base64.getDecoder().decode(base64));
 		// We simply remove the "beginning" and "ending" part of the JSON, so we're left
@@ -371,6 +370,10 @@ public class SkullCache {
 		// JSON parser for this, but that's not worth it. The String will always start
 		// exactly with this stuff anyway
 		return decoded.substring("{\"textures\":{\"SKIN\":{\"url\":\"".length(), decoded.length() - "\"}}}".length());
+	}
+
+	public static boolean isLoaded(UUID uuid) {
+		return skullMap.containsKey(uuid);
 	}
 
 	public static ItemStack itemWithBase64(String base64) {
@@ -388,7 +391,8 @@ public class SkullCache {
 	}
 
 	private static void notNull(Object o, String name) {
-		if (o == null)
+		if (o == null) {
 			throw new NullPointerException(name + " should not be null!");
+		}
 	}
 }

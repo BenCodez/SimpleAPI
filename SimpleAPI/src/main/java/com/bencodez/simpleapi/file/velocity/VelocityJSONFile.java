@@ -56,7 +56,7 @@ public class VelocityJSONFile {
 	}
 
 	public ArrayList<String> getKeys(ConfigurationNode node) {
-		ArrayList<String> keys = new ArrayList<String>();
+		ArrayList<String> keys = new ArrayList<>();
 		for (ConfigurationNode key : node.getChildrenMap().values()) {
 			keys.add(key.getKey().toString());
 		}

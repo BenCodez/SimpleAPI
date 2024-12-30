@@ -10,9 +10,9 @@ import java.lang.annotation.Target;
 @Target({ ElementType.METHOD, ElementType.FIELD })
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ConfigDataListString {
+	String[] options() default "";
+
 	String path();
 
 	String secondPath() default "";
-	
-	String[] options() default "";
 }

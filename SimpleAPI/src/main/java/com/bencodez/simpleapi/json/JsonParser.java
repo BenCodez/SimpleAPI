@@ -37,24 +37,18 @@ import com.google.gson.stream.MalformedJsonException;
  * @since 1.3
  */
 public final class JsonParser {
-	/**
-	 * @deprecated No need to instantiate this class, use the static methods
-	 *             instead.
-	 */
-	@Deprecated
-	public JsonParser() {
-	}
-
-	/**
-	 * Parses the specified JSON string into a parse tree
-	 *
-	 * @param json JSON text
-	 * @return a parse tree of {@link JsonElement}s corresponding to the specified
-	 *         JSON
-	 * @throws JsonParseException if the specified text is not valid JSON
-	 */
-	public static JsonElement parseString(String json) throws JsonSyntaxException {
-		return parseReader(new StringReader(json));
+	public static JsonElement parseReader(JsonReader reader) throws JsonIOException, JsonSyntaxException {
+		boolean lenient = reader.isLenient();
+		reader.setLenient(true);
+		try {
+			return Streams.parse(reader);
+		} catch (StackOverflowError e) {
+			throw new JsonParseException("Failed parsing JSON source: " + reader + " to Json", e);
+		} catch (OutOfMemoryError e) {
+			throw new JsonParseException("Failed parsing JSON source: " + reader + " to Json", e);
+		} finally {
+			reader.setLenient(lenient);
+		}
 	}
 
 	/**
@@ -82,17 +76,23 @@ public final class JsonParser {
 		}
 	}
 
-	public static JsonElement parseReader(JsonReader reader) throws JsonIOException, JsonSyntaxException {
-		boolean lenient = reader.isLenient();
-		reader.setLenient(true);
-		try {
-			return Streams.parse(reader);
-		} catch (StackOverflowError e) {
-			throw new JsonParseException("Failed parsing JSON source: " + reader + " to Json", e);
-		} catch (OutOfMemoryError e) {
-			throw new JsonParseException("Failed parsing JSON source: " + reader + " to Json", e);
-		} finally {
-			reader.setLenient(lenient);
-		}
+	/**
+	 * Parses the specified JSON string into a parse tree
+	 *
+	 * @param json JSON text
+	 * @return a parse tree of {@link JsonElement}s corresponding to the specified
+	 *         JSON
+	 * @throws JsonParseException if the specified text is not valid JSON
+	 */
+	public static JsonElement parseString(String json) throws JsonSyntaxException {
+		return parseReader(new StringReader(json));
+	}
+
+	/**
+	 * @deprecated No need to instantiate this class, use the static methods
+	 *             instead.
+	 */
+	@Deprecated
+	public JsonParser() {
 	}
 }

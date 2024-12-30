@@ -16,42 +16,19 @@ public abstract class SkullCacheHandler {
 	@Getter
 	private int skullDelayTime = 4000;
 
-	public SkullCacheHandler(int skullDelayTime) {
-		this.skullDelayTime = skullDelayTime;
-	}
+	Queue<String> skullsToLoad = new ConcurrentLinkedQueue<>();
+
+	private boolean pause = false;
+
+	private ScheduledExecutorService timer = Executors.newScheduledThreadPool(1);
 
 	public SkullCacheHandler() {
 
 	}
 
-	public abstract void debugLog(String debug);
-
-	public abstract void debugException(Exception e);
-
-	public abstract void log(String log);
-
-	Queue<String> skullsToLoad = new ConcurrentLinkedQueue<String>();
-
-	private boolean pause = false;
-
-	public void pauseCaching() {
-		log("Pausing skull caching due to hitting rate limit or an error, increasing delay for caching");
-		pause = true;
-		skullDelayTime += 3000;
-		timer.schedule(new Runnable() {
-
-			@Override
-			public void run() {
-				unPuase();
-			}
-		}, 15, TimeUnit.MINUTES);
+	public SkullCacheHandler(int skullDelayTime) {
+		this.skullDelayTime = skullDelayTime;
 	}
-
-	private void unPuase() {
-		pause = false;
-	}
-
-	private ScheduledExecutorService timer = Executors.newScheduledThreadPool(1);
 
 	public void addToCache(UUID uuid, String name) {
 		String text = uuid.toString() + "/" + name;
@@ -68,6 +45,22 @@ public abstract class SkullCacheHandler {
 		}
 	}
 
+	public void changeApiProfileURL(String url) {
+		SkullCache.setApi_profile_link(url);
+	}
+
+	public void close() {
+		timer.shutdownNow();
+	}
+
+	public abstract void debugException(Exception e);
+
+	public abstract void debugLog(String debug);
+
+	public void flushCache() {
+		SkullCache.flushWeek();
+	}
+
 	public ItemStack getSkull(UUID uuid, String playerName) {
 		if (playerName.length() > 16 || (pause && !SkullCache.isLoaded(uuid)) || uuid.toString().charAt(14) == '3') {
 			return new ItemStack(Material.PLAYER_HEAD);
@@ -80,16 +73,19 @@ public abstract class SkullCacheHandler {
 		}
 	}
 
-	public void flushCache() {
-		SkullCache.flushWeek();
-	}
+	public abstract void log(String log);
 
-	public void changeApiProfileURL(String url) {
-		SkullCache.setApi_profile_link(url);
-	}
+	public void pauseCaching() {
+		log("Pausing skull caching due to hitting rate limit or an error, increasing delay for caching");
+		pause = true;
+		skullDelayTime += 3000;
+		timer.schedule(new Runnable() {
 
-	public void close() {
-		timer.shutdownNow();
+			@Override
+			public void run() {
+				unPuase();
+			}
+		}, 15, TimeUnit.MINUTES);
 	}
 
 	public void startTimer() {
@@ -112,5 +108,9 @@ public abstract class SkullCacheHandler {
 				}
 			}
 		}, 20000, skullDelayTime, TimeUnit.MILLISECONDS);
+	}
+
+	private void unPuase() {
+		pause = false;
 	}
 }

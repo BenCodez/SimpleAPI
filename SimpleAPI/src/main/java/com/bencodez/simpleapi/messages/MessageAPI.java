@@ -43,30 +43,84 @@ public class MessageAPI {
 		return ChatColor.translateAlternateColorCodes('&', format);
 	}
 
-	public static void sendJson(Player player, TextComponent message) {
-		if ((player != null) && (message != null)) {
-			message.setText(message.getText());
-			PlayerUtils.getServerHandle().sendMessage(player, message);
+	/**
+	 * Comp to string.
+	 *
+	 * @param comp the comp
+	 * @return the string
+	 */
+	public static String compToString(TextComponent comp) {
+		return colorize(comp.toPlainText());
+	}
+
+	public static boolean contains(String str1, String str2) {
+		return str1.contains(str2);
+	}
+
+	public static boolean containsIgnorecase(String str1, String str2) {
+		if (str1 == null || str2 == null) {
+			return false;
+		}
+		return str1.toLowerCase().contains(str2.toLowerCase());
+	}
+
+	public static boolean containsJson(String msg) {
+		return contains(msg, "[Text=\"");
+	}
+
+	public static String getProgressBar(int current, int max, int totalBars, String symbol, String completedColor,
+			String notCompletedColor) {
+
+		float percent = (float) current / max;
+
+		int progressBars = (int) (totalBars * percent);
+
+		int leftOver = (totalBars - progressBars);
+
+		StringBuilder sb = new StringBuilder();
+		sb.append(ChatColor.translateAlternateColorCodes('&', completedColor));
+		for (int i = 0; i < progressBars; i++) {
+			sb.append(symbol);
+		}
+		sb.append(ChatColor.translateAlternateColorCodes('&', notCompletedColor));
+		for (int i = 0; i < leftOver; i++) {
+			sb.append(symbol);
+		}
+		return sb.toString();
+	}
+
+	public static boolean isDouble(String st) {
+		if (st == null) {
+			return false;
+		}
+		try {
+			@SuppressWarnings("unused")
+			double num = Double.parseDouble(st);
+			return true;
+
+		} catch (NumberFormatException ex) {
+			return false;
 		}
 	}
 
-	public static void sendJson(Player player, ArrayList<TextComponent> messages) {
-		if ((player != null) && (messages != null)) {
-			ArrayList<BaseComponent> texts = new ArrayList<BaseComponent>();
-			TextComponent newLine = new TextComponent(ComponentSerializer.parse("{text: \"\n\"}"));
-			for (int i = 0; i < messages.size(); i++) {
-				TextComponent txt = messages.get(i);
-
-				texts.add(txt);
-				if (i + 1 < messages.size()) {
-					texts.add(newLine);
-				}
-
-			}
-
-			PlayerUtils.getServerHandle().sendMessage(player, ArrayUtils.convertBaseComponent(texts));
+	/**
+	 * Checks if is int.
+	 *
+	 * @param st the st
+	 * @return true, if is int
+	 */
+	public static boolean isInt(String st) {
+		if (st == null) {
+			return false;
 		}
+		try {
+			@SuppressWarnings("unused")
+			int num = Integer.parseInt(st);
+			return true;
 
+		} catch (NumberFormatException ex) {
+			return false;
+		}
 	}
 
 	/**
@@ -92,20 +146,6 @@ public class MessageAPI {
 		}
 	}
 
-	public static String translateHexColorCodes(String startTag, String endTag, String message) {
-		final Pattern hexPattern = Pattern.compile(startTag + "([A-Fa-f0-9]{6})" + endTag);
-		Matcher matcher = hexPattern.matcher(message);
-		StringBuffer buffer = new StringBuffer(message.length() + 4 * 8);
-		while (matcher.find()) {
-			String group = matcher.group(1);
-			matcher.appendReplacement(buffer,
-					COLOR_CHAR + "x" + COLOR_CHAR + group.charAt(0) + COLOR_CHAR + group.charAt(1) + COLOR_CHAR
-							+ group.charAt(2) + COLOR_CHAR + group.charAt(3) + COLOR_CHAR + group.charAt(4) + COLOR_CHAR
-							+ group.charAt(5));
-		}
-		return matcher.appendTail(buffer).toString();
-	}
-
 	/**
 	 * Round decimals.
 	 *
@@ -119,6 +159,32 @@ public class MessageAPI {
 		num = num / Math.pow(10, decimals);
 		DecimalFormat df = new DecimalFormat("#.00");
 		return df.format(num);
+	}
+
+	public static void sendJson(Player player, ArrayList<TextComponent> messages) {
+		if ((player != null) && (messages != null)) {
+			ArrayList<BaseComponent> texts = new ArrayList<>();
+			TextComponent newLine = new TextComponent(ComponentSerializer.parse("{text: \"\n\"}"));
+			for (int i = 0; i < messages.size(); i++) {
+				TextComponent txt = messages.get(i);
+
+				texts.add(txt);
+				if (i + 1 < messages.size()) {
+					texts.add(newLine);
+				}
+
+			}
+
+			PlayerUtils.getServerHandle().sendMessage(player, ArrayUtils.convertBaseComponent(texts));
+		}
+
+	}
+
+	public static void sendJson(Player player, TextComponent message) {
+		if ((player != null) && (message != null)) {
+			message.setText(message.getText());
+			PlayerUtils.getServerHandle().sendMessage(player, message);
+		}
 	}
 
 	/**
@@ -366,83 +432,17 @@ public class MessageAPI {
 		return base;
 	}
 
-	/**
-	 * Comp to string.
-	 *
-	 * @param comp the comp
-	 * @return the string
-	 */
-	public static String compToString(TextComponent comp) {
-		return colorize(comp.toPlainText());
-	}
-
-	public static boolean contains(String str1, String str2) {
-		return str1.contains(str2);
-	}
-
-	public static boolean containsIgnorecase(String str1, String str2) {
-		if (str1 == null || str2 == null) {
-			return false;
+	public static String translateHexColorCodes(String startTag, String endTag, String message) {
+		final Pattern hexPattern = Pattern.compile(startTag + "([A-Fa-f0-9]{6})" + endTag);
+		Matcher matcher = hexPattern.matcher(message);
+		StringBuffer buffer = new StringBuffer(message.length() + 4 * 8);
+		while (matcher.find()) {
+			String group = matcher.group(1);
+			matcher.appendReplacement(buffer,
+					COLOR_CHAR + "x" + COLOR_CHAR + group.charAt(0) + COLOR_CHAR + group.charAt(1) + COLOR_CHAR
+							+ group.charAt(2) + COLOR_CHAR + group.charAt(3) + COLOR_CHAR + group.charAt(4) + COLOR_CHAR
+							+ group.charAt(5));
 		}
-		return str1.toLowerCase().contains(str2.toLowerCase());
-	}
-
-	public static boolean containsJson(String msg) {
-		return contains(msg, "[Text=\"");
-	}
-
-	public static String getProgressBar(int current, int max, int totalBars, String symbol, String completedColor,
-			String notCompletedColor) {
-
-		float percent = (float) current / max;
-
-		int progressBars = (int) (totalBars * percent);
-
-		int leftOver = (totalBars - progressBars);
-
-		StringBuilder sb = new StringBuilder();
-		sb.append(ChatColor.translateAlternateColorCodes('&', completedColor));
-		for (int i = 0; i < progressBars; i++) {
-			sb.append(symbol);
-		}
-		sb.append(ChatColor.translateAlternateColorCodes('&', notCompletedColor));
-		for (int i = 0; i < leftOver; i++) {
-			sb.append(symbol);
-		}
-		return sb.toString();
-	}
-
-	public static boolean isDouble(String st) {
-		if (st == null) {
-			return false;
-		}
-		try {
-			@SuppressWarnings("unused")
-			double num = Double.parseDouble(st);
-			return true;
-
-		} catch (NumberFormatException ex) {
-			return false;
-		}
-	}
-
-	/**
-	 * Checks if is int.
-	 *
-	 * @param st the st
-	 * @return true, if is int
-	 */
-	public static boolean isInt(String st) {
-		if (st == null) {
-			return false;
-		}
-		try {
-			@SuppressWarnings("unused")
-			int num = Integer.parseInt(st);
-			return true;
-
-		} catch (NumberFormatException ex) {
-			return false;
-		}
+		return matcher.appendTail(buffer).toString();
 	}
 }

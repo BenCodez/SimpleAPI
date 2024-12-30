@@ -12,11 +12,11 @@ import java.lang.annotation.Target;
 public @interface ConfigDataDouble {
 	double defaultValue() default 0;
 
+	String[] options() default "";
+
 	String path();
 
-	String secondPath() default "";
-	
 	String[] possibleValues() default "";
-	
-	String[] options() default "";
+
+	String secondPath() default "";
 }

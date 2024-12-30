@@ -5,6 +5,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public abstract class PlayerCommandHandler extends CommandHandler {
 
+	private int playerArg = -1;
+
 	public PlayerCommandHandler(JavaPlugin plugin) {
 		super(plugin);
 		figureOutPlayerArg();
@@ -26,22 +28,10 @@ public abstract class PlayerCommandHandler extends CommandHandler {
 		figureOutPlayerArg();
 	}
 
-	public PlayerCommandHandler(JavaPlugin plugin, String[] args, String perm, String helpMessage,
-			boolean allowConsole, boolean forceConsole) {
+	public PlayerCommandHandler(JavaPlugin plugin, String[] args, String perm, String helpMessage, boolean allowConsole,
+			boolean forceConsole) {
 		super(plugin, args, perm, helpMessage, allowConsole);
 		figureOutPlayerArg();
-	}
-
-	private int playerArg = -1;
-
-	private void figureOutPlayerArg() {
-		for (int i = 0; i < getArgs().length; i++) {
-			if (getArgs()[i].equalsIgnoreCase("(player)")) {
-				playerArg = i;
-				return;
-			}
-		}
-		debug("Failed to figure out player arg number for: " + getArgs());
 	}
 
 	@Override
@@ -54,9 +44,19 @@ public abstract class PlayerCommandHandler extends CommandHandler {
 		executeSinglePlayer(sender, args);
 	}
 
-	public abstract void executeSinglePlayer(CommandSender sender, String[] args);
-	
 	public abstract void executeAll(CommandSender sender, String[] args);
+
+	public abstract void executeSinglePlayer(CommandSender sender, String[] args);
+
+	private void figureOutPlayerArg() {
+		for (int i = 0; i < getArgs().length; i++) {
+			if (getArgs()[i].equalsIgnoreCase("(player)")) {
+				playerArg = i;
+				return;
+			}
+		}
+		debug("Failed to figure out player arg number for: " + getArgs());
+	}
 
 	@Override
 	public void setArgs(String[] args) {

@@ -11,9 +11,9 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ConfigDataConfigurationSection {
 
+	String[] options() default "";
+
 	String path();
 
 	String secondPath() default "";
-	
-	String[] options() default "";
 }

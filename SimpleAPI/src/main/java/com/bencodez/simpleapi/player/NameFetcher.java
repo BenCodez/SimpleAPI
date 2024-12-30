@@ -23,11 +23,12 @@ public class NameFetcher implements Callable<Map<UUID, String>> {
 
 	@Override
 	public Map<UUID, String> call() throws Exception {
-		Map<UUID, String> uuidStringMap = new HashMap<UUID, String>();
+		Map<UUID, String> uuidStringMap = new HashMap<>();
 		for (UUID uuid : uuids) {
 			HttpURLConnection connection = (HttpURLConnection) new URL(PROFILE_URL + uuid.toString().replace("-", ""))
 					.openConnection();
-			JsonObject response = (JsonObject) JsonParser.parseReader(new InputStreamReader(connection.getInputStream()));
+			JsonObject response = (JsonObject) JsonParser
+					.parseReader(new InputStreamReader(connection.getInputStream()));
 			String name = response.get("name").getAsString();
 			if (name == null) {
 				continue;

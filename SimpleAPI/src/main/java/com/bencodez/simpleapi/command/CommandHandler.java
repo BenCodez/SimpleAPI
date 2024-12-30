@@ -191,11 +191,14 @@ public abstract class CommandHandler {
 				}
 			}
 			return false;
-		} else if (args[args.length - 1].equalsIgnoreCase("(list)")) {
+		}
+		if (args[args.length - 1].equalsIgnoreCase("(list)")) {
 			return true;
 		}
 		return false;
 	}
+
+	public abstract void debug(String debug);
 
 	/**
 	 * Execute.
@@ -204,6 +207,12 @@ public abstract class CommandHandler {
 	 * @param args   the args
 	 */
 	public abstract void execute(CommandSender sender, String[] args);
+
+	public abstract String formatNoPerms();
+
+	public abstract String formatNotNumber();
+
+	public abstract BukkitScheduler getBukkitScheduler();
 
 	public abstract String getHelpLine();
 
@@ -258,24 +267,6 @@ public abstract class CommandHandler {
 		return txt;
 	}
 
-	public void sendMessageJson(CommandSender sender, ArrayList<TextComponent> comp) {
-		if (isPlayer(sender)) {
-			Player player = (Player) sender;
-			MessageAPI.sendJson(player, comp);
-		} else {
-			sender.sendMessage(ArrayUtils.convert(ArrayUtils.comptoString(comp)));
-		}
-	}
-
-	public void sendMessageJson(CommandSender sender, TextComponent comp) {
-		if (isPlayer(sender)) {
-			Player player = (Player) sender;
-			MessageAPI.sendJson(player, comp);
-		} else {
-			sender.sendMessage(MessageAPI.compToString(comp));
-		}
-	}
-
 	/**
 	 * Gets the help line command.
 	 *
@@ -309,7 +300,7 @@ public abstract class CommandHandler {
 
 	public ArrayList<String> getTabCompleteOptions(CommandSender sender, String[] args, int argNum,
 			ConcurrentHashMap<String, ArrayList<String>> tabCompleteOptions) {
-		Set<String> cmds = new HashSet<String>();
+		Set<String> cmds = new HashSet<>();
 		if (hasPerm(sender)) {
 			CommandHandler commandHandler = this;
 
@@ -368,9 +359,8 @@ public abstract class CommandHandler {
 		}
 		if (allowMultiplePermissions) {
 			return PlayerUtils.hasEitherPermission(sender, getPerm());
-		} else {
-			return sender.hasPermission(getPerm().split(Pattern.quote("|"))[0]);
 		}
+		return sender.hasPermission(getPerm().split(Pattern.quote("|"))[0]);
 	}
 
 	public CommandHandler ignoreNumberCheck() {
@@ -404,12 +394,6 @@ public abstract class CommandHandler {
 	public int parseInt(String arg) {
 		return Integer.parseInt(arg);
 	}
-
-	public abstract void debug(String debug);
-
-	public abstract String formatNotNumber();
-
-	public abstract String formatNoPerms();
 
 	/**
 	 * Run command.
@@ -497,14 +481,30 @@ public abstract class CommandHandler {
 		return false;
 	}
 
-	public abstract BukkitScheduler getBukkitScheduler();
-
 	public void sendMessage(CommandSender sender, ArrayList<String> msg) {
 		sender.sendMessage(ArrayUtils.convert(ArrayUtils.colorize(msg)));
 	}
 
 	public void sendMessage(CommandSender sender, String msg) {
 		sender.sendMessage(MessageAPI.colorize(msg));
+	}
+
+	public void sendMessageJson(CommandSender sender, ArrayList<TextComponent> comp) {
+		if (isPlayer(sender)) {
+			Player player = (Player) sender;
+			MessageAPI.sendJson(player, comp);
+		} else {
+			sender.sendMessage(ArrayUtils.convert(ArrayUtils.comptoString(comp)));
+		}
+	}
+
+	public void sendMessageJson(CommandSender sender, TextComponent comp) {
+		if (isPlayer(sender)) {
+			Player player = (Player) sender;
+			MessageAPI.sendJson(player, comp);
+		} else {
+			sender.sendMessage(MessageAPI.compToString(comp));
+		}
 	}
 
 	public CommandHandler withArgs(String... args) {

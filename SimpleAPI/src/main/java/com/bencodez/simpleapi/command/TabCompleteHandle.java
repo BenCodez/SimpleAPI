@@ -10,7 +10,7 @@ import lombok.Setter;
 public abstract class TabCompleteHandle {
 	@Getter
 	@Setter
-	private ArrayList<String> replace = new ArrayList<String>();
+	private ArrayList<String> replace = new ArrayList<>();
 
 	@Getter
 	@Setter
@@ -18,11 +18,6 @@ public abstract class TabCompleteHandle {
 
 	@Getter
 	private boolean updateOnLoginLogout = false;
-
-	public TabCompleteHandle updateOnLoginLogout() {
-		updateOnLoginLogout = true;
-		return this;
-	}
 
 	public TabCompleteHandle(String toReplace) {
 		this.toReplace = toReplace;
@@ -36,8 +31,6 @@ public abstract class TabCompleteHandle {
 
 	public abstract void reload();
 
-	public abstract void updateReplacements();
-
 	public TabCompleteHandle updateEveryXMinutes(ScheduledExecutorService timer, int x) {
 		timer.scheduleWithFixedDelay(new Runnable() {
 
@@ -48,4 +41,11 @@ public abstract class TabCompleteHandle {
 		}, x, x, TimeUnit.SECONDS);
 		return this;
 	}
+
+	public TabCompleteHandle updateOnLoginLogout() {
+		updateOnLoginLogout = true;
+		return this;
+	}
+
+	public abstract void updateReplacements();
 }

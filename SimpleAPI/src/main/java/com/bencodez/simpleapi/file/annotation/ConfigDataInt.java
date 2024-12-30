@@ -12,9 +12,9 @@ import java.lang.annotation.Target;
 public @interface ConfigDataInt {
 	int defaultValue() default 0;
 
+	String[] options() default "";
+
 	String path();
 
 	String secondPath() default "";
-	
-	String[] options() default "";
 }

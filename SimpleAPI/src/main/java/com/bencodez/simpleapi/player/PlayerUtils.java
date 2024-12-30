@@ -38,15 +38,6 @@ public class PlayerUtils {
 	@Getter
 	private static IServerHandle serverHandle = loadHandle();
 
-	public static IServerHandle loadHandle() {
-		try {
-			Class.forName("org.spigotmc.SpigotConfig");
-			return new SpigotHandle();
-		} catch (Exception ex) {
-			return serverHandle = new CraftBukkitHandle();
-		}
-	}
-
 	private static final BlockFace[] axis = { BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST };
 
 	private static final BlockFace[] radial = { BlockFace.NORTH, BlockFace.NORTH_EAST, BlockFace.EAST,
@@ -59,22 +50,6 @@ public class PlayerUtils {
 			return true;
 		}
 		return false;
-	}
-
-	public static Inventory getTopInventory(Player player) {
-		InventoryView oInv = player.getOpenInventory();
-		if (oInv == null) {
-			return null;
-		}
-		Method method;
-		try {
-			method = InventoryView.class.getDeclaredMethod("getTopInventory");
-			return (Inventory) method.invoke(oInv);
-		} catch (NoSuchMethodException | SecurityException | IllegalAccessException | IllegalArgumentException
-				| InvocationTargetException e) {
-			e.printStackTrace();
-		}
-		return oInv.getTopInventory();
 	}
 
 	public static boolean canInteract(Player p, Block clickedBlock, Action action, ItemStack item,
@@ -111,28 +86,6 @@ public class PlayerUtils {
 		return parseUUIDFromString(uuidAsString);
 	}
 
-	public static boolean hasEitherPermission(CommandSender sender, String perm) {
-		if (sender instanceof Player) {
-
-			if (perm.equals("")) {
-				return true;
-			}
-
-			boolean hasPerm = false;
-
-			for (String permission : perm.split("\\|")) {
-				if (sender.hasPermission(permission)) {
-					hasPerm = true;
-				}
-			}
-
-			return hasPerm;
-
-		} else {
-			return true;
-		}
-	}
-
 	/**
 	 * Gets the player meta.
 	 *
@@ -159,6 +112,38 @@ public class PlayerUtils {
 
 	public static Player getRandomPlayer() {
 		return Iterables.getFirst(Bukkit.getOnlinePlayers(), null);
+	}
+
+	public static Inventory getTopInventory(Player player) {
+		InventoryView oInv = player.getOpenInventory();
+		if (oInv == null) {
+			return null;
+		}
+		Method method;
+		try {
+			method = InventoryView.class.getDeclaredMethod("getTopInventory");
+			return (Inventory) method.invoke(oInv);
+		} catch (NoSuchMethodException | SecurityException | IllegalAccessException | IllegalArgumentException
+				| InvocationTargetException e) {
+			e.printStackTrace();
+		}
+		return oInv.getTopInventory();
+	}
+
+	public static boolean hasEitherPermission(CommandSender sender, String perm) {
+		if (!(sender instanceof Player) || perm.equals("")) {
+			return true;
+		}
+
+		boolean hasPerm = false;
+
+		for (String permission : perm.split("\\|")) {
+			if (sender.hasPermission(permission)) {
+				hasPerm = true;
+			}
+		}
+
+		return hasPerm;
 	}
 
 	/**
@@ -189,6 +174,15 @@ public class PlayerUtils {
 			return true;
 		}
 		return false;
+	}
+
+	public static IServerHandle loadHandle() {
+		try {
+			Class.forName("org.spigotmc.SpigotConfig");
+			return new SpigotHandle();
+		} catch (Exception ex) {
+			return serverHandle = new CraftBukkitHandle();
+		}
 	}
 
 	private static java.util.UUID parseUUIDFromString(String uuidAsString) {
