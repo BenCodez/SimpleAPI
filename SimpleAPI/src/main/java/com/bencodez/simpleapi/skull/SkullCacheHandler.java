@@ -19,6 +19,9 @@ public abstract class SkullCacheHandler {
 	Queue<String> skullsToLoad = new ConcurrentLinkedQueue<>();
 
 	private boolean pause = false;
+	
+	@Getter
+	private String bedrockPrefix = ".";
 
 	private ScheduledExecutorService timer = Executors.newScheduledThreadPool(1);
 
@@ -34,6 +37,10 @@ public abstract class SkullCacheHandler {
 		String text = uuid.toString() + "/" + name;
 		if (uuid.toString().charAt(14) == '3') {
 			debugLog("Can't cache skull of offline player uuid: " + uuid.toString() + "/" + name);
+			return;
+		}
+		if (name.startsWith(bedrockPrefix)) {
+			debugLog("Can't cache skull of bedrock player");
 			return;
 		}
 		if (!skullsToLoad.contains(text) && !SkullCache.isLoaded(uuid)) {
