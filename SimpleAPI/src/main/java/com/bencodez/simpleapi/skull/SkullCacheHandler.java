@@ -21,6 +21,7 @@ public abstract class SkullCacheHandler {
 	private boolean pause = false;
 	
 	@Getter
+	@Setter
 	private String bedrockPrefix = ".";
 
 	private ScheduledExecutorService timer = Executors.newScheduledThreadPool(1);
