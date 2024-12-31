@@ -102,6 +102,7 @@ public abstract class SkullCacheHandler {
 						SkullCache.cacheSkull(UUID.fromString(uuid), name);
 						debugLog("Loaded skull: " + uuid + "/" + name);
 					} catch (Exception e) {
+						debugLog("Failed to load skull: " + text);
 						debugException(e);
 						pauseCaching();
 					}
