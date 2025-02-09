@@ -53,14 +53,15 @@ public class BungeeJsonFile {
 		String[] parts = path.split("\\.");
 		JsonObject current = conf;
 
-		for (int i = 0; i < parts.length - 1; i++) {
-			if (current.has(parts[i]) && current.get(parts[i]).isJsonObject()) {
-				current = current.getAsJsonObject(parts[i]);
+		// Updated: Additional checks and informative logs
+		for (String part : parts) {
+			if (current.has(part) && current.get(part).isJsonObject()) {
+				current = current.getAsJsonObject(part);
 			} else {
-				return null;
+				//System.out.println("navigateToNode: Invalid path component: " + part);
+				return null; // Return null when a part is invalid or not an object
 			}
 		}
-
 		return current;
 	}
 
