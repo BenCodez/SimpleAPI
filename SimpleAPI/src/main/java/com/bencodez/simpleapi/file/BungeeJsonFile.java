@@ -53,15 +53,28 @@ public class BungeeJsonFile {
 		String[] parts = path.split("\\.");
 		JsonObject current = conf;
 
-		// Updated: Additional checks and informative logs
-		for (String part : parts) {
-			if (current.has(part) && current.get(part).isJsonObject()) {
-				current = current.getAsJsonObject(part);
+		// Handle a single-part path separately
+		if (parts.length == 1) {
+			if (current.has(parts[0]) && current.get(parts[0]).isJsonObject()) {
+				return current.getAsJsonObject(parts[0]);
 			} else {
-				//System.out.println("navigateToNode: Invalid path component: " + part);
-				return null; // Return null when a part is invalid or not an object
+				//System.out.println("navigateToNode: Invalid path component (single-path): " + parts[0]);
+				return null;
 			}
 		}
+
+		// Iterate over path parts, ending before the last
+		for (int i = 0; i < parts.length - 1; i++) {
+			JsonElement element = current.get(parts[i]);
+			if (element != null && element.isJsonObject()) {
+				current = element.getAsJsonObject();
+			} else {
+				//System.out.println("navigateToNode: Invalid path component: " + parts[i]);
+				return null;
+			}
+		}
+
+		// Return the final parent object
 		return current;
 	}
 
@@ -132,13 +145,26 @@ public class BungeeJsonFile {
 			}
 			return keys;
 		}
+
+		//System.out.println("getKeys: No valid keys found for path = " + path + ". Make sure the path is correct.");
 		return new ArrayList<>();
 	}
 
 	public JsonElement getNode(String path) {
-		JsonObject node = navigateToNode(path);
+		JsonObject parentNode = navigateToNode(path);
 		String lastPart = getLastPathPart(path);
-		return node != null && node.has(lastPart) ? node.get(lastPart) : null;
+
+		// If the path is a single component, handle it directly
+		if (parentNode == null && conf.has(lastPart)) {
+			return conf.get(lastPart);
+		}
+
+		if (parentNode != null && parentNode.has(lastPart)) {
+			return parentNode.get(lastPart);
+		}
+
+		//System.out.println("getNode: Could not find element for path = " + path);
+		return null;
 	}
 
 	public void setInt(String path, int value) {
