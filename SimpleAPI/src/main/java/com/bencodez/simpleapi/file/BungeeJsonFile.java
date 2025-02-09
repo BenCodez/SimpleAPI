@@ -1,0 +1,202 @@
+package com.bencodez.simpleapi.file;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+public class BungeeJsonFile {
+	@Getter
+	@Setter
+	private JsonObject conf;
+
+	@Getter
+	private File file;
+
+	private Gson gson;
+
+	public BungeeJsonFile(File file) {
+		this.file = file;
+		this.gson = new GsonBuilder().setPrettyPrinting().create();
+
+		if (!file.exists()) {
+			try {
+				file.getParentFile().mkdirs();
+				file.createNewFile();
+				conf = new JsonObject();
+				save(); // Save file with empty JsonObject upon creation
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		} else {
+			try (FileReader reader = new FileReader(file)) {
+				conf = JsonParser.parseReader(reader).getAsJsonObject();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	private JsonObject navigateToNode(String path) {
+		String[] parts = path.split("\\.");
+		JsonObject current = conf;
+
+		for (int i = 0; i < parts.length - 1; i++) {
+			if (current.has(parts[i]) && current.get(parts[i]).isJsonObject()) {
+				current = current.getAsJsonObject(parts[i]);
+			} else {
+				return null;
+			}
+		}
+
+		return current;
+	}
+
+	private String getLastPathPart(String path) {
+		String[] parts = path.split("\\.");
+		return parts[parts.length - 1];
+	}
+
+	public boolean getBoolean(String path, boolean def) {
+		JsonObject node = navigateToNode(path);
+		String lastPart = getLastPathPart(path);
+		return node != null && node.has(lastPart) ? node.get(lastPart).getAsBoolean() : def;
+	}
+
+	public int getInt(String path, int def) {
+		JsonObject node = navigateToNode(path);
+		String lastPart = getLastPathPart(path);
+		return node != null && node.has(lastPart) ? node.get(lastPart).getAsInt() : def;
+	}
+
+	public long getLong(String path, long def) {
+		JsonObject node = navigateToNode(path);
+		String lastPart = getLastPathPart(path);
+		return node != null && node.has(lastPart) ? node.get(lastPart).getAsLong() : def;
+	}
+
+	public String getString(String path, String def) {
+		JsonObject node = navigateToNode(path);
+		String lastPart = getLastPathPart(path);
+		return node != null && node.has(lastPart) ? node.get(lastPart).getAsString() : def;
+	}
+
+	public List<String> getStringList(String path, List<String> def) {
+		JsonObject node = navigateToNode(path);
+		String lastPart = getLastPathPart(path);
+		if (node != null && node.has(lastPart)) {
+			List<String> list = new ArrayList<>();
+			for (JsonElement element : node.getAsJsonArray(lastPart)) {
+				list.add(element.getAsString());
+			}
+			return list;
+		}
+		return def;
+	}
+
+	public List<String> getKeys(String path) {
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			List<String> keys = new ArrayList<>();
+			for (Map.Entry<String, JsonElement> entry : node.entrySet()) {
+				keys.add(entry.getKey());
+			}
+			return keys;
+		}
+		return new ArrayList<>();
+	}
+
+	public JsonElement getNode(String path) {
+		JsonObject node = navigateToNode(path);
+		String lastPart = getLastPathPart(path);
+		return node != null && node.has(lastPart) ? node.get(lastPart) : null;
+	}
+
+	public void setBoolean(String path, boolean value) {
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			String lastPart = getLastPathPart(path);
+			node.addProperty(lastPart, value);
+			save();
+		}
+	}
+
+	public void setInt(String path, int value) {
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			String lastPart = getLastPathPart(path);
+			node.addProperty(lastPart, value);
+			save();
+		}
+	}
+
+	public void setLong(String path, long value) {
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			String lastPart = getLastPathPart(path);
+			node.addProperty(lastPart, value);
+			save();
+		}
+	}
+
+	public void setString(String path, String value) {
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			String lastPart = getLastPathPart(path);
+			node.addProperty(lastPart, value);
+			save();
+		}
+	}
+
+	public void setStringList(String path, List<String> value) {
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			String lastPart = getLastPathPart(path);
+			JsonArray jsonArray = new JsonArray();
+			for (String item : value) {
+				jsonArray.add(item);
+			}
+			node.add(lastPart, jsonArray);
+			save();
+		}
+	}
+
+	public void remove(String path) {
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			String lastPart = getLastPathPart(path);
+			node.remove(lastPart);
+			save();
+		}
+	}
+
+	public void reload() {
+		if (file.exists()) {
+			try (FileReader reader = new FileReader(file)) {
+				conf = JsonParser.parseReader(reader).getAsJsonObject();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	public void save() {
+		try (FileWriter writer = new FileWriter(file)) {
+			gson.toJson(conf, writer);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+}
