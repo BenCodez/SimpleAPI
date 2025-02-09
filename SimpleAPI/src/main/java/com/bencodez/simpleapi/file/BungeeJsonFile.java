@@ -64,6 +64,22 @@ public class BungeeJsonFile {
 		return current;
 	}
 
+	private JsonObject ensureParentObjectsExist(String path) {
+		String[] parts = path.split("\\.");
+		JsonObject current = conf;
+
+		// Iterate through path parts except the last part, which is the actual key
+		for (int i = 0; i < parts.length - 1; i++) {
+			if (!current.has(parts[i]) || !current.get(parts[i]).isJsonObject()) {
+				// Create a new JsonObject if none exists or it's not an object
+				current.add(parts[i], new JsonObject());
+			}
+			current = current.getAsJsonObject(parts[i]);
+		}
+
+		return current;
+	}
+
 	private String getLastPathPart(String path) {
 		String[] parts = path.split("\\.");
 		return parts[parts.length - 1];
@@ -124,35 +140,29 @@ public class BungeeJsonFile {
 		return node != null && node.has(lastPart) ? node.get(lastPart) : null;
 	}
 
-	public void setBoolean(String path, boolean value) {
-		JsonObject node = navigateToNode(path);
-		if (node != null) {
-			String lastPart = getLastPathPart(path);
-			node.addProperty(lastPart, value);
-			save();
-		}
-	}
-
 	public void setInt(String path, int value) {
-		JsonObject node = navigateToNode(path);
-		if (node != null) {
-			String lastPart = getLastPathPart(path);
-			node.addProperty(lastPart, value);
-			save();
-		}
-	}
-
-	public void setLong(String path, long value) {
-		JsonObject node = navigateToNode(path);
-		if (node != null) {
-			String lastPart = getLastPathPart(path);
-			node.addProperty(lastPart, value);
-			save();
-		}
+		JsonObject node = ensureParentObjectsExist(path);
+		String lastPart = getLastPathPart(path);
+		node.addProperty(lastPart, value);
+		save();
 	}
 
 	public void setString(String path, String value) {
-		JsonObject node = navigateToNode(path);
+		JsonObject node = ensureParentObjectsExist(path);
+		String lastPart = getLastPathPart(path);
+		node.addProperty(lastPart, value);
+		save();
+	}
+
+	public void setBoolean(String path, boolean value) {
+		JsonObject node = ensureParentObjectsExist(path);
+		String lastPart = getLastPathPart(path);
+		node.addProperty(lastPart, value);
+		save();
+	}
+
+	public void setLong(String path, long value) {
+		JsonObject node = ensureParentObjectsExist(path);
 		if (node != null) {
 			String lastPart = getLastPathPart(path);
 			node.addProperty(lastPart, value);
@@ -161,7 +171,7 @@ public class BungeeJsonFile {
 	}
 
 	public void setStringList(String path, List<String> value) {
-		JsonObject node = navigateToNode(path);
+		JsonObject node = ensureParentObjectsExist(path);
 		if (node != null) {
 			String lastPart = getLastPathPart(path);
 			JsonArray jsonArray = new JsonArray();
