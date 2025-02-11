@@ -169,28 +169,28 @@ public class BungeeJsonFile {
 		return null;
 	}
 
-	public void setInt(String path, int value) {
+	public synchronized void setInt(String path, int value) {
 		JsonObject node = ensureParentObjectsExist(path);
 		String lastPart = getLastPathPart(path);
 		node.addProperty(lastPart, value);
 		save();
 	}
 
-	public void setString(String path, String value) {
+	public synchronized void setString(String path, String value) {
 		JsonObject node = ensureParentObjectsExist(path);
 		String lastPart = getLastPathPart(path);
 		node.addProperty(lastPart, value);
 		save();
 	}
 
-	public void setBoolean(String path, boolean value) {
+	public synchronized void setBoolean(String path, boolean value) {
 		JsonObject node = ensureParentObjectsExist(path);
 		String lastPart = getLastPathPart(path);
 		node.addProperty(lastPart, value);
 		save();
 	}
 
-	public void setLong(String path, long value) {
+	public synchronized void setLong(String path, long value) {
 		JsonObject node = ensureParentObjectsExist(path);
 		if (node != null) {
 			String lastPart = getLastPathPart(path);
@@ -199,7 +199,7 @@ public class BungeeJsonFile {
 		}
 	}
 
-	public void setStringList(String path, List<String> value) {
+	public synchronized void setStringList(String path, List<String> value) {
 		JsonObject node = ensureParentObjectsExist(path);
 		if (node != null) {
 			String lastPart = getLastPathPart(path);
@@ -212,7 +212,7 @@ public class BungeeJsonFile {
 		}
 	}
 
-	public void remove(String path) {
+	public synchronized void remove(String path) {
 		JsonObject node = navigateToNode(path);
 		if (node != null) {
 			String lastPart = getLastPathPart(path);
@@ -231,7 +231,7 @@ public class BungeeJsonFile {
 		}
 	}
 
-	public void save() {
+	public synchronized void save() {
 		try (FileWriter writer = new FileWriter(file)) {
 			gson.toJson(conf, writer);
 		} catch (IOException e) {
