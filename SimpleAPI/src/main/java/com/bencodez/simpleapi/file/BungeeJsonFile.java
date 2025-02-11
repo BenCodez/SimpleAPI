@@ -58,7 +58,8 @@ public class BungeeJsonFile {
 			if (current.has(parts[0]) && current.get(parts[0]).isJsonObject()) {
 				return current.getAsJsonObject(parts[0]);
 			} else {
-				//System.out.println("navigateToNode: Invalid path component (single-path): " + parts[0]);
+				// System.out.println("navigateToNode: Invalid path component (single-path): " +
+				// parts[0]);
 				return null;
 			}
 		}
@@ -69,7 +70,7 @@ public class BungeeJsonFile {
 			if (element != null && element.isJsonObject()) {
 				current = element.getAsJsonObject();
 			} else {
-				//System.out.println("navigateToNode: Invalid path component: " + parts[i]);
+				// System.out.println("navigateToNode: Invalid path component: " + parts[i]);
 				return null;
 			}
 		}
@@ -84,7 +85,7 @@ public class BungeeJsonFile {
 
 		// Iterate through path parts except the last part, which is the actual key
 		for (int i = 0; i < parts.length - 1; i++) {
-			if (!current.has(parts[i]) || !current.get(parts[i]).isJsonObject()) {
+			if (!current.has(parts[i]) || current.get(parts[i]) == null || !current.get(parts[i]).isJsonObject()) {
 				// Create a new JsonObject if none exists or it's not an object
 				current.add(parts[i], new JsonObject());
 			}
@@ -146,7 +147,8 @@ public class BungeeJsonFile {
 			return keys;
 		}
 
-		//System.out.println("getKeys: No valid keys found for path = " + path + ". Make sure the path is correct.");
+		// System.out.println("getKeys: No valid keys found for path = " + path + ".
+		// Make sure the path is correct.");
 		return new ArrayList<>();
 	}
 
@@ -163,7 +165,7 @@ public class BungeeJsonFile {
 			return parentNode.get(lastPart);
 		}
 
-		//System.out.println("getNode: Could not find element for path = " + path);
+		// System.out.println("getNode: Could not find element for path = " + path);
 		return null;
 	}
 
