@@ -33,7 +33,10 @@ public class BungeeJsonFile {
 
 		if (!file.exists()) {
 			try {
-				file.getParentFile().mkdirs();
+				File parentDir = file.getParentFile();
+				if (parentDir != null && !parentDir.exists()) {
+					parentDir.mkdirs();
+				}
 				file.createNewFile();
 				conf = new JsonObject();
 				save(); // Save file with empty JsonObject upon creation
@@ -138,8 +141,15 @@ public class BungeeJsonFile {
 	}
 
 	public List<String> getKeys(String path) {
-		JsonObject node = navigateToNode(path);
+		JsonObject parentNode = navigateToNode(path);
+		String lastPart = getLastPathPart(path);
+		JsonObject node = parentNode.getAsJsonObject(lastPart);
+		if (path.split("\\.").length == 1) {
+           node = parentNode;
+		}
+		
 		if (node != null) {
+			//System.out.println(node.toString());
 			List<String> keys = new ArrayList<>();
 			for (Map.Entry<String, JsonElement> entry : node.entrySet()) {
 				keys.add(entry.getKey());
@@ -173,21 +183,18 @@ public class BungeeJsonFile {
 		JsonObject node = ensureParentObjectsExist(path);
 		String lastPart = getLastPathPart(path);
 		node.addProperty(lastPart, value);
-		save();
 	}
 
 	public synchronized void setString(String path, String value) {
 		JsonObject node = ensureParentObjectsExist(path);
 		String lastPart = getLastPathPart(path);
 		node.addProperty(lastPart, value);
-		save();
 	}
 
 	public synchronized void setBoolean(String path, boolean value) {
 		JsonObject node = ensureParentObjectsExist(path);
 		String lastPart = getLastPathPart(path);
 		node.addProperty(lastPart, value);
-		save();
 	}
 
 	public synchronized void setLong(String path, long value) {
@@ -195,7 +202,6 @@ public class BungeeJsonFile {
 		if (node != null) {
 			String lastPart = getLastPathPart(path);
 			node.addProperty(lastPart, value);
-			save();
 		}
 	}
 
@@ -208,7 +214,6 @@ public class BungeeJsonFile {
 				jsonArray.add(item);
 			}
 			node.add(lastPart, jsonArray);
-			save();
 		}
 	}
 
@@ -217,7 +222,6 @@ public class BungeeJsonFile {
 		if (node != null) {
 			String lastPart = getLastPathPart(path);
 			node.remove(lastPart);
-			save();
 		}
 	}
 

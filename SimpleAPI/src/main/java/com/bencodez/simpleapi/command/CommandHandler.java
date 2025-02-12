@@ -60,7 +60,7 @@ public abstract class CommandHandler {
 
 	@Getter
 	@Setter
-	private String perm;
+	private String perm = "";
 
 	@Getter
 	private JavaPlugin plugin;

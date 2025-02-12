@@ -42,6 +42,19 @@ public abstract class YMLFile {
 		scheduler = new BukkitScheduler(plugin);
 	}
 
+	public YMLFile(JavaPlugin plugin, File file, BukkitScheduler scheduler) {
+		this.dFile = file;
+		this.plugin = plugin;
+		this.scheduler = scheduler;
+	}
+
+	public YMLFile(JavaPlugin plugin, File file, BukkitScheduler scheduler, boolean setup) {
+		this(plugin, file, scheduler);
+		if (setup) {
+			setup();
+		}
+	}
+
 	public YMLFile(JavaPlugin plugin, File file, boolean setup) {
 		dFile = file;
 		this.plugin = plugin;

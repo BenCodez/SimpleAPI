@@ -26,10 +26,11 @@ public class VelocityYMLFile {
 		this.file = file;
 		if (!file.exists()) {
 			try {
-				file.getParentFile().mkdirs();
 				file.createNewFile();
+				if (file.getParentFile() != null && !file.getParentFile().exists()) {
+					file.getParentFile().mkdirs();
+				}
 			} catch (IOException e) {
-				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
 		}
