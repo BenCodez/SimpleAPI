@@ -324,6 +324,25 @@ public class ArrayUtils {
 		}
 		return string;
 	}
+	
+	public static String makeStringList(List<String> list) {
+		if (list == null) {
+			return "";
+		}
+		String string = new String();
+		if (list.size() > 1) {
+			for (int i = 0; i < list.size(); i++) {
+				if (i == 0) {
+					string += list.get(i);
+				} else {
+					string += ", " + list.get(i);
+				}
+			}
+		} else if (list.size() == 1) {
+			string = list.get(0);
+		}
+		return string;
+	}
 
 	public static String pickRandom(ArrayList<String> list) {
 		if (list != null) {
