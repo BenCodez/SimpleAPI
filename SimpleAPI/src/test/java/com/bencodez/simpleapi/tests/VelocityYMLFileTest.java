@@ -5,10 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import com.bencodez.simpleapi.file.velocity.VelocityYMLFile;
@@ -17,16 +22,33 @@ import ninja.leaping.configurate.ConfigurationNode;
 
 public class VelocityYMLFileTest {
 
+	private static final String TEST_FILE_PATH = "target/test.yml";
+	private File testFile;
+
+	@BeforeEach
+	public void setUp() throws IOException {
+		testFile = new File(TEST_FILE_PATH);
+		if (!testFile.getParentFile().exists()) {
+			testFile.getParentFile().mkdirs();
+		}
+		testFile.createNewFile();
+	}
+
+	@AfterEach
+	public void tearDown() throws IOException {
+		Files.deleteIfExists(Paths.get(TEST_FILE_PATH));
+	}
+
 	@Test
 	public void getBooleanReturnsDefaultWhenNodeDoesNotExist() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("non.existent.path");
 		assertFalse(velocityYMLFile.getBoolean(node, false));
 	}
 
 	@Test
 	public void getBooleanReturnsValueWhenNodeExists() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("config.enabled");
 		node.setValue(true);
 		assertTrue(velocityYMLFile.getBoolean(node, false));
@@ -34,14 +56,14 @@ public class VelocityYMLFileTest {
 
 	@Test
 	public void getIntReturnsDefaultWhenNodeDoesNotExist() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("non.existent.path");
 		assertEquals(42, velocityYMLFile.getInt(node, 42));
 	}
 
 	@Test
 	public void getIntReturnsValueWhenNodeExists() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("config.port");
 		node.setValue(8080);
 		assertEquals(8080, velocityYMLFile.getInt(node, 42));
@@ -49,14 +71,14 @@ public class VelocityYMLFileTest {
 
 	@Test
 	public void getStringReturnsDefaultWhenNodeDoesNotExist() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("non.existent.path");
 		assertEquals("default", velocityYMLFile.getString(node, "default"));
 	}
 
 	@Test
 	public void getStringReturnsValueWhenNodeExists() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("config.name");
 		node.setValue("Velocity");
 		assertEquals("Velocity", velocityYMLFile.getString(node, "default"));
@@ -64,7 +86,7 @@ public class VelocityYMLFileTest {
 
 	@Test
 	public void getStringListReturnsDefaultWhenNodeDoesNotExist() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("non.existent.path");
 		ArrayList<String> defaultList = new ArrayList<>(Arrays.asList("default"));
 		assertEquals(defaultList, velocityYMLFile.getStringList(node, defaultList));
@@ -72,7 +94,7 @@ public class VelocityYMLFileTest {
 
 	@Test
 	public void getStringListReturnsValueWhenNodeExists() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("config.list");
 		ArrayList<String> list = new ArrayList<>(Arrays.asList("item1", "item2"));
 		node.setValue(list);
@@ -81,14 +103,14 @@ public class VelocityYMLFileTest {
 
 	@Test
 	public void getKeysReturnsEmptyListWhenNodeDoesNotExist() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("non.existent.path");
 		assertTrue(velocityYMLFile.getKeys(node).isEmpty());
 	}
 
 	@Test
 	public void getKeysReturnsListOfKeysWhenNodeExists() {
-		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(new File("test.yml"));
+		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("config");
 		node.getNode("key1").setValue("value1");
 		node.getNode("key2").setValue("value2");

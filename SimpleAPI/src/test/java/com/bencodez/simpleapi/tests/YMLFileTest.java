@@ -18,8 +18,13 @@ public class YMLFileTest {
 
 	@Test
 	public void testYMLFileOperations() throws Exception {
+		// Create a test directory inside the target folder
+		File targetDir = new File("target");
+		if (!targetDir.exists()) {
+			targetDir.mkdirs();
+		}
 		// Create a temporary file
-		File tempFile = Files.createTempFile("test", ".yml").toFile();
+		File tempFile = Files.createTempFile(targetDir.toPath(), "test", ".yml").toFile();
 		tempFile.deleteOnExit();
 
 		// Mock JavaPlugin
