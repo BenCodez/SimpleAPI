@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.yaml.snakeyaml.DumperOptions;
+
 import com.google.common.reflect.TypeToken;
 
 import lombok.Getter;
@@ -34,7 +36,8 @@ public class VelocityYMLFile {
 				e.printStackTrace();
 			}
 		}
-		loader = YAMLConfigurationLoader.builder().setPath(file.toPath()).build();
+		loader = YAMLConfigurationLoader.builder().setFlowStyle(DumperOptions.FlowStyle.BLOCK).setPath(file.toPath())
+				.build();
 
 		try {
 			conf = loader.load();
@@ -86,7 +89,8 @@ public class VelocityYMLFile {
 	}
 
 	public void reload() {
-		loader = YAMLConfigurationLoader.builder().setPath(file.toPath()).build();
+		loader = YAMLConfigurationLoader.builder().setFlowStyle(DumperOptions.FlowStyle.BLOCK).setPath(file.toPath())
+				.build();
 
 		try {
 			conf = loader.load();
