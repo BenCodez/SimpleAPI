@@ -143,22 +143,20 @@ public class BungeeJsonFile {
 	public List<String> getKeys(String path) {
 		JsonObject parentNode = navigateToNode(path);
 		String lastPart = getLastPathPart(path);
-		JsonObject node = parentNode.getAsJsonObject(lastPart);
+		JsonObject node = null;
 		if (path.split("\\.").length == 1) {
-           node = parentNode;
+			node = parentNode;
+		} else if (parentNode != null) {
+			node = parentNode.getAsJsonObject(lastPart);
 		}
-		
+
 		if (node != null) {
-			//System.out.println(node.toString());
 			List<String> keys = new ArrayList<>();
 			for (Map.Entry<String, JsonElement> entry : node.entrySet()) {
 				keys.add(entry.getKey());
 			}
 			return keys;
 		}
-
-		// System.out.println("getKeys: No valid keys found for path = " + path + ".
-		// Make sure the path is correct.");
 		return new ArrayList<>();
 	}
 

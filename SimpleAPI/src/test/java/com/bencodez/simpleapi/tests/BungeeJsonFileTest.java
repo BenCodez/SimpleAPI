@@ -110,6 +110,13 @@ public class BungeeJsonFileTest {
 	}
 
 	@Test
+	public void testGetKeysInvalidPath() {
+		List<String> keys = bungeeJsonFile.getKeys("invalid.path");
+		assertNotNull(keys);
+		assertTrue(keys.isEmpty());
+	}
+
+	@Test
 	public void testGetNode() {
 		bungeeJsonFile.setString("test.node.key", "value");
 		JsonObject node = bungeeJsonFile.getNode("test.node").getAsJsonObject();
