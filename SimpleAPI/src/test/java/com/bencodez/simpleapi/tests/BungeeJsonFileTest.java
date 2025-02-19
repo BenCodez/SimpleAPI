@@ -117,6 +117,56 @@ public class BungeeJsonFileTest {
 	}
 
 	@Test
+	public void getKeysAfterValueRemoved() {
+		bungeeJsonFile.setString("test.keys2.remove.one", "1");
+		bungeeJsonFile.setString("test.keys2.remove.two", "2");
+		bungeeJsonFile.remove("test.keys2.remove.one");
+		List<String> keys = bungeeJsonFile.getKeys("test.keys2.remove");
+		assertNotNull(keys);
+		assertEquals(1, keys.size());
+		assertTrue(keys.contains("two"));
+	}
+
+	@Test
+	public void removeNonExistentKey() {
+		bungeeJsonFile.remove("non.existent.key");
+		String result = bungeeJsonFile.getString("non.existent.key", null);
+		assertNull(result);
+	}
+
+	@Test
+	public void removeNestedKey() {
+		bungeeJsonFile.setString("nested.key.one", "value1");
+		bungeeJsonFile.setString("nested.key.two", "value2");
+		bungeeJsonFile.remove("nested.key.one");
+		List<String> keys = bungeeJsonFile.getKeys("nested.key");
+		assertNotNull(keys);
+		assertEquals(1, keys.size());
+		assertTrue(keys.contains("two"));
+	}
+
+	@Test
+	public void removeAllKeysInNode() {
+	    bungeeJsonFile.setString("node.key.one", "value1");
+	    bungeeJsonFile.setString("node.key.two", "value2");
+	    bungeeJsonFile.remove("node"); 
+	    List<String> keys = bungeeJsonFile.getKeys("node");
+	    assertNotNull(keys);
+	    assertTrue(keys.isEmpty());
+	}
+
+	@Test
+	public void getKeysAfterAllValuesRemoved() {
+		bungeeJsonFile.setString("test.keys3.remove.all.one", "1");
+		bungeeJsonFile.setString("test.keys3.remove.all.two", "2");
+		bungeeJsonFile.remove("test.keys3.remove.all.one");
+		bungeeJsonFile.remove("test.keys3.remove.all.two");
+		List<String> keys = bungeeJsonFile.getKeys("test.keys3.remove.all");
+		assertNotNull(keys);
+		assertTrue(keys.isEmpty());
+	}
+
+	@Test
 	public void testGetNode() {
 		bungeeJsonFile.setString("test.node.key", "value");
 		JsonObject node = bungeeJsonFile.getNode("test.node").getAsJsonObject();

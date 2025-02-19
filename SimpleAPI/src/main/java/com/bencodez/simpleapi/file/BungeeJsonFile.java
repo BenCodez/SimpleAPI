@@ -216,11 +216,16 @@ public class BungeeJsonFile {
 	}
 
 	public synchronized void remove(String path) {
-		JsonObject node = navigateToNode(path);
-		if (node != null) {
-			String lastPart = getLastPathPart(path);
-			node.remove(lastPart);
-		}
+	    if (!path.contains(".")) {
+	        conf.remove(path);
+	        return;
+	    }
+	    
+	    JsonObject node = navigateToNode(path);
+	    if (node != null) {
+	        String lastPart = getLastPathPart(path);
+	        node.remove(lastPart);
+	    }
 	}
 
 	public void reload() {
