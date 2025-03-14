@@ -9,6 +9,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map.Entry;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -35,14 +36,14 @@ public class SkullCache {
 	 * Skulls and time are stored by uuid regardless of how they're cached or
 	 * accessed.
 	 */
-	private static final HashMap<UUID, ItemStack> skullMap = new HashMap<>();
-	private static final HashMap<UUID, Long> timeMap = new HashMap<>();
+	private static final ConcurrentHashMap<UUID, ItemStack> skullMap = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<UUID, Long> timeMap = new ConcurrentHashMap<>();
 
-	private static final HashMap<String, ItemStack> skullBase64Map = new HashMap<>();
-	private static final HashMap<String, Long> timeBase64Map = new HashMap<>();
+	private static final ConcurrentHashMap<String, ItemStack> skullBase64Map = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<String, Long> timeBase64Map = new ConcurrentHashMap<>();
 
-	private static final HashMap<String, ItemStack> skullURLMap = new HashMap<>();
-	private static final HashMap<String, Long> timeURLMap = new HashMap<>();
+	private static final ConcurrentHashMap<String, ItemStack> skullURLMap = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<String, Long> timeURLMap = new ConcurrentHashMap<>();
 
 	@SuppressWarnings("deprecation")
 	static private JsonParser parser = new JsonParser();
