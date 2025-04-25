@@ -1,14 +1,5 @@
 package com.bencodez.simpleapi.file;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import lombok.Getter;
-import lombok.Setter;
-
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -16,6 +7,16 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+import lombok.Getter;
+import lombok.Setter;
 
 public class BungeeJsonFile {
 	@Getter
@@ -28,28 +29,45 @@ public class BungeeJsonFile {
 	private Gson gson;
 
 	public BungeeJsonFile(File file) {
-		this.file = file;
-		this.gson = new GsonBuilder().setPrettyPrinting().create();
+	    this.file = file;
+	    this.gson = new GsonBuilder().setPrettyPrinting().create();
 
-		if (!file.exists()) {
-			try {
-				File parentDir = file.getParentFile();
-				if (parentDir != null && !parentDir.exists()) {
-					parentDir.mkdirs();
-				}
-				file.createNewFile();
-				conf = new JsonObject();
-				save(); // Save file with empty JsonObject upon creation
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		} else {
-			try (FileReader reader = new FileReader(file)) {
-				conf = JsonParser.parseReader(reader).getAsJsonObject();
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
+	    if (!file.exists()) {
+	        try {
+	            File parentDir = file.getParentFile();
+	            if (parentDir != null && !parentDir.exists()) {
+	                parentDir.mkdirs();
+	            }
+	            file.createNewFile();
+	            conf = new JsonObject();
+	            save(); // Save file with empty JsonObject upon creation
+	        } catch (IOException e) {
+	            e.printStackTrace();
+	        }
+	    } else {
+	        try (FileReader reader = new FileReader(file)) {
+	            conf = JsonParser.parseReader(reader).getAsJsonObject();
+	        } catch (com.google.gson.JsonSyntaxException e) {
+	            System.err.println("Error parsing JSON file: " + e.getMessage());
+	            conf = attemptPartialRecovery(file); // Attempt to recover as much as possible
+	        } catch (IOException e) {
+	            e.printStackTrace();
+	            conf = new JsonObject(); // Fallback to an empty JsonObject
+	        }
+	    }
+	}
+
+	private JsonObject attemptPartialRecovery(File file) {
+	    JsonObject recoveredData = new JsonObject();
+	    try (FileReader fileReader = new FileReader(file);
+	         com.google.gson.stream.JsonReader jsonReader = new com.google.gson.stream.JsonReader(fileReader)) {
+	        jsonReader.setLenient(true); // Allow lenient parsing
+	        recoveredData = JsonParser.parseReader(jsonReader).getAsJsonObject();
+	        System.err.println("Partial recovery of JSON data succeeded.");
+	    } catch (Exception ex) {
+	        System.err.println("Failed to recover JSON data: " + ex.getMessage());
+	    }
+	    return recoveredData;
 	}
 
 	private JsonObject navigateToNode(String path) {
