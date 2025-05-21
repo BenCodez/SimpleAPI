@@ -124,6 +124,7 @@ public class PluginMessage implements PluginMessageListener {
 		try {
 			if (encryptionHandler != null) {
 				out.writeUTF(encryptionHandler.encrypt(channel));
+			} else {
 				out.writeUTF(channel);
 			}
 			out.writeInt(messageData.length);
