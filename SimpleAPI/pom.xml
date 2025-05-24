@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.bencodez</groupId>
 	<artifactId>simpleapi</artifactId>
-	<version>0.0.6-SNAPSHOT</version>
+	<version>0.0.6</version>
 	<name>SimpleAPI</name>
 	<properties>
 		<!-- github server corresponds to entry in ~/.m2/settings.xml -->
@@ -90,6 +90,16 @@
 							<goal>shade</goal>
 						</goals>
 						<configuration>
+                          <filters>
+                            <filter>
+                              <artifact>*:*</artifact>
+                              <excludes>
+                                 <exclude>META-INF/*.SF</exclude>
+                                 <exclude>META-INF/*.DSA</exclude>
+                                 <exclude>META-INF/*.RSA</exclude>
+                              </excludes>
+                              </filter>
+                            </filters>
 							<relocations>
 								<relocation>
 									<pattern>com.zaxxer.HikariCP</pattern>
