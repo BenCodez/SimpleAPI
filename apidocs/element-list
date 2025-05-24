@@ -1,6 +1,7 @@
 com.bencodez.simpleapi.array
 com.bencodez.simpleapi.command
 com.bencodez.simpleapi.debug
+com.bencodez.simpleapi.encryption
 com.bencodez.simpleapi.exception
 com.bencodez.simpleapi.file
 com.bencodez.simpleapi.file.annotation
@@ -12,7 +13,19 @@ com.bencodez.simpleapi.metrics
 com.bencodez.simpleapi.nms
 com.bencodez.simpleapi.player
 com.bencodez.simpleapi.scheduler
+com.bencodez.simpleapi.servercomm.global
+com.bencodez.simpleapi.servercomm.mqtt
+com.bencodez.simpleapi.servercomm.pluginmessage
+com.bencodez.simpleapi.servercomm.redis
+com.bencodez.simpleapi.servercomm.sockets
 com.bencodez.simpleapi.serverhandle
 com.bencodez.simpleapi.skull
+com.bencodez.simpleapi.sql
+com.bencodez.simpleapi.sql.data
+com.bencodez.simpleapi.sql.mysql
+com.bencodez.simpleapi.sql.mysql.config
+com.bencodez.simpleapi.sql.mysql.queries
+com.bencodez.simpleapi.sql.sqlite
+com.bencodez.simpleapi.sql.sqlite.db
 com.bencodez.simpleapi.updater
 com.bencodez.simpleapi.utils
