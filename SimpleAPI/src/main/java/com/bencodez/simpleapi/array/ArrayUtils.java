@@ -1,6 +1,7 @@
 package com.bencodez.simpleapi.array;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -406,6 +407,16 @@ public class ArrayUtils {
 		Collections.sort(list, String.CASE_INSENSITIVE_ORDER);
 		return list;
 	}
+	
+    public static ArrayList<String> convertAndRemoveFirst(String[] array) {
+        if (array == null || array.length == 0) {
+            return new ArrayList<>(); // Return an empty ArrayList if the array is null or empty
+        }
+        // Convert the array to an ArrayList and remove the first element
+        ArrayList<String> list = new ArrayList<>(Arrays.asList(array));
+        list.remove(0);
+        return list;
+    }
 
 	public static HashMap<String, Integer> sortByValuesStr(HashMap<String, Integer> unsortMap, final boolean order) {
 

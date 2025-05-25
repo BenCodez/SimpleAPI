@@ -9,6 +9,9 @@ public abstract class PluginMessageHandler {
 	public PluginMessageHandler(String subChannel) {
 		this.subChannel = subChannel;
 	}
+	
+	public PluginMessageHandler() {
+	}
 
 	/**
 	 * @return the subChannel

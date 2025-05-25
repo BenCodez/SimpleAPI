@@ -112,7 +112,7 @@ public class PluginMessage implements PluginMessageListener {
 					"BungeeDebug: Received plugin message: " + subChannel + ", " + ArrayUtils.makeStringList(list));
 		}
 		for (PluginMessageHandler handle : pluginMessages) {
-			if (handle.getSubChannel().equalsIgnoreCase(subChannel)) {
+			if (handle.getSubChannel() == null || handle.getSubChannel().equalsIgnoreCase(subChannel)) {
 				handle.onRecieve(subChannel, list);
 			}
 		}
