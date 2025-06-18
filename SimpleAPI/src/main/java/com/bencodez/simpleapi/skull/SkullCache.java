@@ -56,8 +56,9 @@ public class SkullCache {
 	 * Cache a skull from an offline player.
 	 *
 	 * @param offlinePlayer The offline player.
+	 * @throws IOException
 	 */
-	public static void cacheSkull(OfflinePlayer offlinePlayer) {
+	public static void cacheSkull(OfflinePlayer offlinePlayer) throws IOException {
 		cacheSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
 	}
 
@@ -65,8 +66,9 @@ public class SkullCache {
 	 * Cache a skull from an online player.
 	 *
 	 * @param player The online player.
+	 * @throws IOException
 	 */
-	public static void cacheSkull(Player player) {
+	public static void cacheSkull(Player player) throws IOException {
 		cacheSkull(player.getUniqueId(), player.getName());
 	}
 
@@ -74,15 +76,11 @@ public class SkullCache {
 	 * Cache a skull from a uuid.
 	 *
 	 * @param uuid The player's uuid.
+	 * @throws IOException
 	 */
-	public static void cacheSkull(UUID uuid, String name) {
-		try {
-			skullMap.put(uuid, itemWithUuid(uuid, name));
-			timeMap.put(uuid, System.currentTimeMillis());
-		} catch (IOException e) {
-			e.printStackTrace();
-			skullMap.remove(uuid);
-		}
+	public static void cacheSkull(UUID uuid, String name) throws IOException {
+		skullMap.put(uuid, itemWithUuid(uuid, name));
+		timeMap.put(uuid, System.currentTimeMillis());
 
 	}
 
