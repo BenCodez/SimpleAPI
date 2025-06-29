@@ -59,6 +59,10 @@ public class VelocityYMLFile {
 		return node.getInt(def);
 	}
 
+	public double getDouble(ConfigurationNode node, double def) {
+		return node.getDouble(def);
+	}
+
 	public ArrayList<String> getKeys(ConfigurationNode node) {
 		ArrayList<String> keys = new ArrayList<>();
 		for (ConfigurationNode key : node.getChildrenMap().values()) {
