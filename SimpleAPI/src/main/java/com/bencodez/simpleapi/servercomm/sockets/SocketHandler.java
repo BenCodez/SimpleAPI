@@ -32,6 +32,10 @@ public abstract class SocketHandler {
 	public void closeConnection() {
 		server.close();
 		server = null;
+		if (timer != null) {
+			timer.shutdownNow();
+			timer = null;
+		}
 	}
 
 	public abstract void log(String str);

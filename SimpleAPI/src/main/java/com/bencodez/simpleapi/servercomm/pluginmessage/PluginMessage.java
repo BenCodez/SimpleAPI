@@ -52,6 +52,10 @@ public class PluginMessage implements PluginMessageListener {
 	public ArrayList<PluginMessageHandler> getPluginMessages() {
 		return pluginMessages;
 	}
+	
+	public void shutdown() {
+		timer.shutdown();
+	}
 
 	@Override
 	public void onPluginMessageReceived(String channel, Player player, byte[] message) {
