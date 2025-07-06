@@ -9,31 +9,48 @@ public abstract class RedisHandler {
 	private final JedisPool subscribePool;
 
 	public RedisHandler(String host, int port, String username, String password) {
-	    int timeout = 2000; // Set a reasonable timeout
-	    if (username.isEmpty() && password.isEmpty()) {
-	        publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout);
-	        subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout);
-	    } else if (username.isEmpty()) {
-	        publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout, password);
-	        subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout, password);
-	    } else {
-	        publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout, username, password);
-	        subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout, username, password);
-	    }
+		int timeout = 2000; // Set a reasonable timeout
+		if (username.isEmpty() && password.isEmpty()) {
+			publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout);
+			subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout);
+		} else if (username.isEmpty()) {
+			publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout, password);
+			subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout, password);
+		} else {
+			publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout, username, password);
+			subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout, username, password);
+		}
 	}
 
 	public void close() {
+		try {
+			if (subscribeThread != null && subscribeThread.isAlive()) {
+				subscribeThread.interrupt(); // Signal the thread to stop
+			}
+		} catch (Exception e) {
+			debug("Failed to interrupt Redis subscribe thread: " + e.getMessage());
+		}
+		
+		
 		publishPool.close();
 		subscribePool.close();
 	}
 
-	public abstract void debug(String message);
+	private Thread subscribeThread;
 
 	public void loadListener(RedisListener listener) {
-		try (Jedis jedis = subscribePool.getResource()) {
-			jedis.subscribe(listener, listener.getChannel());
-		}
+		subscribeThread = new Thread(() -> {
+			try (Jedis jedis = subscribePool.getResource()) {
+				jedis.subscribe(listener, listener.getChannel());
+			} catch (Exception e) {
+				debug("Redis subscribe error: " + e.getMessage());
+			}
+		}, "RedisSubscribeThread");
+
+		subscribeThread.start();
 	}
+
+	public abstract void debug(String message);
 
 	protected abstract void onMessage(String channel, String[] message);
 
