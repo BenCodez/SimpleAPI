@@ -11,11 +11,6 @@ import java.util.function.Consumer;
 
 import javax.sql.DataSource;
 
-/**
- * Backend-side messenger: listens on "backend-channel-<serverId>" and sends to
- * proxy. Also reuses dedicated publisher connection to conserve pool. Ensures
- * table exists before connecting.
- */
 public class BackendMessenger {
 	private final String myServerId;
 	private final String CHANNEL;
@@ -78,7 +73,7 @@ public class BackendMessenger {
 		t.setDaemon(true);
 		t.start();
 	}
-	
+
 	private void deleteMessageById(long id) throws SQLException {
 		String delSql = "DELETE FROM " + tableName + "_message_queue WHERE id = ?";
 		try (PreparedStatement del = workConn.prepareStatement(delSql)) {

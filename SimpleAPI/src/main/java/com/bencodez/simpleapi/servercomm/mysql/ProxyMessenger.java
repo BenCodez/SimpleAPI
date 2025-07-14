@@ -11,11 +11,6 @@ import java.util.function.Consumer;
 
 import javax.sql.DataSource;
 
-/**
- * Proxy-side messenger: listens on "proxy-channel" and forwards to servers.
- * Reuses dedicated lock, worker, and publisher connections to avoid exhausting
- * the pool. Ensures the required table exists on initialization.
- */
 public class ProxyMessenger {
 	private static final String PROXY_CHANNEL = "proxy-channel";
 	private final DataSource ds;
@@ -125,9 +120,6 @@ public class ProxyMessenger {
 		}
 	}
 
-	/**
-	 * Called by each backend instance to send a message to this proxy.
-	 */
 	public synchronized void sendToProxy(String fromServerId, String payload) throws SQLException {
 		String insertSql = "INSERT INTO " + tableName
 				+ "_message_queue (source, destination, payload) VALUES (?, 'proxy', ?)";
