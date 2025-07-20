@@ -89,6 +89,28 @@ public class AnnotationHandler {
 
 					field.set(classToLoad, value);
 				}
+				
+				ConfigDataLong longAnnotation = field.getAnnotation(ConfigDataLong.class);
+				if (longAnnotation != null) {
+					long defaultValue = longAnnotation.defaultValue();
+					if (defaultValue == 0) {
+						try {
+							int v = field.getInt(classToLoad);
+							defaultValue = v;
+						} catch (Exception e) {
+
+						}
+					}
+					long value = 0;
+					if (!longAnnotation.secondPath().isEmpty()) {
+						value = config.getLong(longAnnotation.path(),
+								config.getLong(longAnnotation.secondPath(), defaultValue));
+					} else {
+						value = config.getLong(longAnnotation.path(), defaultValue);
+					}
+
+					field.set(classToLoad, value);
+				}
 
 				ConfigDataDouble doubleAnnotation = field.getAnnotation(ConfigDataDouble.class);
 				if (doubleAnnotation != null) {
