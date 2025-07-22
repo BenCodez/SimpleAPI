@@ -20,7 +20,7 @@ public abstract class SkullCacheHandler {
 	Queue<String> skullsToLoad = new ConcurrentLinkedQueue<>();
 
 	private boolean pause = false;
-	
+
 	@Getter
 	@Setter
 	private String bedrockPrefix = ".";
@@ -70,15 +70,27 @@ public abstract class SkullCacheHandler {
 		SkullCache.flushWeek();
 	}
 
+	@SuppressWarnings("deprecation")
 	public ItemStack getSkull(UUID uuid, String playerName) {
+		Material skullMaterial;
+		ItemStack skullItem;
+		// Check for legacy versions
+		try {
+			skullMaterial = Material.valueOf("PLAYER_HEAD");
+			skullItem = new ItemStack(skullMaterial);
+		} catch (IllegalArgumentException e) {
+			// Fallback
+			skullMaterial = Material.valueOf("SKULL_ITEM");
+			skullItem = new ItemStack(skullMaterial, 1, (short) 3);
+		}
 		if (playerName.length() > 16 || (pause && !SkullCache.isLoaded(uuid)) || uuid.toString().charAt(14) == '3') {
-			return new ItemStack(Material.PLAYER_HEAD);
+			return skullItem;
 		}
 		try {
 			return SkullCache.getSkull(uuid, playerName);
 		} catch (Exception e) {
 			pauseCaching();
-			return new ItemStack(Material.PLAYER_HEAD);
+			return skullItem;
 		}
 	}
 
