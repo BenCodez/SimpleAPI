@@ -123,6 +123,18 @@ public class MessageAPI {
 		}
 	}
 
+	public static boolean isLong(String st) {
+		if (st == null) {
+			return false;
+		}
+		try {
+			Long.parseLong(st);
+			return true;
+		} catch (NumberFormatException ex) {
+			return false;
+		}
+	}
+
 	/**
 	 * Replace ignore case.
 	 *
