@@ -14,8 +14,5 @@ public abstract class GlobalMessageProxyListener {
 
 	public abstract void onReceive(ArrayList<String> message);
 
-	public void sendMessage(GlobalMessageProxyHandler globalMessageHandler, String server, String channel,
-			String... messageData) {
-		globalMessageHandler.sendMessage(server, channel, messageData);
-	}
+	
 }

@@ -21,5 +21,5 @@ public abstract class GlobalMessageProxyHandler {
 		}
 	}
 
-	public abstract void sendMessage(String server,String subChannel, String... messageData);
+	public abstract void sendMessage(String server, int delay, String subChannel, String... messageData);
 }
