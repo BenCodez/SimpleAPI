@@ -104,12 +104,12 @@
 								<relocation>
 									<pattern>com.zaxxer.HikariCP</pattern>
 									<shadedPattern>
-										${project.groupId}.advancedcore.HikariCP</shadedPattern>
+										${project.groupId}.simpleapi.HikariCP</shadedPattern>
 								</relocation>
 								<relocation>
 									<pattern>com.zaxxer.hikari</pattern>
 									<shadedPattern>
-										${project.groupId}.advancedcore.hikari</shadedPattern>
+										${project.groupId}.simpleapi.hikari</shadedPattern>
 								</relocation>
 								<relocation>
 									<pattern>com.tcoded.folialib</pattern>
