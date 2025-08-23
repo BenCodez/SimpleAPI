@@ -102,11 +102,6 @@
                             </filters>
 							<relocations>
 								<relocation>
-									<pattern>com.zaxxer.HikariCP</pattern>
-									<shadedPattern>
-										${project.groupId}.simpleapi.HikariCP</shadedPattern>
-								</relocation>
-								<relocation>
 									<pattern>com.zaxxer.hikari</pattern>
 									<shadedPattern>
 										${project.groupId}.simpleapi.hikari</shadedPattern>
