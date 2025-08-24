@@ -15,6 +15,7 @@ com.bencodez.simpleapi.player
 com.bencodez.simpleapi.scheduler
 com.bencodez.simpleapi.servercomm.global
 com.bencodez.simpleapi.servercomm.mqtt
+com.bencodez.simpleapi.servercomm.mysql
 com.bencodez.simpleapi.servercomm.pluginmessage
 com.bencodez.simpleapi.servercomm.redis
 com.bencodez.simpleapi.servercomm.sockets
