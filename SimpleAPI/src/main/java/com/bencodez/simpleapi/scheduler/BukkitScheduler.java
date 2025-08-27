@@ -26,6 +26,10 @@ public class BukkitScheduler {
 	}
 
 	public void executeOrScheduleSync(Plugin plugin, Runnable task, Entity entity) {
+		if (entity == null) {
+			executeOrScheduleSync(plugin, task);
+			return;
+		}
 		getFoliaLib().getImpl().runAtEntity(entity, run -> {
 			task.run();
 		});
@@ -44,6 +48,10 @@ public class BukkitScheduler {
 	}
 
 	public void runTask(Plugin plugin, Runnable task, Entity entity) {
+		if (entity == null) {
+			runTask(plugin, task);
+			return;
+		}
 		getFoliaLib().getImpl().runAtEntity(entity, run -> {
 			task.run();
 		});
@@ -68,6 +76,10 @@ public class BukkitScheduler {
 	}
 
 	public void runTaskLater(Plugin plugin, Runnable task, long delay, Entity entity) {
+		if (entity == null) {
+			runTaskLater(plugin, task, delay);
+			return;
+		}
 		getFoliaLib().getImpl().runAtEntityLater(entity, run -> {
 			task.run();
 		}, delay, TimeUnit.SECONDS);
@@ -98,6 +110,10 @@ public class BukkitScheduler {
 	}
 
 	public void runTaskTimer(Plugin plugin, Runnable task, long delay, long period, Entity entity) {
+		if (entity == null) {
+			runTaskTimer(plugin, task, delay, period);
+			return;
+		}
 		getFoliaLib().getImpl().runTimer(run -> {
 			task.run();
 		}, delay, period, TimeUnit.SECONDS);
