@@ -57,6 +57,7 @@ public class BungeeJsonFile {
 	    }
 	}
 
+	@SuppressWarnings("deprecation")
 	private JsonObject attemptPartialRecovery(File file) {
 	    JsonObject recoveredData = new JsonObject();
 	    try (FileReader fileReader = new FileReader(file);

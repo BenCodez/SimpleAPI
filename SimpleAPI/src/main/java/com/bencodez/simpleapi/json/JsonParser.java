@@ -37,6 +37,7 @@ import com.google.gson.stream.MalformedJsonException;
  * @since 1.3
  */
 public final class JsonParser {
+	@SuppressWarnings("deprecation")
 	public static JsonElement parseReader(JsonReader reader) throws JsonIOException, JsonSyntaxException {
 		boolean lenient = reader.isLenient();
 		reader.setLenient(true);
