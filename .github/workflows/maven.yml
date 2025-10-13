@@ -1,11 +1,6 @@
 # This workflow will build a Java project with Maven, and cache/restore any dependencies to improve the workflow execution time
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-maven
 
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
 name: Java CI with Maven
 
 on:
@@ -13,6 +8,9 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+
+permissions:
+  contents: write   # required for dependency submission
 
 jobs:
   build:
@@ -30,8 +28,10 @@ jobs:
       - name: Build with Maven
         run: mvn -B -f SimpleAPI/pom.xml package
 
+      # Only run dependency graph submission on push (not pull_request)
       - name: Submit Dependency Snapshot
+        if: github.event_name == 'push'
         uses: advanced-security/maven-dependency-submission-action@v5
         with:
-          directory: SimpleAPI   # <-- tell the action where pom.xml is
+          directory: SimpleAPI   # path to pom.xml
           # optional: maven-args: "-DskipTests"
