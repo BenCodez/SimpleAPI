@@ -16,31 +16,78 @@ public abstract class MySQL {
 	 * Create a new MySQL object with a default of 10 maximum threads.
 	 */
 	public MySQL() {
-		threadPool = Executors.newFixedThreadPool(10);
-		maxConnections = 1;
+		this.threadPool = Executors.newFixedThreadPool(10);
+		this.maxConnections = 1;
 	}
 
 	/**
 	 * Create a new MySQL object.
 	 *
-	 * @param maxConnections Maxiumn number of connections
+	 * @param maxConnections Maximum number of connections
 	 */
 	public MySQL(int maxConnections) {
-		threadPool = Executors.newFixedThreadPool(10);
 		this.maxConnections = maxConnections;
+		this.threadPool = Executors.newFixedThreadPool(Math.max(1, maxConnections));
 	}
 
 	public boolean connect(MysqlConfig config) {
-		this.maxConnections = config.getMaxThreads();
-		connectionManager = new ConnectionManager(config.getHostName(), "" + config.getPort(), config.getUser(),
-				config.getPass(), config.getDatabase(), maxConnections, config.isUseSSL(), config.getLifeTime(),
-				config.getLine(), config.isPublicKeyRetrieval(), config.isUseMariaDB());
+		// (Re)size thread pool to match MaxConnections from config
+		this.maxConnections = Math.max(1, config.getMaxThreads());
+		if (threadPool != null) {
+			threadPool.shutdown();
+		}
+		threadPool = Executors.newFixedThreadPool(maxConnections);
 
-		return connectionManager.open();
+		// Create manager with core options
+		connectionManager = new ConnectionManager(config.getHostName(), String.valueOf(config.getPort()),
+				config.getUser(), config.getPass(), config.getDatabase(), maxConnections, config.isUseSSL(),
+				config.getLifeTime(), // may be <=0 (manager will default)
+				config.getLine() == null ? "" : config.getLine(), config.isPublicKeyRetrieval(), config.isUseMariaDB());
+
+		// Apply optional tunables if provided (>0 or explicitly set)
+		if (config.getMinimumIdle() > 0) {
+			connectionManager.setMinimumIdle(config.getMinimumIdle());
+		}
+		if (config.getIdleTimeoutMs() > 0) {
+			connectionManager.setIdleTimeoutMs(config.getIdleTimeoutMs());
+		}
+		if (config.getKeepaliveMs() > 0) {
+			connectionManager.setKeepaliveMs(config.getKeepaliveMs());
+		}
+		if (config.getValidationMs() > 0) {
+			connectionManager.setValidationMs(config.getValidationMs());
+		}
+		if (config.getLeakDetectMs() > 0) {
+			connectionManager.setLeakDetectMs(config.getLeakDetectMs());
+		}
+		if (config.getConnectionTimeout() > 0) {
+			connectionManager.setConnectionTimeout(config.getConnectionTimeout());
+		}
+		if (config.getLifeTime() > 0) {
+			connectionManager.setMaxLifetimeMs(config.getLifeTime());
+		}
+
+		if (config.getPoolName() != null && !config.getPoolName().isEmpty()) {
+			connectionManager.setPoolName(config.getPoolName());
+		}
+
+		boolean ok = connectionManager.open();
+
+		// Optional debug output
+		if (config.isDebug()) {
+			if (ok) {
+				debug("MySQL connected. host=" + config.getHostName() + " db=" + config.getDatabase() + " maxPool="
+						+ maxConnections);
+			} else {
+				debug("MySQL connection failed. Check host/port/credentials and timeouts.");
+			}
+		}
+
+		return ok;
 	}
 
 	public abstract void debug(SQLException e);
-	
+
 	public abstract void debug(String msg);
 
 	/**
@@ -50,7 +97,6 @@ public abstract class MySQL {
 		if (connectionManager != null) {
 			connectionManager.close();
 		}
-
 		if (threadPool != null) {
 			threadPool.shutdown();
 		}

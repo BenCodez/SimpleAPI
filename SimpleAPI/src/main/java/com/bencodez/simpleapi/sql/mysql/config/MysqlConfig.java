@@ -4,6 +4,8 @@ import lombok.Getter;
 import lombok.Setter;
 
 public class MysqlConfig {
+
+	// --- Basic Table Info ---
 	@Getter
 	@Setter
 	private String tablePrefix;
@@ -11,6 +13,7 @@ public class MysqlConfig {
 	@Setter
 	private String tableName;
 
+	// --- Connection Info ---
 	@Getter
 	@Setter
 	private String hostName;
@@ -26,12 +29,34 @@ public class MysqlConfig {
 	@Getter
 	@Setter
 	private String database;
+
+	// --- Pool Settings ---
+	@Getter
+	@Setter
+	private int maxThreads;
+	@Getter
+	@Setter
+	private int minimumIdle;
 	@Getter
 	@Setter
 	private long lifeTime;
 	@Getter
 	@Setter
-	private int maxThreads = 1;
+	private long idleTimeoutMs;
+	@Getter
+	@Setter
+	private long keepaliveMs;
+	@Getter
+	@Setter
+	private long validationMs;
+	@Getter
+	@Setter
+	private long leakDetectMs;
+	@Getter
+	@Setter
+	private int connectionTimeout;
+
+	// --- Driver / Behavior Options ---
 	@Getter
 	@Setter
 	private boolean useSSL;
@@ -41,14 +66,20 @@ public class MysqlConfig {
 	@Getter
 	@Setter
 	private boolean useMariaDB;
+
+	// --- Additional Settings ---
 	@Getter
 	@Setter
-	private String line = "";
+	private String line;
+	@Getter
+	@Setter
+	private boolean debug;
+	@Getter
+	@Setter
+	private String poolName;
 
+	// --- Utility ---
 	public boolean hasTableNameSet() {
-		if (tableName == null) {
-			return false;
-		}
-		return !tableName.isEmpty();
+		return tableName != null && !tableName.isEmpty();
 	}
 }
