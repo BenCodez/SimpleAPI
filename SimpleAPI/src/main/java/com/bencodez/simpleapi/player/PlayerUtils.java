@@ -9,6 +9,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.command.CommandSender;
@@ -184,6 +185,37 @@ public class PlayerUtils {
 			return serverHandle = new CraftBukkitHandle();
 		}
 	}
+	
+    /**
+     * Gets the nearest player to the given location within the specified max distance.
+     *
+     * @param location    The center location to search from.
+     * @param maxDistance The maximum distance (in blocks).
+     * @return The nearest Player, or null if none are within range.
+     */
+    public static Player getNearestPlayer(Location location, double maxDistance) {
+        if (location == null || location.getWorld() == null) {
+            return null;
+        }
+
+        Player nearest = null;
+        double maxDistanceSquared = maxDistance * maxDistance;
+        double closestSoFar = maxDistanceSquared;
+
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.getWorld() != location.getWorld()) {
+                continue;
+            }
+
+            double distanceSquared = player.getLocation().distanceSquared(location);
+            if (distanceSquared <= closestSoFar) {
+                closestSoFar = distanceSquared;
+                nearest = player;
+            }
+        }
+
+        return nearest;
+    }
 
 	private static java.util.UUID parseUUIDFromString(String uuidAsString) {
 		String[] parts = { "0x" + uuidAsString.substring(0, 8), "0x" + uuidAsString.substring(8, 12),
