@@ -195,6 +195,12 @@ public class SkullCache {
 		try {
 			URL url = new URL(link);
 			HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+
+			// The UUID of this profile does not exist
+			if (conn.getResponseCode() == 204) {
+				return null;
+			}
+
 			BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
 			String outputLine = "";
 
@@ -214,6 +220,11 @@ public class SkullCache {
 	@SuppressWarnings("deprecation")
 	public static String getSkinUrl(String uuid) throws IOException {
 		String json = getContent(api_profile_link + uuid);
+
+		if (json == null) {
+			return null;
+		}
+
 		JsonObject o = parser.parse(json).getAsJsonObject();
 		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
 
@@ -270,7 +281,7 @@ public class SkullCache {
 		}
 		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
 		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(uuid);
-		profile.getTextures().setSkin(new URL(getSkinUrl(uuid.toString())));
+		profile.getTextures().setSkin(new URL(url));
 		skullMeta.setOwnerProfile(profile);
 		skull.setItemMeta(skullMeta);
 		return skull;
