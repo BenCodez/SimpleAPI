@@ -10,41 +10,56 @@ import redis.clients.jedis.JedisPoolConfig;
 public abstract class RedisHandler {
 	private final JedisPool publishPool;
 	private final JedisPool subscribePool;
-	
+
 	private final Map<RedisListener, Thread> listenerThreads = new ConcurrentHashMap<>();
 
+	/**
+	 * Old constructor — defaults DB index to 0
+	 */
 	public RedisHandler(String host, int port, String username, String password) {
-		int timeout = 2000; // Set a reasonable timeout
+		this(host, port, username, password, 0);
+	}
+
+	/**
+	 * New constructor with DB index
+	 */
+	public RedisHandler(String host, int port, String username, String password, int dbIndex) {
+		int timeout = 2000;
+
+		JedisPoolConfig config = new JedisPoolConfig();
+
 		if (username.isEmpty() && password.isEmpty()) {
-			publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout);
-			subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout);
+			// No auth
+			publishPool = new JedisPool(config, host, port, timeout, null, dbIndex);
+			subscribePool = new JedisPool(config, host, port, timeout, null, dbIndex);
 		} else if (username.isEmpty()) {
-			publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout, password);
-			subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout, password);
+			// Legacy auth (password only)
+			publishPool = new JedisPool(config, host, port, timeout, password, dbIndex);
+			subscribePool = new JedisPool(config, host, port, timeout, password, dbIndex);
 		} else {
-			publishPool = new JedisPool(new JedisPoolConfig(), host, port, timeout, username, password);
-			subscribePool = new JedisPool(new JedisPoolConfig(), host, port, timeout, username, password);
+			// Username + password
+			publishPool = new JedisPool(config, host, port, timeout, username, password, dbIndex);
+			subscribePool = new JedisPool(config, host, port, timeout, username, password, dbIndex);
 		}
 	}
 
 	public void close() {
 		debug("Shutting down RedisHandler");
 
-		// Unsubscribe all listeners and stop threads
 		for (Map.Entry<RedisListener, Thread> entry : listenerThreads.entrySet()) {
 			RedisListener listener = entry.getKey();
 			Thread thread = entry.getValue();
 
 			try {
 				debug("Unsubscribing Redis listener on channel: " + listener.getChannel());
-				listener.unsubscribe(); // Gracefully signal jedis.subscribe() to exit
+				listener.unsubscribe();
 			} catch (Exception e) {
 				debug("Failed to unsubscribe listener: " + e.getMessage());
 			}
 
 			try {
 				if (thread != null && thread.isAlive()) {
-					thread.join(2000); // Give up to 2 seconds for it to shut down
+					thread.join(2000);
 				}
 			} catch (InterruptedException e) {
 				debug("Interrupted while waiting for Redis listener thread to finish: " + e.getMessage());
@@ -53,7 +68,6 @@ public abstract class RedisHandler {
 
 		listenerThreads.clear();
 
-		// Close Redis pools
 		publishPool.close();
 		subscribePool.close();
 	}
