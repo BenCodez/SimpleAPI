@@ -1,14 +1,12 @@
-
 package com.bencodez.simpleapi.tests;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
-import java.nio.file.Files;
 
 import org.bukkit.plugin.java.JavaPlugin;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
 import com.bencodez.simpleapi.file.YMLFile;
@@ -16,44 +14,105 @@ import com.bencodez.simpleapi.scheduler.BukkitScheduler;
 
 public class YMLFileTest {
 
+	@TempDir
+	File tempDir;
+
 	@Test
-	public void testYMLFileOperations() throws Exception {
-		// Create a test directory inside the target folder
-		File targetDir = new File("target");
-		if (!targetDir.exists()) {
-			targetDir.mkdirs();
-		}
-		// Create a temporary file
-		File tempFile = Files.createTempFile(targetDir.toPath(), "test", ".yml").toFile();
-		tempFile.deleteOnExit();
+	public void testBasicYMLFileOperations() throws Exception {
+		File tempFile = new File(tempDir, "test.yml");
 
-		// Mock JavaPlugin
 		JavaPlugin mockPlugin = Mockito.mock(JavaPlugin.class);
-
-		// Mock BukkitScheduler
 		BukkitScheduler mockScheduler = Mockito.mock(BukkitScheduler.class);
 
-		// Create an instance of YMLFile with the mocked scheduler
 		YMLFile ymlFile = new YMLFile(mockPlugin, tempFile, mockScheduler) {
 			@Override
 			public void onFileCreation() {
-
+				// no-op
 			}
 		};
 
-		// Perform setup
+		// Setup should create file
 		ymlFile.setup();
-
-		// Assert that the file was created
 		assertTrue(tempFile.exists());
+		assertTrue(ymlFile.isJustCreated());
 
-		// Set a value
+		// Write value
 		ymlFile.setValue("key", "value");
 
-		// Reload data
+		// Reload
 		ymlFile.reloadData();
 
-		// Assert that the value was saved and reloaded correctly
+		// Verify
 		assertEquals("value", ymlFile.getData().getString("key"));
+		assertFalse(ymlFile.isFailedToRead());
 	}
+
+	@Test
+	public void testIgnoreCaseRead() {
+		File tempFile = new File(tempDir, "case.yml");
+
+		JavaPlugin plugin = Mockito.mock(JavaPlugin.class);
+		BukkitScheduler scheduler = Mockito.mock(BukkitScheduler.class);
+
+		YMLFile ymlFile = new YMLFile(plugin, tempFile, scheduler) {
+			@Override
+			public void onFileCreation() {
+			}
+		};
+
+		ymlFile.setIgnoreCase(true);
+		ymlFile.setup();
+
+		ymlFile.getData().set("Rewards.Commands.Console", true);
+
+		assertTrue(ymlFile.getData().getBoolean("rewards.commands.console"));
+		assertTrue(ymlFile.getData().getBoolean("REWARDS.COMMANDS.CONSOLE"));
+	}
+
+	@Test
+	public void testIgnoreCaseWrite() {
+		File tempFile = new File(tempDir, "case-write.yml");
+
+		JavaPlugin plugin = Mockito.mock(JavaPlugin.class);
+		BukkitScheduler scheduler = Mockito.mock(BukkitScheduler.class);
+
+		YMLFile ymlFile = new YMLFile(plugin, tempFile, scheduler) {
+			@Override
+			public void onFileCreation() {
+			}
+		};
+
+		ymlFile.setIgnoreCase(true);
+		ymlFile.setup();
+
+		ymlFile.getData().set("rewards.commands.console", true);
+
+		assertTrue(ymlFile.getData().getBoolean("Rewards.Commands.Console"));
+	}
+
+	@Test
+	public void testToggleIgnoreCaseAfterLoad() {
+		File tempFile = new File(tempDir, "toggle.yml");
+
+		JavaPlugin plugin = Mockito.mock(JavaPlugin.class);
+		BukkitScheduler scheduler = Mockito.mock(BukkitScheduler.class);
+
+		YMLFile ymlFile = new YMLFile(plugin, tempFile, scheduler) {
+			@Override
+			public void onFileCreation() {
+			}
+		};
+
+		ymlFile.setup();
+		ymlFile.getData().set("Rewards.Commands.Console", true);
+
+		// Default: case-sensitive
+		assertFalse(ymlFile.getData().getBoolean("rewards.commands.console"));
+
+		ymlFile.setIgnoreCase(true);
+
+		// Now case-insensitive
+		assertTrue(ymlFile.getData().getBoolean("rewards.commands.console"));
+	}
+
 }
