@@ -27,19 +27,23 @@ public class MessageAPI {
 		if (format == null) {
 			return null;
 		}
-		format = format.replace("{AQUA}", "§b").replace("{BLACK}", "§0").replace("{BLUE}", "§9")
-				.replace("{DARK_AQUA}", "§3").replace("{DARK_BLUE}", "§1").replace("{DARK_GRAY}", "§8")
-				.replace("{DARK_GREEN}", "§2").replace("{DARK_PURPLE}", "§5").replace("{DARK_RED}", "§4")
-				.replace("{GOLD}", "§6").replace("{GRAY}", "§7").replace("{GREEN}", "§a")
-				.replace("{LIGHT_PURPLE}", "§d").replace("{RED}", "§c").replace("{WHITE}", "§f")
-				.replace("{YELLOW}", "§e").replace("{BOLD}", "§l").replace("{ITALIC}", "§o").replace("{MAGIC}", "§k")
-				.replace("{RESET}", "§r").replace("{STRIKE}", "§m").replace("{STRIKETHROUGH}", "§m")
-				.replace("{UNDERLINE}", "§n");
+
+		final String cc = String.valueOf(COLOR_CHAR);
+
+		format = format.replace("{AQUA}", cc + "b").replace("{BLACK}", cc + "0").replace("{BLUE}", cc + "9")
+				.replace("{DARK_AQUA}", cc + "3").replace("{DARK_BLUE}", cc + "1").replace("{DARK_GRAY}", cc + "8")
+				.replace("{DARK_GREEN}", cc + "2").replace("{DARK_PURPLE}", cc + "5").replace("{DARK_RED}", cc + "4")
+				.replace("{GOLD}", cc + "6").replace("{GRAY}", cc + "7").replace("{GREEN}", cc + "a")
+				.replace("{LIGHT_PURPLE}", cc + "d").replace("{RED}", cc + "c").replace("{WHITE}", cc + "f")
+				.replace("{YELLOW}", cc + "e").replace("{BOLD}", cc + "l").replace("{ITALIC}", cc + "o")
+				.replace("{MAGIC}", cc + "k").replace("{RESET}", cc + "r").replace("{STRIKE}", cc + "m")
+				.replace("{STRIKETHROUGH}", cc + "m").replace("{UNDERLINE}", cc + "n");
 
 		// hex format: &#FF0000#
 		format = translateHexColorCodes("&#", "#", format);
 		// hex format: &#FF0000
 		format = translateHexColorCodes("&#", "", format);
+
 		return ChatColor.translateAlternateColorCodes('&', format);
 	}
 
