@@ -2,6 +2,8 @@ package com.bencodez.simpleapi.sql.mysql.config;
 
 import org.bukkit.configuration.ConfigurationSection;
 
+import com.bencodez.simpleapi.sql.mysql.DbType;
+
 public class MysqlConfigSpigot extends MysqlConfig {
 
 	public MysqlConfigSpigot(ConfigurationSection section) {
@@ -27,12 +29,23 @@ public class MysqlConfigSpigot extends MysqlConfig {
 		}
 
 		// Recommended defaults (same as Bungee)
-		setMinimumIdle(section.getInt("MinimumIdle", 2));             // 2 idle connections
+		setMinimumIdle(section.getInt("MinimumIdle", 2)); // 2 idle connections
 		setIdleTimeoutMs(section.getLong("IdleTimeoutMs", 10 * 60_000L)); // 10 minutes
-		setKeepaliveMs(section.getLong("KeepaliveMs", 5 * 60_000L));      // 5 minutes
-		setValidationMs(section.getLong("ValidationMs", 5_000L));         // 5 seconds
-		setLeakDetectMs(section.getLong("LeakDetectMs", 20_000L));        // 20 seconds
+		setKeepaliveMs(section.getLong("KeepaliveMs", 5 * 60_000L)); // 5 minutes
+		setValidationMs(section.getLong("ValidationMs", 5_000L)); // 5 seconds
+		setLeakDetectMs(section.getLong("LeakDetectMs", 20_000L)); // 20 seconds
 		setConnectionTimeout(section.getInt("ConnectionTimeout", 50_000)); // 50 seconds
+
+		// --- Driver / DB Selection ---
+		String dbTypeStr = section.getString("DbType", "");
+		if (dbTypeStr != null && !dbTypeStr.isEmpty()) {
+			setDbType(DbType.fromString(dbTypeStr));
+		} else {
+			setDbType(section.getBoolean("UseMariaDB", false) ? DbType.MARIADB : DbType.MYSQL);
+		}
+
+		// Optional explicit JDBC driver override
+		setDriver(section.getString("Driver", ""));
 
 		// --- Driver / Behavior Options ---
 		setUseSSL(section.getBoolean("UseSSL", false));

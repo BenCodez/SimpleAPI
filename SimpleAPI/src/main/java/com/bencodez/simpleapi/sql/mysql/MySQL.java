@@ -44,6 +44,22 @@ public abstract class MySQL {
 				config.getLifeTime(), // may be <=0 (manager will default)
 				config.getLine() == null ? "" : config.getLine(), config.isPublicKeyRetrieval(), config.isUseMariaDB());
 
+		// NEW: set DB type + optional driver override
+		// MysqlConfig should expose:
+		// - DbType getDbType()
+		// - String getDriver() (can be empty)
+		DbType type = config.getDbType();
+		if (type != null) {
+			connectionManager.setDbType(type);
+		} else {
+			connectionManager.setDbType(config.isUseMariaDB() ? DbType.MARIADB : DbType.MYSQL);
+		}
+
+		String driver = config.getDriver();
+		if (driver != null && !driver.isEmpty()) {
+			connectionManager.setMysqlDriver(driver); // field name kept as mysqlDriver
+		}
+
 		// Apply optional tunables if provided (>0 or explicitly set)
 		if (config.getMinimumIdle() > 0) {
 			connectionManager.setMinimumIdle(config.getMinimumIdle());
@@ -76,10 +92,11 @@ public abstract class MySQL {
 		// Optional debug output
 		if (config.isDebug()) {
 			if (ok) {
-				debug("MySQL connected. host=" + config.getHostName() + " db=" + config.getDatabase() + " maxPool="
-						+ maxConnections);
+				debug("DB connected. type=" + connectionManager.getDbType() + " host=" + config.getHostName() + " db="
+						+ config.getDatabase() + " maxPool=" + maxConnections);
 			} else {
-				debug("MySQL connection failed. Check host/port/credentials and timeouts.");
+				debug("DB connection failed. type=" + connectionManager.getDbType()
+						+ " Check host/port/credentials and timeouts.");
 			}
 		}
 

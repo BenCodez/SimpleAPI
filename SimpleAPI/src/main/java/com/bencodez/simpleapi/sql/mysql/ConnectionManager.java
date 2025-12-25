@@ -14,15 +14,19 @@ public class ConnectionManager {
 	@Getter
 	@Setter
 	private int connectionTimeout = 50_000;
+
 	@Getter
 	@Setter
 	private String database;
+
 	@Getter
 	@Setter
 	private HikariDataSource dataSource;
+
 	@Getter
 	@Setter
 	private String host;
+
 	@Getter
 	@Setter
 	private int maximumPoolsize = 5;
@@ -50,24 +54,43 @@ public class ConnectionManager {
 	@Getter
 	@Setter
 	private String password;
+
 	@Getter
 	@Setter
 	private String port;
+
 	@Getter
 	@Setter
 	private boolean publicKeyRetrieval;
+
+	/**
+	 * Extra JDBC params appended to URL.
+	 *
+	 * MySQL/MariaDB: should generally start with "&" if adding params. Postgres:
+	 * can be "?foo=bar" or "&foo=bar" or "foo=bar" (we normalize).
+	 */
 	@Getter
 	@Setter
 	private String str = "";
+
 	@Getter
 	@Setter
 	private String username;
+
 	@Getter
 	@Setter
 	private boolean useSSL = false;
+
+	/**
+	 * Legacy flag still supported; only used if dbType isn't explicitly set.
+	 */
 	@Getter
 	@Setter
 	private boolean useMariaDB = false;
+
+	/**
+	 * Optional explicit driver override. If empty, chosen based on dbType.
+	 */
 	@Getter
 	@Setter
 	private String mysqlDriver = "";
@@ -75,6 +98,13 @@ public class ConnectionManager {
 	@Getter
 	@Setter
 	private String poolName = "SimpleAPI-Hikari";
+
+	/**
+	 * NEW: Explicit database type.
+	 */
+	@Getter
+	@Setter
+	private DbType dbType = DbType.MYSQL;
 
 	public ConnectionManager(String host, String port, String username, String password, String database) {
 		this.host = host;
@@ -94,6 +124,8 @@ public class ConnectionManager {
 		this.str = (str == null ? "" : str);
 		this.publicKeyRetrieval = publicKeyRetrieval;
 		this.useMariaDB = useMariaDB;
+		// temporary backward compatibility
+		this.dbType = useMariaDB ? DbType.MARIADB : DbType.MYSQL;
 	}
 
 	public boolean isClosed() {
@@ -119,46 +151,95 @@ public class ConnectionManager {
 		}
 	}
 
-	private String getMysqlDriverName() {
-		String className = useMariaDB ? "org.mariadb.jdbc.Driver" : "com.mysql.cj.jdbc.Driver";
-		try {
-			Class.forName(className);
-		} catch (ClassNotFoundException ignored) {
-			className = "com.mysql.cj.jdbc.Driver";
-			try {
-				Class.forName(className);
-			} catch (ClassNotFoundException ignored1) {
-				try {
-					className = "com.mysql.jdbc.Driver";
-					Class.forName(className);
-				} catch (ClassNotFoundException ignored2) {
-				}
-			}
+	private void ensureDriverPresent(String className) throws ClassNotFoundException {
+		Class.forName(className);
+	}
+
+	private String resolveDriver() throws ClassNotFoundException {
+		// Allow explicit override (keeps field name mysqlDriver for minimal churn)
+		if (mysqlDriver != null && !mysqlDriver.isEmpty()) {
+			ensureDriverPresent(mysqlDriver);
+			return mysqlDriver;
 		}
+
+		String className;
+		switch (dbType) {
+		case POSTGRESQL:
+			className = "org.postgresql.Driver";
+			break;
+		case MARIADB:
+			className = "org.mariadb.jdbc.Driver";
+			break;
+		case MYSQL:
+		default:
+			className = "com.mysql.cj.jdbc.Driver";
+			break;
+		}
+
+		ensureDriverPresent(className);
 		return className;
+	}
+
+	private String buildJdbcUrl(String driverClassName) {
+		String extra = (str == null ? "" : str);
+
+		// Postgres
+		if (dbType == DbType.POSTGRESQL || "org.postgresql.Driver".equals(driverClassName)) {
+			String base = String.format("jdbc:postgresql://%s:%s/%s", host, port, database);
+
+			// Defaults:
+			// - reWriteBatchedInserts improves batch perf
+			// - sslmode if useSSL
+			String defaults = "reWriteBatchedInserts=true";
+			if (useSSL) {
+				defaults += "&sslmode=require";
+			}
+
+			if (extra.isEmpty()) {
+				return base + "?" + defaults;
+			}
+
+			// Normalize user extras:
+			// - "?a=b" => base + "?a=b&defaults"
+			// - "&a=b" => base + "?defaults&a=b"
+			// - "a=b" => base + "?defaults&a=b"
+			if (extra.startsWith("?")) {
+				return base + extra + (extra.endsWith("?") ? "" : "&") + defaults;
+			}
+			if (extra.startsWith("&")) {
+				return base + "?" + defaults + extra;
+			}
+			return base + "?" + defaults + "&" + extra;
+		}
+
+		// MySQL / MariaDB
+		boolean maria = (dbType == DbType.MARIADB) || "org.mariadb.jdbc.Driver".equals(driverClassName);
+		String base = maria ? String.format("jdbc:mariadb://%s:%s/%s", host, port, database)
+				: String.format("jdbc:mysql://%s:%s/%s", host, port, database);
+
+		return base + "?useSSL=" + useSSL + "&allowMultiQueries=true" + "&rewriteBatchedStatements=true"
+				+ "&useDynamicCharsetInfo=false" + "&allowPublicKeyRetrieval=" + publicKeyRetrieval
+				+ "&tcpKeepAlive=true" + "&connectTimeout=10000" + "&socketTimeout=30000" + "&serverTimezone=UTC"
+				+ extra;
 	}
 
 	// --- Pool Configuration ---
 
 	public boolean open() {
-		if (mysqlDriver.isEmpty())
-			mysqlDriver = getMysqlDriverName();
-
 		try {
+			// If someone only set legacy flag but not dbType explicitly, keep it consistent
+			if (dbType == null) {
+				dbType = useMariaDB ? DbType.MARIADB : DbType.MYSQL;
+			}
+
+			String driverClassName = resolveDriver();
+
 			HikariConfig cfg = new HikariConfig();
-			cfg.setDriverClassName(mysqlDriver);
+			cfg.setDriverClassName(driverClassName);
 			cfg.setUsername(username);
 			cfg.setPassword(password);
 
-			String base = (mysqlDriver.equals("org.mariadb.jdbc.Driver"))
-					? String.format("jdbc:mariadb://%s:%s/%s", host, port, database)
-					: String.format("jdbc:mysql://%s:%s/%s", host, port, database);
-
-			String url = base + "?useSSL=" + useSSL + "&allowMultiQueries=true" + "&rewriteBatchedStatements=true"
-					+ "&useDynamicCharsetInfo=false" + "&allowPublicKeyRetrieval=" + publicKeyRetrieval
-					+ "&tcpKeepAlive=true" + "&connectTimeout=10000" + "&socketTimeout=30000" + "&serverTimezone=UTC"
-					+ (str == null ? "" : str);
-			cfg.setJdbcUrl(url);
+			cfg.setJdbcUrl(buildJdbcUrl(driverClassName));
 
 			// Pool sizing
 			int maxPool = Math.max(1, maximumPoolsize);
@@ -174,22 +255,26 @@ public class ConnectionManager {
 			long effectiveIdle = Math.min(idleTimeoutMs, Math.max(1000L, effectiveMaxLife - 60_000L));
 			cfg.setIdleTimeout(effectiveIdle);
 
-			if (keepaliveMs > 0)
+			if (keepaliveMs > 0) {
 				cfg.setKeepaliveTime(keepaliveMs);
-			if (validationMs > 0)
+			}
+			if (validationMs > 0) {
 				cfg.setValidationTimeout(validationMs);
-			if (leakDetectMs > 0)
+			}
+			if (leakDetectMs > 0) {
 				cfg.setLeakDetectionThreshold(leakDetectMs);
+			}
 
 			cfg.setConnectionTestQuery("SELECT 1");
 
+			// Safe common settings; ignored by some drivers (fine)
 			cfg.addDataSourceProperty("cachePrepStmts", true);
 			cfg.addDataSourceProperty("prepStmtCacheSize", 500);
 			cfg.addDataSourceProperty("prepStmtCacheSqlLimit", 2048);
 			cfg.addDataSourceProperty("useServerPrepStmts", true);
 
 			cfg.setAutoCommit(true);
-			cfg.setPoolName("SimpleAPI-Hikari");
+			cfg.setPoolName(poolName != null && !poolName.isEmpty() ? poolName : "SimpleAPI-Hikari");
 
 			dataSource = new HikariDataSource(cfg);
 			return true;
