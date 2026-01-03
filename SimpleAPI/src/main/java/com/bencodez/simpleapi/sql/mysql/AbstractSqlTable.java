@@ -51,29 +51,20 @@ public abstract class AbstractSqlTable {
 	public final Set<String> primaryKeys = ConcurrentHashMap.newKeySet();
 
 	/**
-	 * If you want int-vs-string decoding in getExact-like methods, subclasses can
-	 * use this.
+	 * If you want int-vs-string decoding in getExact-like methods, subclasses can use this.
 	 */
 	public final List<String> intColumns = Collections.synchronizedList(new ArrayList<>());
 
 	// ---- Constructors ----
 
 	/**
-	 * Use an already-connected MySQL wrapper (shared pool). (immediate init)
-	 */
-	public AbstractSqlTable(String tableName, MySQL existingMysql, DbType dbType) {
-		this(tableName, existingMysql, dbType, false);
-	}
-
-	/**
 	 * Use an already-connected MySQL wrapper (shared pool).
-	 * 
-	 * @param deferInit if true, does NOT call ensureTable/loadBasicCaches. Subclass
-	 *                  must call {@link #init()} after it finishes setting fields
-	 *                  used by buildCreateTableSql/log hooks.
+	 *
+	 * @param deferInit if true, does NOT call ensureTable/loadBasicCaches. Subclass must call {@link #init()}
+	 *                  after it finishes setting fields used by buildCreateTableSql/log hooks.
 	 */
-	public AbstractSqlTable(String tableName, MySQL existingMysql, DbType dbType, boolean deferInit) {
-		this.dbType = (dbType == null ? DbType.MYSQL : dbType);
+	public AbstractSqlTable(String tableName, MySQL existingMysql, boolean deferInit) {
+		this.dbType = existingMysql.getConnectionManager().getDbType();
 		this.tableName = tableName;
 		this.mysql = existingMysql;
 
@@ -83,8 +74,7 @@ public abstract class AbstractSqlTable {
 	}
 
 	/**
-	 * Create + connect a new pool from config (works on Spigot/Bungee/Velocity).
-	 * (immediate init)
+	 * Create + connect a new pool from config (works on Spigot/Bungee/Velocity). (immediate init)
 	 */
 	public AbstractSqlTable(String baseTableName, MysqlConfig config, boolean debug) {
 		this(baseTableName, config, debug, false);
@@ -93,9 +83,8 @@ public abstract class AbstractSqlTable {
 	/**
 	 * Create + connect a new pool from config (works on Spigot/Bungee/Velocity).
 	 *
-	 * @param deferInit if true, does NOT call ensureTable/loadBasicCaches. Subclass
-	 *                  must call {@link #init()} after it finishes setting fields
-	 *                  used by buildCreateTableSql/log hooks.
+	 * @param deferInit if true, does NOT call ensureTable/loadBasicCaches. Subclass must call {@link #init()}
+	 *                  after it finishes setting fields used by buildCreateTableSql/log hooks.
 	 */
 	public AbstractSqlTable(String baseTableName, MysqlConfig config, boolean debug, boolean deferInit) {
 		if (config == null) {
@@ -162,15 +151,14 @@ public abstract class AbstractSqlTable {
 	}
 
 	/**
-	 * Call this ONLY if you constructed with deferInit=true. Safe to call multiple
-	 * times (idempotent enough for your usage).
+	 * Call this ONLY if you constructed with deferInit=true.
 	 */
 	protected final void init() {
 		ensureTable();
 		loadBasicCaches();
 	}
 
-	// ---- Column copy helper (moved/kept here) ----
+	// ---- Column copy helper ----
 
 	public void copyColumnData(String columnFromName, String columnToName) {
 		copyColumnData(columnFromName, columnToName, DataType.STRING);
@@ -264,15 +252,39 @@ public abstract class AbstractSqlTable {
 		}
 	}
 
+	/**
+	 * FIXED: do not always add TEXT. Use DataType to pick a better initial type,
+	 * so Postgres doesn't end up with vote_time/cached_total as TEXT.
+	 */
 	public void addColumn(String column, DataType dataType) {
 		synchronized (addColumnLock) {
-			String sql = "ALTER TABLE " + qi(tableName) + " ADD COLUMN " + qi(column) + " " + stringTextType() + ";";
+			String type = sqlTypeForAddColumn(dataType);
+			String sql = "ALTER TABLE " + qi(tableName) + " ADD COLUMN " + qi(column) + " " + type + ";";
 			try {
 				new Query(mysql, sql).executeUpdate();
 				columns.add(column);
+
+				if (dataType == DataType.INTEGER && !intColumns.contains(column)) {
+					intColumns.add(column);
+				}
 			} catch (SQLException e) {
 				debug(e);
 			}
+		}
+	}
+
+	private String sqlTypeForAddColumn(DataType dataType) {
+		if (dataType == null) {
+			return stringTextType();
+		}
+
+		switch (dataType) {
+		case INTEGER:
+			// timestamps in millis fit in BIGINT
+			return "BIGINT";
+		case STRING:
+		default:
+			return stringTextType();
 		}
 	}
 
@@ -283,36 +295,214 @@ public abstract class AbstractSqlTable {
 
 		checkColumn(column, DataType.STRING);
 
-		try (Connection conn = mysql.getConnectionManager().getConnection()) {
-			if (!columnNeedsAlter(conn, column, newType)) {
-				debug("Column " + tableName + "." + column + " already matches " + newType + " (skip ALTER)");
-				if (newType.toUpperCase().contains("INT") && !intColumns.contains(column)) {
-					intColumns.add(column);
-				}
-				return;
-			}
-		} catch (SQLException e) {
-			debug("Failed to inspect column " + tableName + "." + column + " - running ALTER anyway");
-			debug(e);
-		}
-
-		String sql;
-		if (dbType == DbType.POSTGRESQL) {
-			sql = "ALTER TABLE " + qi(tableName) + " ALTER COLUMN " + qi(column) + " TYPE "
-					+ normaliseTypeForDb(newType) + ";";
-		} else {
-			sql = "ALTER TABLE " + qi(tableName) + " MODIFY " + qi(column) + " " + normaliseTypeForDb(newType) + ";";
-		}
-
+		boolean needsAlter = true;
 		try {
-			new Query(mysql, sql).executeUpdateAsync();
-		} catch (SQLException e) {
-			debug(e);
+			needsAlter = columnNeedsAlter(column, newType);
+		} catch (Exception e) {
+			debug("Failed to inspect column " + tableName + "." + column + " - running ALTER anyway");
+			debug(e instanceof Throwable ? (Throwable) e : new RuntimeException(String.valueOf(e)));
+			needsAlter = true;
+		}
+
+		if (!needsAlter) {
+			debug("Column " + tableName + "." + column + " already matches " + newType + " (skip ALTER)");
+			if (newType.toUpperCase().contains("INT") && !intColumns.contains(column)) {
+				intColumns.add(column);
+			}
+			return;
+		}
+
+		if (dbType == DbType.POSTGRESQL) {
+			alterColumnTypePostgres(column, newType);
+		} else {
+			String sql = "ALTER TABLE " + qi(tableName) + " MODIFY " + qi(column) + " " + normaliseTypeForDb(newType)
+					+ ";";
+			try {
+				new Query(mysql, sql).executeUpdateAsync();
+			} catch (SQLException e) {
+				debug(e);
+			}
 		}
 
 		if (newType.toUpperCase().contains("INT") && !intColumns.contains(column)) {
 			intColumns.add(column);
 		}
+	}
+
+	/**
+	 * FIXED: no external Connection needed.
+	 */
+	public boolean columnNeedsAlter(String column, String newType) throws SQLException {
+		try (Connection conn = mysql.getConnectionManager().getConnection()) {
+			if (dbType == DbType.POSTGRESQL) {
+				return columnNeedsAlterPostgres(conn, column, newType);
+			}
+			return columnNeedsAlterMySql(conn, column, newType);
+		}
+	}
+
+	// ---- Postgres ALTER helpers ----
+
+	private void alterColumnTypePostgres(String column, String definition) {
+		PostgresColumnDef def = parsePostgresDefinition(definition);
+
+		// Important Postgres rules:
+		// - "NULL" is NOT valid in TYPE clause. We ignore it (NULL is default anyway).
+		// - text -> bigint/int/uuid often needs USING ...::type
+
+		String usingExpr = buildPostgresUsingExpression(column, def.type);
+
+		String typeSql = "ALTER TABLE " + qi(tableName) + " ALTER COLUMN " + qi(column) + " TYPE " + def.type
+				+ (usingExpr != null ? " USING " + usingExpr : "") + ";";
+		try {
+			new Query(mysql, typeSql).executeUpdateAsync();
+		} catch (SQLException e) {
+			debug(e);
+		}
+
+		// NOT NULL: only apply if explicitly requested
+		if (def.notNull) {
+			String nnSql = "ALTER TABLE " + qi(tableName) + " ALTER COLUMN " + qi(column) + " SET NOT NULL;";
+			try {
+				new Query(mysql, nnSql).executeUpdateAsync();
+			} catch (SQLException e) {
+				debug(e);
+			}
+		}
+
+		// DEFAULT: only apply if explicitly provided
+		if (def.defaultExpr != null && !def.defaultExpr.trim().isEmpty()) {
+			String dSql = "ALTER TABLE " + qi(tableName) + " ALTER COLUMN " + qi(column) + " SET DEFAULT "
+					+ def.defaultExpr + ";";
+			try {
+				new Query(mysql, dSql).executeUpdateAsync();
+			} catch (SQLException e) {
+				debug(e);
+			}
+		}
+	}
+
+	/**
+	 * Returns a USING expression for casts that Postgres won't do automatically.
+	 *
+	 * Numeric casts are guarded so junk text doesn't explode the migration.
+	 * Empty-string becomes NULL for uuid/varchar numeric conversions.
+	 */
+	private String buildPostgresUsingExpression(String column, String targetType) {
+		if (targetType == null || targetType.trim().isEmpty()) {
+			return null;
+		}
+
+		String t = targetType.trim();
+		String upper = t.toUpperCase();
+		String col = qi(column);
+
+		// UUID
+		if (upper.equals("UUID")) {
+			return "NULLIF(" + col + ", '')::uuid";
+		}
+
+		// BIGINT
+		if (upper.equals("BIGINT")) {
+			// If it's numeric text -> cast, else 0 (keeps your defaults sane)
+			return "CASE WHEN trim(" + col + ") ~ '^-?\\d+$' THEN trim(" + col + ")::bigint ELSE 0 END";
+		}
+
+		// INT / INTEGER
+		if (upper.equals("INT") || upper.equals("INTEGER")) {
+			return "CASE WHEN trim(" + col + ") ~ '^-?\\d+$' THEN trim(" + col + ")::integer ELSE 0 END";
+		}
+
+		// SMALLINT
+		if (upper.equals("SMALLINT")) {
+			return "CASE WHEN trim(" + col + ") ~ '^-?\\d+$' THEN trim(" + col + ")::smallint ELSE 0 END";
+		}
+
+		// VARCHAR(n) / CHARACTER VARYING(n)
+		if (upper.startsWith("VARCHAR(") || upper.startsWith("CHARACTER VARYING(")) {
+			// cast is always safe
+			return "CAST(" + col + " AS " + t + ")";
+		}
+
+		// TEXT
+		if (upper.equals("TEXT")) {
+			return "CAST(" + col + " AS text)";
+		}
+
+		// Default: attempt a cast (often safe)
+		return "CAST(" + col + " AS " + t + ")";
+	}
+
+	private static final class PostgresColumnDef {
+		final String type; // ex: BIGINT, VARCHAR(64), UUID
+		final boolean notNull; // true if "NOT NULL" present
+		final String defaultExpr; // raw default expression
+
+		private PostgresColumnDef(String type, boolean notNull, String defaultExpr) {
+			this.type = type;
+			this.notNull = notNull;
+			this.defaultExpr = defaultExpr;
+		}
+	}
+
+	private PostgresColumnDef parsePostgresDefinition(String definition) {
+		String raw = normaliseTypeForDb(definition).trim();
+		String upper = raw.toUpperCase();
+
+		boolean notNull = upper.contains(" NOT NULL");
+
+		String defaultExpr = null;
+		int defIdx = indexOfDefaultKeyword(upper);
+		if (defIdx >= 0) {
+			defaultExpr = raw.substring(defIdx + "DEFAULT".length()).trim();
+			if (defaultExpr.startsWith("=")) {
+				defaultExpr = defaultExpr.substring(1).trim();
+			}
+		}
+
+		// TYPE is only up to NOT NULL / DEFAULT. Also explicitly ignore "NULL".
+		int cut = raw.length();
+
+		int nnIdx = upper.indexOf(" NOT NULL");
+		if (nnIdx >= 0) {
+			cut = Math.min(cut, nnIdx);
+		}
+		if (defIdx >= 0) {
+			cut = Math.min(cut, defIdx);
+		}
+
+		// Some callers pass "... NULL" (MySQL-ish). Postgres doesn't want it.
+		int nullIdx = upper.indexOf(" NULL");
+		if (nullIdx >= 0) {
+			cut = Math.min(cut, nullIdx);
+		}
+
+		String type = raw.substring(0, cut).trim();
+		if (type.isEmpty()) {
+			type = "TEXT";
+		}
+
+		return new PostgresColumnDef(type, notNull, defaultExpr);
+	}
+
+	private static int indexOfDefaultKeyword(String upper) {
+		int idx = upper.indexOf(" DEFAULT ");
+		if (idx >= 0) {
+			return idx + 1;
+		}
+		idx = upper.indexOf(" DEFAULT\t");
+		if (idx >= 0) {
+			return idx + 1;
+		}
+		idx = upper.indexOf(" DEFAULT\n");
+		if (idx >= 0) {
+			return idx + 1;
+		}
+		idx = upper.indexOf(" DEFAULT");
+		if (idx >= 0 && idx + " DEFAULT".length() == upper.length()) {
+			return idx + 1;
+		}
+		return -1;
 	}
 
 	// ---- Internals ----
@@ -387,15 +577,6 @@ public abstract class AbstractSqlTable {
 		return out;
 	}
 
-	public boolean columnNeedsAlter(Connection conn, String column, String newType) throws SQLException {
-		if (dbType == DbType.POSTGRESQL) {
-			return columnNeedsAlterPostgres(conn, column, newType);
-		}
-		return columnNeedsAlterMySql(conn, column, newType);
-	}
-
-	// ... keep the rest of your columnNeedsAlter* methods unchanged ...
-
 	// ---- SQL helpers ----
 
 	public final String qi(String identifier) {
@@ -443,9 +624,9 @@ public abstract class AbstractSqlTable {
 	}
 
 	// ---- existing private helpers below (unchanged) ----
+
 	private boolean columnNeedsAlterMySql(Connection conn, String column, String newType) throws SQLException {
-		// (paste your existing body here unchanged)
-		String sql = "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_DEFAULT " + "FROM information_schema.COLUMNS "
+		String sql = "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, COLUMN_DEFAULT FROM information_schema.COLUMNS "
 				+ "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?;";
 
 		try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -509,39 +690,57 @@ public abstract class AbstractSqlTable {
 	}
 
 	private boolean columnNeedsAlterPostgres(Connection conn, String column, String newType) throws SQLException {
-		// (paste your existing body here unchanged)
-		String sql = "SELECT data_type, character_maximum_length " + "FROM information_schema.columns "
+		String sql = "SELECT data_type, character_maximum_length FROM information_schema.columns "
 				+ "WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?;";
+
+		String raw = normaliseTypeForDb(newType).trim();
+		String upper = raw.toUpperCase();
+
+		int cut = raw.length();
+		int nnIdx = upper.indexOf(" NOT NULL");
+		if (nnIdx >= 0) {
+			cut = Math.min(cut, nnIdx);
+		}
+		int defIdx = upper.indexOf(" DEFAULT");
+		if (defIdx >= 0) {
+			cut = Math.min(cut, defIdx);
+		}
+		int nullIdx = upper.indexOf(" NULL");
+		if (nullIdx >= 0) {
+			cut = Math.min(cut, nullIdx);
+		}
+
+		String base = raw.substring(0, cut).trim();
+		String baseUpper = base.toUpperCase();
 
 		try (PreparedStatement ps = conn.prepareStatement(sql)) {
 			ps.setString(1, tableName);
 			ps.setString(2, column);
+
 			try (ResultSet rs = ps.executeQuery()) {
 				if (!rs.next()) {
 					return true;
 				}
 
-				String dataType = rs.getString(1);
+				String dataType = rs.getString(1); // text, bigint, integer, uuid, character varying...
 				Object lenObj = rs.getObject(2);
 				Long length = (lenObj instanceof Number) ? ((Number) lenObj).longValue() : null;
 
-				String typeUpper = newType.toUpperCase().trim();
-
-				if (typeUpper.equals("LONGTEXT") || typeUpper.equals("MEDIUMTEXT") || typeUpper.equals("TEXT")) {
+				if (baseUpper.equals("LONGTEXT") || baseUpper.equals("MEDIUMTEXT") || baseUpper.equals("TEXT")) {
 					return !dataType.equalsIgnoreCase("text");
 				}
 
-				if (typeUpper.equals("UUID")) {
+				if (baseUpper.equals("UUID")) {
 					return !dataType.equalsIgnoreCase("uuid");
 				}
 
-				if (typeUpper.startsWith("VARCHAR(")) {
-					int open = typeUpper.indexOf('(');
-					int close = typeUpper.indexOf(')', open + 1);
+				if (baseUpper.startsWith("VARCHAR(")) {
+					int open = baseUpper.indexOf('(');
+					int close = baseUpper.indexOf(')', open + 1);
 					if (open != -1 && close != -1) {
 						int expectedLen;
 						try {
-							expectedLen = Integer.parseInt(typeUpper.substring(open + 1, close));
+							expectedLen = Integer.parseInt(baseUpper.substring(open + 1, close));
 						} catch (NumberFormatException ex) {
 							return true;
 						}
@@ -552,10 +751,16 @@ public abstract class AbstractSqlTable {
 					return true;
 				}
 
-				if (typeUpper.startsWith("INT")) {
-					boolean isIntFamily = dataType.equalsIgnoreCase("integer") || dataType.equalsIgnoreCase("bigint")
-							|| dataType.equalsIgnoreCase("smallint");
-					return !isIntFamily;
+				if (baseUpper.equals("BIGINT")) {
+					return !dataType.equalsIgnoreCase("bigint");
+				}
+
+				if (baseUpper.equals("INT") || baseUpper.equals("INTEGER")) {
+					return !dataType.equalsIgnoreCase("integer");
+				}
+
+				if (baseUpper.equals("SMALLINT")) {
+					return !dataType.equalsIgnoreCase("smallint");
 				}
 
 				return true;
