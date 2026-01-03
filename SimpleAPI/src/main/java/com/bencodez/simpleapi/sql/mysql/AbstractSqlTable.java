@@ -34,10 +34,7 @@ public abstract class AbstractSqlTable {
 
 	public abstract void debug(Throwable t);
 
-	/** Optional debug text. Defaults to logInfo. */
-	public void debug(String msg) {
-		logInfo(msg);
-	}
+	public abstract void debug(String messasge);
 
 	// ---- Core state ----
 
@@ -54,8 +51,8 @@ public abstract class AbstractSqlTable {
 	public final Set<String> primaryKeys = ConcurrentHashMap.newKeySet();
 
 	/**
-	 * If you want int-vs-string decoding in getExact-like methods, subclasses can use
-	 * this.
+	 * If you want int-vs-string decoding in getExact-like methods, subclasses can
+	 * use this.
 	 */
 	public final List<String> intColumns = Collections.synchronizedList(new ArrayList<>());
 
@@ -165,8 +162,8 @@ public abstract class AbstractSqlTable {
 	}
 
 	/**
-	 * Call this ONLY if you constructed with deferInit=true.
-	 * Safe to call multiple times (idempotent enough for your usage).
+	 * Call this ONLY if you constructed with deferInit=true. Safe to call multiple
+	 * times (idempotent enough for your usage).
 	 */
 	protected final void init() {
 		ensureTable();
