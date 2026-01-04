@@ -82,6 +82,9 @@ public abstract class YMLFile {
      * in-place.
      */
     public void setIgnoreCase(boolean ignoreCase) {
+    	if (this.ignoreCase == ignoreCase) {
+    		return;
+    	}
         this.ignoreCase = ignoreCase;
         if (data != null) {
             if (ignoreCase && !(data instanceof CaseInsensitiveFileConfiguration)) {
