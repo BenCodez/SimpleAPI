@@ -129,7 +129,7 @@ public abstract class SkullCacheHandler {
 					}
 				}
 			}
-		}, 20000, skullDelayTime, TimeUnit.MILLISECONDS);
+		}, 1000 * 60, skullDelayTime, TimeUnit.MILLISECONDS);
 	}
 
 	private void unPuase() {
