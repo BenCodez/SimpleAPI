@@ -40,6 +40,20 @@ public class ArrayUtils {
 		}
 		return list;
 	}
+	
+	public static boolean containsIgnoreCase(String[] array, String value) {
+		if (array == null || value == null) {
+			return false;
+		}
+
+		for (String s : array) {
+			if (s != null && s.equalsIgnoreCase(value)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 
 	/**
 	 * Colorize.
