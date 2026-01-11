@@ -25,23 +25,6 @@ public class ParsedDurationTest {
 	public void testPlainNumberDefaultMinutes() {
 		ParsedDuration d = ParsedDuration.parse("30");
 		assertEquals(30 * 60_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
-	}
-
-	@Test
-	@DisplayName("Plain number respects custom default unit")
-	public void testPlainNumberCustomUnit() {
-		ParsedDuration seconds = ParsedDuration.withDefaultUnit("15", Unit.SECONDS);
-		assertEquals(15_000L, seconds.getMillis());
-		assertEquals(0, seconds.getMonths());
-
-		ParsedDuration hours = ParsedDuration.withDefaultUnit("2", Unit.HOURS);
-		assertEquals(2 * 3_600_000L, hours.getMillis());
-		assertEquals(0, hours.getMonths());
-
-		ParsedDuration months = ParsedDuration.withDefaultUnit("3", Unit.MONTHS);
-		assertEquals(0L, months.getMillis());
-		assertEquals(3, months.getMonths());
 	}
 
 	@Test
@@ -49,7 +32,6 @@ public class ParsedDurationTest {
 	public void testMilliseconds() {
 		ParsedDuration d = ParsedDuration.parse("5000ms");
 		assertEquals(5000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
@@ -57,7 +39,6 @@ public class ParsedDurationTest {
 	public void testSeconds() {
 		ParsedDuration d = ParsedDuration.parse("60s");
 		assertEquals(60_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
@@ -65,7 +46,6 @@ public class ParsedDurationTest {
 	public void testMinutes() {
 		ParsedDuration d = ParsedDuration.parse("30m");
 		assertEquals(30 * 60_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
@@ -73,7 +53,6 @@ public class ParsedDurationTest {
 	public void testHours() {
 		ParsedDuration d = ParsedDuration.parse("12h");
 		assertEquals(12 * 3_600_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
@@ -81,7 +60,6 @@ public class ParsedDurationTest {
 	public void testDays() {
 		ParsedDuration d = ParsedDuration.parse("1d");
 		assertEquals(86_400_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
@@ -89,23 +67,20 @@ public class ParsedDurationTest {
 	public void testWeeks() {
 		ParsedDuration d = ParsedDuration.parse("2w");
 		assertEquals(2 * 604_800_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
-	@DisplayName("Months parsing uses calendar months (not millis)")
-	public void testMonths() {
+	@DisplayName("Months parsing is fixed 30-day millis (3mo)")
+	public void testMonthsFixedMillis() {
 		ParsedDuration d = ParsedDuration.parse("3mo");
-		assertEquals(0L, d.getMillis());
-		assertEquals(3, d.getMonths());
+		assertEquals(3L * 30L * 86_400_000L, d.getMillis());
 	}
 
 	@Test
-	@DisplayName("Combined tokens: 1h30m")
-	public void testCombinedHoursMinutes() {
-		ParsedDuration d = ParsedDuration.parse("1h30m");
-		assertEquals(1 * 3_600_000L + 30 * 60_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
+	@DisplayName("Combined tokens can include months as fixed millis: 1mo2d")
+	public void testCombinedMonthsPlusDaysFixed() {
+		ParsedDuration d = ParsedDuration.parse("1mo2d");
+		assertEquals(1L * 30L * 86_400_000L + 2L * 86_400_000L, d.getMillis());
 	}
 
 	@Test
@@ -113,30 +88,24 @@ public class ParsedDurationTest {
 	public void testCombinedWithSpaces() {
 		ParsedDuration d = ParsedDuration.parse("2d 12h");
 		assertEquals(2 * 86_400_000L + 12 * 3_600_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
 	@DisplayName("Combined tokens: 1w2d3h4m5s6ms")
 	public void testCombinedManySegments() {
 		ParsedDuration d = ParsedDuration.parse("1w2d3h4m5s6ms");
-		long expected =
-				1 * 604_800_000L +
-				2 * 86_400_000L +
-				3 * 3_600_000L +
-				4 * 60_000L +
-				5 * 1000L +
-				6;
+		long expected = 1 * 604_800_000L + 2 * 86_400_000L + 3 * 3_600_000L + 4 * 60_000L + 5 * 1000L + 6;
 		assertEquals(expected, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
-	@DisplayName("Combined tokens can mix months + fixed units: 1mo2d")
-	public void testCombinedMonthsPlusDays() {
-		ParsedDuration d = ParsedDuration.parse("1mo2d");
-		assertEquals(1, d.getMonths());
-		assertEquals(2 * 86_400_000L, d.getMillis());
+	@DisplayName("Plain number respects custom default unit")
+	public void testPlainNumberCustomUnit() {
+		ParsedDuration seconds = ParsedDuration.withDefaultUnit("15", Unit.SECONDS);
+		assertEquals(15_000L, seconds.getMillis());
+
+		ParsedDuration hours = ParsedDuration.withDefaultUnit("2", Unit.HOURS);
+		assertEquals(2 * 3_600_000L, hours.getMillis());
 	}
 
 	@Test
@@ -164,7 +133,6 @@ public class ParsedDurationTest {
 	public void testUnknownSuffixFallback() {
 		ParsedDuration d = ParsedDuration.parse("10x");
 		assertEquals(10 * 60_000L, d.getMillis()); // default = minutes
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
@@ -172,7 +140,6 @@ public class ParsedDurationTest {
 	public void testUnknownSuffixFallbackCombined() {
 		ParsedDuration d = ParsedDuration.parse("1h30x"); // 30x => 30 minutes by default
 		assertEquals(1 * 3_600_000L + 30 * 60_000L, d.getMillis());
-		assertEquals(0, d.getMonths());
 	}
 
 	@Test
@@ -188,13 +155,6 @@ public class ParsedDurationTest {
 		assertTrue(ParsedDuration.parse("0m").isEmpty());
 		assertTrue(ParsedDuration.parse("-5m").isEmpty());
 		assertTrue(ParsedDuration.withDefaultUnit("0", Unit.SECONDS).isEmpty());
-	}
-
-	@Test
-	@DisplayName("Large values do not overflow months")
-	public void testLargeMonthValues() {
-		ParsedDuration d = ParsedDuration.parse("9999999999mo");
-		assertEquals(Integer.MAX_VALUE, d.getMonths());
 	}
 
 	@Test

@@ -7,40 +7,29 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Parsed duration that preserves calendar-month units separately from fixed millis.
+ * Parsed duration stored as fixed milliseconds.
  *
  * <p>
  * Supported formats (case-insensitive):
  * <ul>
- *   <li>5000ms</li>
- *   <li>60s</li>
- *   <li>30m</li>
- *   <li>12h</li>
- *   <li>1d</li>
- *   <li>2w</li>
- *   <li>1mo (calendar months)</li>
- *   <li>Combined tokens: 1h30m, 2d12h, 1w2d3h4m5s6ms, 1mo2d (spaces allowed between segments)</li>
- *   <li>ISO-8601 (Duration.parse): PT30M, PT12H, P1D, etc (months/years not supported)</li>
- *   <li>Plain number: "30" -> uses a configurable default unit</li>
- * </ul>
- *
- * <p>
- * Notes:
- * <ul>
- *   <li>Calendar months are stored in {@link #months} and are NOT converted to millis.</li>
- *   <li>For ISO strings, {@code P1M} is NOT accepted (ambiguous vs minutes).</li>
+ * <li>5000ms</li>
+ * <li>60s</li>
+ * <li>30m</li>
+ * <li>12h</li>
+ * <li>1d</li>
+ * <li>2w</li>
+ * <li>1mo (treated as a fixed 30 days)</li>
+ * <li>Combined tokens: 1h30m, 2d12h, 1w2d3h4m5s6ms (spaces allowed between
+ * segments)</li>
+ * <li>ISO-8601 (Duration.parse): PT30M, PT12H, P1D, etc (months/years not
+ * supported by Duration)</li>
+ * <li>Plain number: "30" -> uses a configurable default unit</li>
  * </ul>
  */
 public final class ParsedDuration {
 
 	public enum Unit {
-		MS("ms"),
-		SECONDS("s"),
-		MINUTES("m"),
-		HOURS("h"),
-		DAYS("d"),
-		WEEKS("w"),
-		MONTHS("mo");
+		MS("ms"), SECONDS("s"), MINUTES("m"), HOURS("h"), DAYS("d"), WEEKS("w");
 
 		private final String suffix;
 
@@ -58,45 +47,33 @@ public final class ParsedDuration {
 	private static final Pattern SEGMENT = Pattern.compile("([0-9]+)\\s*([a-zA-Z]+)");
 
 	private final long millis;
-	private final int months;
 
-	private ParsedDuration(long millis, int months) {
+	private ParsedDuration(long millis) {
 		this.millis = Math.max(0L, millis);
-		this.months = Math.max(0, months);
 	}
 
 	public static ParsedDuration empty() {
-		return new ParsedDuration(0L, 0);
+		return new ParsedDuration(0L);
 	}
 
 	public static ParsedDuration ofMillis(long millis) {
-		return new ParsedDuration(millis, 0);
-	}
-
-	public static ParsedDuration ofMonths(int months) {
-		return new ParsedDuration(0L, months);
-	}
-
-	public static ParsedDuration of(long millis, int months) {
-		return new ParsedDuration(millis, months);
+		return new ParsedDuration(millis);
 	}
 
 	public long getMillis() {
 		return millis;
 	}
 
-	public int getMonths() {
-		return months;
-	}
-
 	public boolean isEmpty() {
-		return millis <= 0L && months <= 0;
+		return millis <= 0L;
 	}
 
 	/**
 	 * Parses the input using {@code defaultUnit} if the string is just a number.
 	 *
-	 * <p>Example: {@code parse("30", Unit.MINUTES)} => 30 minutes</p>
+	 * <p>
+	 * Example: {@code parse("30", Unit.MINUTES)} => 30 minutes
+	 * </p>
 	 */
 	public static ParsedDuration parse(String raw, Unit defaultUnit) {
 		if (raw == null) {
@@ -115,19 +92,14 @@ public final class ParsedDuration {
 		String lower = s.toLowerCase(Locale.ROOT);
 
 		// ISO-8601 Duration support (PT30M, PT12H, P1D, etc)
-		// We explicitly reject strings that look like "P...M" without "T" (month ambiguous)
+		// Duration.parse does NOT support months/years anyway; it will throw for
+		// P1M/P1Y.
 		if (lower.startsWith("p")) {
-			// reject potential month/year ISO (P1M, P2Y, etc)
-			// allow PnD / PTnH / PTnM / PTnS etc, but not months/years.
-			if (looksLikeIsoWithMonthsOrYears(lower)) {
-				// Let it fall through to suffix parsing if it's like "1mo" (not ISO), otherwise empty.
-			} else {
-				try {
-					Duration d = Duration.parse(s.toUpperCase(Locale.ROOT));
-					return ofMillis(d.toMillis());
-				} catch (Exception ignored) {
-					// fall through
-				}
+			try {
+				Duration d = Duration.parse(s.toUpperCase(Locale.ROOT));
+				return ofMillis(d.toMillis());
+			} catch (Exception ignored) {
+				// fall through
 			}
 		}
 
@@ -166,12 +138,9 @@ public final class ParsedDuration {
 	}
 
 	/**
-	 * If {@code raw} is just a number, returns the same value with {@code defaultUnit} applied,
-	 * otherwise returns {@link #parse(String, Unit)} result.
-	 *
-	 * <p>This is the "set default unit value if it's just a number" helper.</p>
-	 *
-	 * <p>Example: {@code ParsedDuration.withDefaultUnit("30", Unit.SECONDS)} => 30s</p>
+	 * If {@code raw} is just a number, returns the same value with
+	 * {@code defaultUnit} applied, otherwise returns {@link #parse(String, Unit)}
+	 * result.
 	 */
 	public static ParsedDuration withDefaultUnit(String raw, Unit defaultUnit) {
 		return parse(raw, defaultUnit);
@@ -188,34 +157,33 @@ public final class ParsedDuration {
 		case MS:
 			return ofMillis(value);
 		case SECONDS:
-			return ofMillis(value * 1000L);
+			return ofMillis(safeMul(value, 1000L));
 		case MINUTES:
-			return ofMillis(value * 60_000L);
+			return ofMillis(safeMul(value, 60_000L));
 		case HOURS:
-			return ofMillis(value * 3_600_000L);
+			return ofMillis(safeMul(value, 3_600_000L));
 		case DAYS:
-			return ofMillis(value * 86_400_000L);
+			return ofMillis(safeMul(value, 86_400_000L));
 		case WEEKS:
-			return ofMillis(value * 604_800_000L);
-		case MONTHS:
-			return ofMonths((int) Math.min(Integer.MAX_VALUE, value));
+			return ofMillis(safeMul(value, 604_800_000L));
 		default:
 			return empty();
 		}
 	}
 
 	/**
-	 * Parses strings with multiple "value+suffix" segments like "1h30m" or "2d 12h".
+	 * Parses strings with multiple "value+suffix" segments like "1h30m" or "2d
+	 * 12h".
 	 *
-	 * <p>Returns null if the input does not look like a valid combined-token duration.</p>
+	 * <p>
+	 * Returns null if the input does not look like a valid combined-token duration.
+	 * </p>
 	 */
 	private static ParsedDuration parseCombinedTokens(String lower, Unit defaultUnit) {
-		// Combined tokens must have at least two segments.
 		Matcher seg = SEGMENT.matcher(lower);
 		int count = 0;
 		int pos = 0;
 		long totalMillis = 0L;
-		int totalMonths = 0;
 
 		while (seg.find()) {
 			// Ensure we only skip whitespace between segments.
@@ -237,7 +205,6 @@ public final class ParsedDuration {
 			}
 
 			totalMillis = safeAddMillis(totalMillis, piece.millis);
-			totalMonths = safeAddMonths(totalMonths, piece.months);
 		}
 
 		// trailing non-whitespace means it's not a valid combined token string
@@ -250,7 +217,7 @@ public final class ParsedDuration {
 			return null;
 		}
 
-		ParsedDuration out = of(totalMillis, totalMonths);
+		ParsedDuration out = ofMillis(totalMillis);
 		return out.isEmpty() ? empty() : out;
 	}
 
@@ -271,14 +238,6 @@ public final class ParsedDuration {
 		return r;
 	}
 
-	private static int safeAddMonths(int a, int b) {
-		long r = (long) a + (long) b;
-		if (r > Integer.MAX_VALUE) {
-			return Integer.MAX_VALUE;
-		}
-		return (int) r;
-	}
-
 	private static ParsedDuration applySuffix(long value, String suffixRaw, Unit defaultUnit) {
 		String suffix = suffixRaw.toLowerCase(Locale.ROOT);
 
@@ -289,40 +248,49 @@ public final class ParsedDuration {
 		case "millisecond":
 		case "milliseconds":
 			return ofMillis(value);
+
 		case "s":
 		case "sec":
 		case "secs":
 		case "second":
 		case "seconds":
 			return ofMillis(safeMul(value, 1000L));
+
 		case "m":
 		case "min":
 		case "mins":
 		case "minute":
 		case "minutes":
 			return ofMillis(safeMul(value, 60_000L));
+
 		case "h":
 		case "hr":
 		case "hrs":
 		case "hour":
 		case "hours":
 			return ofMillis(safeMul(value, 3_600_000L));
+
 		case "d":
 		case "day":
 		case "days":
 			return ofMillis(safeMul(value, 86_400_000L));
+
 		case "w":
 		case "wk":
 		case "wks":
 		case "week":
 		case "weeks":
 			return ofMillis(safeMul(value, 604_800_000L));
+
+		// "mo" is no longer calendar-based; it becomes a fixed millis approximation.
 		case "mo":
 		case "mon":
 		case "mons":
 		case "month":
 		case "months":
-			return ofMonths((int) Math.min(Integer.MAX_VALUE, value));
+			// Fixed 30-day month (no calendar semantics)
+			return ofMillis(safeMul(value, 30L * 86_400_000L));
+
 		default:
 			// unknown suffix -> fallback to default unit
 			return applyDefaultUnit(Long.toString(value), defaultUnit);
@@ -337,17 +305,6 @@ public final class ParsedDuration {
 			return Long.MAX_VALUE;
 		}
 		return a * b;
-	}
-
-	private static boolean looksLikeIsoWithMonthsOrYears(String lower) {
-		if (!lower.startsWith("p")) {
-			return false;
-		}
-		boolean hasT = lower.indexOf('t') >= 0;
-		if (hasT) {
-			return false;
-		}
-		return lower.indexOf('m') >= 0 || lower.indexOf('y') >= 0;
 	}
 
 	private static String extractLeadingDigits(String s) {
@@ -371,6 +328,6 @@ public final class ParsedDuration {
 		if (isEmpty()) {
 			return "ParsedDuration{empty}";
 		}
-		return "ParsedDuration{millis=" + millis + ", months=" + months + "}";
+		return "ParsedDuration{millis=" + millis + "}";
 	}
 }
