@@ -1,6 +1,7 @@
 package com.bencodez.simpleapi.time;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.regex.Matcher;
@@ -295,6 +296,28 @@ public final class ParsedDuration {
 			// unknown suffix -> fallback to default unit
 			return applyDefaultUnit(Long.toString(value), defaultUnit);
 		}
+	}
+	
+	/**
+	 * Adds this duration to the provided instant using fixed millis.
+	 */
+	public Instant addTo(Instant base) {
+		if (base == null || isEmpty()) {
+			return base;
+		}
+		return base.plusMillis(millis);
+	}
+
+	/**
+	 * Delay in milliseconds from now until now + this duration.
+	 *
+	 * Guaranteed to return at least 1ms when not empty.
+	 */
+	public long delayMillisFromNow() {
+		if (isEmpty()) {
+			return 1L;
+		}
+		return millis <= 0L ? 1L : millis;
 	}
 
 	private static long safeMul(long a, long b) {
