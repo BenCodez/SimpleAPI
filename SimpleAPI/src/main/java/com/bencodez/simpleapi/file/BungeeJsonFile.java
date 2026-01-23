@@ -29,46 +29,46 @@ public class BungeeJsonFile {
 	private Gson gson;
 
 	public BungeeJsonFile(File file) {
-	    this.file = file;
-	    this.gson = new GsonBuilder().setPrettyPrinting().create();
+		this.file = file;
+		this.gson = new GsonBuilder().setPrettyPrinting().create();
 
-	    if (!file.exists()) {
-	        try {
-	            File parentDir = file.getParentFile();
-	            if (parentDir != null && !parentDir.exists()) {
-	                parentDir.mkdirs();
-	            }
-	            file.createNewFile();
-	            conf = new JsonObject();
-	            save(); // Save file with empty JsonObject upon creation
-	        } catch (IOException e) {
-	            e.printStackTrace();
-	        }
-	    } else {
-	        try (FileReader reader = new FileReader(file)) {
-	            conf = JsonParser.parseReader(reader).getAsJsonObject();
-	        } catch (com.google.gson.JsonSyntaxException e) {
-	            System.err.println("Error parsing JSON file: " + e.getMessage());
-	            conf = attemptPartialRecovery(file); // Attempt to recover as much as possible
-	        } catch (IOException e) {
-	            e.printStackTrace();
-	            conf = new JsonObject(); // Fallback to an empty JsonObject
-	        }
-	    }
+		if (!file.exists()) {
+			try {
+				File parentDir = file.getParentFile();
+				if (parentDir != null && !parentDir.exists()) {
+					parentDir.mkdirs();
+				}
+				file.createNewFile();
+				conf = new JsonObject();
+				save(); // Save file with empty JsonObject upon creation
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		} else {
+			try (FileReader reader = new FileReader(file)) {
+				conf = JsonParser.parseReader(reader).getAsJsonObject();
+			} catch (com.google.gson.JsonSyntaxException e) {
+				System.err.println("Error parsing JSON file: " + e.getMessage());
+				conf = attemptPartialRecovery(file); // Attempt to recover as much as possible
+			} catch (IOException e) {
+				e.printStackTrace();
+				conf = new JsonObject(); // Fallback to an empty JsonObject
+			}
+		}
 	}
 
 	@SuppressWarnings("deprecation")
 	private JsonObject attemptPartialRecovery(File file) {
-	    JsonObject recoveredData = new JsonObject();
-	    try (FileReader fileReader = new FileReader(file);
-	         com.google.gson.stream.JsonReader jsonReader = new com.google.gson.stream.JsonReader(fileReader)) {
-	        jsonReader.setLenient(true); // Allow lenient parsing
-	        recoveredData = JsonParser.parseReader(jsonReader).getAsJsonObject();
-	        System.err.println("Partial recovery of JSON data succeeded.");
-	    } catch (Exception ex) {
-	        System.err.println("Failed to recover JSON data: " + ex.getMessage());
-	    }
-	    return recoveredData;
+		JsonObject recoveredData = new JsonObject();
+		try (FileReader fileReader = new FileReader(file);
+				com.google.gson.stream.JsonReader jsonReader = new com.google.gson.stream.JsonReader(fileReader)) {
+			jsonReader.setLenient(true); // Allow lenient parsing
+			recoveredData = JsonParser.parseReader(jsonReader).getAsJsonObject();
+			System.err.println("Partial recovery of JSON data succeeded.");
+		} catch (Exception ex) {
+			System.err.println("Failed to recover JSON data: " + ex.getMessage());
+		}
+		return recoveredData;
 	}
 
 	private JsonObject navigateToNode(String path) {
@@ -160,23 +160,36 @@ public class BungeeJsonFile {
 	}
 
 	public List<String> getKeys(String path) {
-		JsonObject parentNode = navigateToNode(path);
-		String lastPart = getLastPathPart(path);
-		JsonObject node = null;
-		if (path.split("\\.").length == 1) {
-			node = parentNode;
-		} else if (parentNode != null) {
-			node = parentNode.getAsJsonObject(lastPart);
+		if (path == null || path.isEmpty()) {
+			return new ArrayList<>();
 		}
 
-		if (node != null) {
-			List<String> keys = new ArrayList<>();
-			for (Map.Entry<String, JsonElement> entry : node.entrySet()) {
-				keys.add(entry.getKey());
+		String[] parts = path.split("\\.");
+		String lastPart = parts[parts.length - 1];
+
+		// Single-part path: look directly under root
+		if (parts.length == 1) {
+			JsonElement el = conf.get(lastPart);
+
+			if (el == null || el.isJsonNull() || !el.isJsonObject()) {
+				return new ArrayList<>();
 			}
-			return keys;
+
+			return new ArrayList<>(el.getAsJsonObject().keySet());
 		}
-		return new ArrayList<>();
+
+		// Multi-part path: navigate to parent then resolve last part safely
+		JsonObject parentNode = navigateToNode(path);
+		if (parentNode == null) {
+			return new ArrayList<>();
+		}
+
+		JsonElement el = parentNode.get(lastPart);
+		if (el == null || el.isJsonNull() || !el.isJsonObject()) {
+			return new ArrayList<>();
+		}
+
+		return new ArrayList<>(el.getAsJsonObject().keySet());
 	}
 
 	public JsonElement getNode(String path) {
@@ -235,16 +248,16 @@ public class BungeeJsonFile {
 	}
 
 	public synchronized void remove(String path) {
-	    if (!path.contains(".")) {
-	        conf.remove(path);
-	        return;
-	    }
-	    
-	    JsonObject node = navigateToNode(path);
-	    if (node != null) {
-	        String lastPart = getLastPathPart(path);
-	        node.remove(lastPart);
-	    }
+		if (!path.contains(".")) {
+			conf.remove(path);
+			return;
+		}
+
+		JsonObject node = navigateToNode(path);
+		if (node != null) {
+			String lastPart = getLastPathPart(path);
+			node.remove(lastPart);
+		}
 	}
 
 	public void reload() {
