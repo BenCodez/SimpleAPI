@@ -1,25 +1,22 @@
 package com.bencodez.simpleapi.servercomm.pluginmessage;
 
-import java.util.ArrayList;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 
 public abstract class PluginMessageHandler {
 
-	private String subChannel;
+	private final String subChannel;
 
 	public PluginMessageHandler(String subChannel) {
 		this.subChannel = subChannel;
 	}
-	
+
 	public PluginMessageHandler() {
+		this.subChannel = null;
 	}
 
-	/**
-	 * @return the subChannel
-	 */
 	public String getSubChannel() {
 		return subChannel;
 	}
 
-	public abstract void onRecieve(String subChannel, ArrayList<String> messageData);
-
+	public abstract void onReceive(JsonEnvelope envelope);
 }

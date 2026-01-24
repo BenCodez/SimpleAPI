@@ -2,6 +2,10 @@ package com.bencodez.simpleapi.servercomm.redis;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
+
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
@@ -13,61 +17,33 @@ public abstract class RedisHandler {
 
 	private final Map<RedisListener, Thread> listenerThreads = new ConcurrentHashMap<>();
 
-	/**
-	 * Old constructor — defaults DB index to 0
-	 */
-	public RedisHandler(String host, int port, String username, String password) {
-		this(host, port, username, password, 0);
-	}
-
-	/**
-	 * New constructor with DB index
-	 */
 	public RedisHandler(String host, int port, String username, String password, int dbIndex) {
 		int timeout = 2000;
-
 		JedisPoolConfig config = new JedisPoolConfig();
 
-		if (username.isEmpty() && password.isEmpty()) {
-			// No auth
+		boolean userBlank = username == null || username.isEmpty();
+		boolean passBlank = password == null || password.isEmpty();
+
+		if (userBlank && passBlank) {
 			publishPool = new JedisPool(config, host, port, timeout, null, dbIndex);
 			subscribePool = new JedisPool(config, host, port, timeout, null, dbIndex);
-		} else if (username.isEmpty()) {
-			// Legacy auth (password only)
+		} else if (userBlank) {
 			publishPool = new JedisPool(config, host, port, timeout, password, dbIndex);
 			subscribePool = new JedisPool(config, host, port, timeout, password, dbIndex);
 		} else {
-			// Username + password
 			publishPool = new JedisPool(config, host, port, timeout, username, password, dbIndex);
 			subscribePool = new JedisPool(config, host, port, timeout, username, password, dbIndex);
 		}
 	}
 
 	public void close() {
-		debug("Shutting down RedisHandler");
-
 		for (Map.Entry<RedisListener, Thread> entry : listenerThreads.entrySet()) {
-			RedisListener listener = entry.getKey();
-			Thread thread = entry.getValue();
-
 			try {
-				debug("Unsubscribing Redis listener on channel: " + listener.getChannel());
-				listener.unsubscribe();
-			} catch (Exception e) {
-				debug("Failed to unsubscribe listener: " + e.getMessage());
-			}
-
-			try {
-				if (thread != null && thread.isAlive()) {
-					thread.join(2000);
-				}
-			} catch (InterruptedException e) {
-				debug("Interrupted while waiting for Redis listener thread to finish: " + e.getMessage());
+				entry.getKey().unsubscribe();
+			} catch (Exception ignored) {
 			}
 		}
-
 		listenerThreads.clear();
-
 		publishPool.close();
 		subscribePool.close();
 	}
@@ -87,15 +63,25 @@ public abstract class RedisHandler {
 		thread.start();
 	}
 
-	public abstract void debug(String message);
-
-	protected abstract void onMessage(String channel, String[] message);
-
-	public void sendMessage(String channel, String... message) {
-		String str = String.join(":", message);
+	/** Publish an envelope as a single JSON string. */
+	public void publishEnvelope(String channel, JsonEnvelope envelope) {
+		String payload = JsonEnvelopeCodec.encode(envelope);
 		try (Jedis jedis = publishPool.getResource()) {
-			debug("Redis Send: " + channel + ", " + str);
-			jedis.publish(channel, str);
+			debug("Redis Send: " + channel + ", " + payload);
+			jedis.publish(channel, payload);
 		}
 	}
+
+	/** Subscribe and decode envelopes, forwarding to your callback (external wiring). */
+	public RedisListener createEnvelopeListener(String channel, BiConsumer<String, JsonEnvelope> onEnvelope) {
+		return new RedisListener(this, channel, (ch, payload) -> {
+			try {
+				onEnvelope.accept(ch, JsonEnvelopeCodec.decode(payload));
+			} catch (Exception e) {
+				debug("Redis decode failed: " + e.getMessage());
+			}
+		});
+	}
+
+	public abstract void debug(String message);
 }

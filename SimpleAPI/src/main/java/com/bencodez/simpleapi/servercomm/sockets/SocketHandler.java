@@ -6,6 +6,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import com.bencodez.simpleapi.encryption.EncryptionHandler;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 
 import lombok.Getter;
 
@@ -30,8 +31,10 @@ public abstract class SocketHandler {
 	}
 
 	public void closeConnection() {
-		server.close();
-		server = null;
+		if (server != null) {
+			server.close();
+			server = null;
+		}
 		if (timer != null) {
 			timer.shutdownNow();
 			timer = null;
@@ -51,30 +54,17 @@ public abstract class SocketHandler {
 			}
 
 			@Override
-			public void onReceive(String[] data) {
-				if (data.length > 0) {
+			public void onReceive(JsonEnvelope envelope) {
+				if (envelope != null) {
 					for (SocketReceiver r : receiving) {
 						if (r.getSocketDelay() > 0) {
-							timer.schedule(new Runnable() {
-
-								@Override
-								public void run() {
-									r.onReceive(data[0], data);
-								}
-							}, r.getSocketDelay(), TimeUnit.MILLISECONDS);
+							timer.schedule(() -> r.onReceive(envelope), r.getSocketDelay(), TimeUnit.MILLISECONDS);
 						} else {
-							timer.submit(new Runnable() {
-
-								@Override
-								public void run() {
-									r.onReceive(data[0], data);
-								}
-							});
+							timer.submit(() -> r.onReceive(envelope));
 						}
-
 					}
 				} else {
-					log("Socket data invalid");
+					log("Socket envelope invalid");
 				}
 			}
 		};

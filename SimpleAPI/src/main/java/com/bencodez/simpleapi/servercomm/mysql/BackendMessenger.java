@@ -11,6 +11,9 @@ import java.util.function.Consumer;
 
 import javax.sql.DataSource;
 
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
+
 public class BackendMessenger {
 	private final String myServerId;
 	private final String CHANNEL;
@@ -22,11 +25,10 @@ public class BackendMessenger {
 	private long lastSeenId = 0;
 
 	private final Consumer<BackendMessage> onMessage;
+	private final String tableName;
 
-	private String tableName;
-
-	public BackendMessenger(String tableName, DataSource dataSource, String serverId,
-			Consumer<BackendMessage> onMessage) throws SQLException {
+	public BackendMessenger(String tableName, DataSource dataSource, String serverId, Consumer<BackendMessage> onMessage)
+			throws SQLException {
 		this.ds = dataSource;
 		this.myServerId = serverId;
 		this.CHANNEL = "backend-channel-" + serverId;
@@ -94,9 +96,11 @@ public class BackendMessenger {
 					long id = rs.getLong("id");
 					String from = rs.getString("source");
 					String payload = rs.getString("payload");
-					results.add(new BackendMessage(id, from, payload));
+
+					JsonEnvelope env = JsonEnvelopeCodec.decode(payload);
+					results.add(new BackendMessage(id, from, env));
+
 					lastSeenId = id;
-					// Delete the message after processing
 					deleteMessageById(id);
 				}
 			}
@@ -104,7 +108,9 @@ public class BackendMessenger {
 		return results;
 	}
 
-	public synchronized void sendToProxy(String payload) throws SQLException {
+	public synchronized void sendToProxy(JsonEnvelope envelope) throws SQLException {
+		String payload = JsonEnvelopeCodec.encode(envelope);
+
 		String insertSql = "INSERT INTO " + tableName
 				+ "_message_queue (source, destination, payload) VALUES (?, 'proxy', ?)";
 		try (PreparedStatement ins = pubConn.prepareStatement(insertSql)) {
@@ -112,6 +118,7 @@ public class BackendMessenger {
 			ins.setString(2, payload);
 			ins.executeUpdate();
 		}
+
 		try (PreparedStatement rel = pubConn.prepareStatement("SELECT RELEASE_LOCK(?)")) {
 			rel.setString(1, "proxy-channel");
 			rel.executeQuery();
@@ -130,12 +137,9 @@ public class BackendMessenger {
 
 	private void reconnectOnError() {
 		try {
-			if (lockConn != null)
-				lockConn.close();
-			if (workConn != null)
-				workConn.close();
-			if (pubConn != null)
-				pubConn.close();
+			closeQuiet(lockConn);
+			closeQuiet(workConn);
+			closeQuiet(pubConn);
 			initConnections();
 		} catch (SQLException e) {
 			e.printStackTrace();
@@ -160,12 +164,12 @@ public class BackendMessenger {
 	public static class BackendMessage {
 		public final long id;
 		public final String fromServerId;
-		public final String payload;
+		public final JsonEnvelope envelope;
 
-		public BackendMessage(long id, String fromServerId, String payload) {
+		public BackendMessage(long id, String fromServerId, JsonEnvelope envelope) {
 			this.id = id;
 			this.fromServerId = fromServerId;
-			this.payload = payload;
+			this.envelope = envelope;
 		}
 	}
 }

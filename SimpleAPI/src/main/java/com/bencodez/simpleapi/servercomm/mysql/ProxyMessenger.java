@@ -11,6 +11,9 @@ import java.util.function.Consumer;
 
 import javax.sql.DataSource;
 
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
+
 public class ProxyMessenger {
 	private static final String PROXY_CHANNEL = "proxy-channel";
 	private final DataSource ds;
@@ -21,7 +24,7 @@ public class ProxyMessenger {
 	private long lastSeenId = 0;
 
 	private final Consumer<ProxyMessage> onMessage;
-	private String tableName;
+	private final String tableName;
 
 	public ProxyMessenger(String tableName, DataSource dataSource, Consumer<ProxyMessage> onMessage)
 			throws SQLException {
@@ -45,11 +48,9 @@ public class ProxyMessenger {
 	}
 
 	private void initConnections() throws SQLException {
-		// Open three long-lived connections
 		this.lockConn = ds.getConnection();
 		this.workConn = ds.getConnection();
 		this.pubConn = ds.getConnection();
-		// Prime the lock to enter wait-loop
 		if (!acquireLock(lockConn, PROXY_CHANNEL, 10)) {
 			throw new IllegalStateException("Could not acquire proxy-channel lock on startup");
 		}
@@ -92,9 +93,11 @@ public class ProxyMessenger {
 					long id = rs.getLong("id");
 					String source = rs.getString("source");
 					String payload = rs.getString("payload");
-					results.add(new ProxyMessage(id, source, payload));
+
+					JsonEnvelope env = JsonEnvelopeCodec.decode(payload);
+					results.add(new ProxyMessage(id, source, env));
+
 					lastSeenId = id;
-					// Delete the message after processing
 					deleteMessageById(id);
 				}
 				return results;
@@ -102,10 +105,9 @@ public class ProxyMessenger {
 		}
 	}
 
-	/**
-	 * Sends a message from the proxy to a specific backend server.
-	 */
-	public synchronized void sendToBackend(String targetServerId, String payload) throws SQLException {
+	public synchronized void sendToBackend(String targetServerId, JsonEnvelope envelope) throws SQLException {
+		String payload = JsonEnvelopeCodec.encode(envelope);
+
 		String insertSql = "INSERT INTO " + tableName
 				+ "_message_queue (source, destination, payload) VALUES ('proxy', ?, ?)";
 		try (PreparedStatement ins = pubConn.prepareStatement(insertSql)) {
@@ -113,6 +115,7 @@ public class ProxyMessenger {
 			ins.setString(2, payload);
 			ins.executeUpdate();
 		}
+
 		String channel = "backend-channel-" + targetServerId;
 		try (PreparedStatement rel = pubConn.prepareStatement("SELECT RELEASE_LOCK(?)")) {
 			rel.setString(1, channel);
@@ -120,7 +123,9 @@ public class ProxyMessenger {
 		}
 	}
 
-	public synchronized void sendToProxy(String fromServerId, String payload) throws SQLException {
+	public synchronized void sendToProxy(String fromServerId, JsonEnvelope envelope) throws SQLException {
+		String payload = JsonEnvelopeCodec.encode(envelope);
+
 		String insertSql = "INSERT INTO " + tableName
 				+ "_message_queue (source, destination, payload) VALUES (?, 'proxy', ?)";
 		try (PreparedStatement ins = pubConn.prepareStatement(insertSql)) {
@@ -128,6 +133,7 @@ public class ProxyMessenger {
 			ins.setString(2, payload);
 			ins.executeUpdate();
 		}
+
 		try (PreparedStatement rel = pubConn.prepareStatement("SELECT RELEASE_LOCK(?)")) {
 			rel.setString(1, PROXY_CHANNEL);
 			rel.executeQuery();
@@ -173,12 +179,12 @@ public class ProxyMessenger {
 	public static class ProxyMessage {
 		public final long id;
 		public final String sourceServerId;
-		public final String payload;
+		public final JsonEnvelope envelope;
 
-		public ProxyMessage(long id, String sourceServerId, String payload) {
+		public ProxyMessage(long id, String sourceServerId, JsonEnvelope envelope) {
 			this.id = id;
 			this.sourceServerId = sourceServerId;
-			this.payload = payload;
+			this.envelope = envelope;
 		}
 	}
 }

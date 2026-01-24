@@ -1,6 +1,6 @@
 package com.bencodez.simpleapi.servercomm.global;
 
-import java.util.ArrayList;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 
 import lombok.Getter;
 
@@ -12,7 +12,6 @@ public abstract class GlobalMessageProxyListener {
 		this.channel = channel;
 	}
 
-	public abstract void onReceive(ArrayList<String> message);
+	public abstract void onReceive(JsonEnvelope message);
 
-	
 }

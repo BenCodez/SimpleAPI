@@ -1,8 +1,8 @@
-
 package com.bencodez.simpleapi.servercomm.pluginmessage;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -12,8 +12,9 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 
-import com.bencodez.simpleapi.array.ArrayUtils;
 import com.bencodez.simpleapi.encryption.EncryptionHandler;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
 import com.google.common.io.ByteArrayDataInput;
 import com.google.common.io.ByteStreams;
 
@@ -30,11 +31,10 @@ public class PluginMessage implements PluginMessageListener {
 	@Setter
 	private EncryptionHandler encryptionHandler;
 
-	private JavaPlugin plugin;
+	private final JavaPlugin plugin;
+	private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
 
-	private ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
-
-	public ArrayList<PluginMessageHandler> pluginMessages = new ArrayList<>();
+	private final ArrayList<PluginMessageHandler> pluginMessages = new ArrayList<>();
 
 	@Getter
 	@Setter
@@ -52,7 +52,7 @@ public class PluginMessage implements PluginMessageListener {
 	public ArrayList<PluginMessageHandler> getPluginMessages() {
 		return pluginMessages;
 	}
-	
+
 	public void shutdown() {
 		timer.shutdown();
 	}
@@ -64,90 +64,97 @@ public class PluginMessage implements PluginMessageListener {
 		}
 
 		ByteArrayDataInput in = ByteStreams.newDataInput(message);
-		String data = "";
-		String subChannel1 = "";
-		if (encryptionHandler != null) {
-			try {
-				subChannel1 = encryptionHandler.decrypt(in.readUTF());
-			} catch (Exception e) {
-				if (debug) {
-					e.printStackTrace();
-				}
-				plugin.getLogger().warning("Error reading plugin message: " + e.getMessage());
-				return;
-			}
-		} else {
-			subChannel1 = in.readUTF();
-		}
-		final String subChannel = subChannel1;
-		int size = in.readInt();
 
-		// Ensure the size is within a reasonable range to prevent reading too much data
+		final String subChannel;
+		try {
+			subChannel = (encryptionHandler != null) ? encryptionHandler.decrypt(in.readUTF()) : in.readUTF();
+		} catch (Exception e) {
+			if (debug) {
+				e.printStackTrace();
+			}
+			plugin.getLogger().warning("Error reading plugin message subChannel: " + e.getMessage());
+			return;
+		}
+
+		final int size = in.readInt();
 		if (size < 0 || size > message.length) {
 			plugin.getLogger().warning("Invalid message size: " + size);
 			return;
 		}
 
+		final String payload;
 		try {
-			if (encryptionHandler != null) {
-				data = encryptionHandler.decrypt(in.readUTF());
-			} else {
-				data = in.readUTF();
-			}
-
-			String[] list = data.split("/a/");
-			ArrayList<String> list1 = new ArrayList<>();
-			for (String s : list) {
-				list1.add(s);
-			}
-
-			timer.submit(() -> onReceive(subChannel, list1));
+			payload = (encryptionHandler != null) ? encryptionHandler.decrypt(in.readUTF()) : in.readUTF();
 		} catch (Exception e) {
 			if (debug) {
 				e.printStackTrace();
 			}
-			plugin.getLogger().warning("Error reading plugin message: " + e.getMessage());
+			plugin.getLogger().warning("Error reading plugin message payload: " + e.getMessage());
+			return;
 		}
+
+		timer.submit(() -> {
+			try {
+				JsonEnvelope envelope = JsonEnvelopeCodec.decode(payload);
+
+				// Optional safety: ensure outer routing matches inner routing
+				if (!subChannel.equalsIgnoreCase(envelope.getSubChannel())) {
+					if (debug) {
+						plugin.getLogger().warning("PluginMessage subChannel mismatch: header=" + subChannel
+								+ " envelope=" + envelope.getSubChannel());
+					}
+					return;
+				}
+
+				onReceive(envelope);
+			} catch (Exception e) {
+				if (debug) {
+					e.printStackTrace();
+				}
+				plugin.getLogger().warning("Error decoding plugin message payload: " + e.getMessage());
+			}
+		});
 	}
 
-	public void onReceive(String subChannel, ArrayList<String> list) {
+	public void onReceive(JsonEnvelope envelope) {
 		if (debug) {
-			plugin.getLogger().info(
-					"BungeeDebug: Received plugin message: " + subChannel + ", " + ArrayUtils.makeStringList(list));
+			plugin.getLogger().info("BungeeDebug: Received envelope: " + envelope.getSubChannel() + " " + envelope.getFields());
 		}
 		for (PluginMessageHandler handle : pluginMessages) {
-			if (handle.getSubChannel() == null || handle.getSubChannel().equalsIgnoreCase(subChannel)) {
-				handle.onRecieve(subChannel, list);
+			if (handle.getSubChannel() == null || handle.getSubChannel().equalsIgnoreCase(envelope.getSubChannel())) {
+				handle.onReceive(envelope);
 			}
 		}
 	}
 
-	public void sendPluginMessage(String channel, String... messageData) {
+	public void sendEnvelope(JsonEnvelope envelope) {
+		final String subChannel = envelope.getSubChannel();
+		final String payload = JsonEnvelopeCodec.encode(envelope);
+
 		ByteArrayOutputStream byteOutStream = new ByteArrayOutputStream();
 		DataOutputStream out = new DataOutputStream(byteOutStream);
+
 		try {
 			if (encryptionHandler != null) {
-				out.writeUTF(encryptionHandler.encrypt(channel));
+				out.writeUTF(encryptionHandler.encrypt(subChannel));
 			} else {
-				out.writeUTF(channel);
+				out.writeUTF(subChannel);
 			}
-			out.writeInt(messageData.length);
-			String data = "";
 
-			for (String message : messageData) {
-				data += message + "/a/";
-			}
+			// Keep an int for sanity checks (UTF-8 byte length of payload)
+			out.writeInt(payload.getBytes(StandardCharsets.UTF_8).length);
+
 			if (encryptionHandler != null) {
-				out.writeUTF(encryptionHandler.encrypt(data));
+				out.writeUTF(encryptionHandler.encrypt(payload));
 			} else {
-				out.writeUTF(data);
+				out.writeUTF(payload);
 			}
-			if (debug) {
-				plugin.getLogger().info("BungeeDebug: Sending plugin message: " + channel + ", "
-						+ ArrayUtils.makeStringList(ArrayUtils.convert(messageData)));
-			}
-			Bukkit.getServer().sendPluginMessage(plugin, bungeeChannel, byteOutStream.toByteArray());
 
+			if (debug) {
+				plugin.getLogger().info("BungeeDebug: Sending envelope: " + subChannel + " " + envelope.getFields());
+			}
+
+			Bukkit.getServer().sendPluginMessage(plugin, bungeeChannel, byteOutStream.toByteArray());
 			out.close();
 		} catch (Exception e) {
 			e.printStackTrace();

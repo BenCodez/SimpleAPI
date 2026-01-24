@@ -1,39 +1,29 @@
 package com.bencodez.simpleapi.servercomm.redis;
 
-import java.util.regex.Pattern;
+import java.util.function.BiConsumer;
 
 import lombok.Getter;
 import redis.clients.jedis.JedisPubSub;
 
 public class RedisListener extends JedisPubSub {
-	private RedisHandler redisHandler;
-	@Getter
-	private String channel;
+	private final RedisHandler redisHandler;
 
-	public RedisListener(RedisHandler redisHandler, String channel) {
+	@Getter
+	private final String channel;
+
+	private final BiConsumer<String, String> onPayload;
+
+	public RedisListener(RedisHandler redisHandler, String channel, BiConsumer<String, String> onPayload) {
 		this.redisHandler = redisHandler;
 		this.channel = channel;
+		this.onPayload = onPayload;
 	}
 
+	@Override
 	public void onMessage(String channel, String message) {
 		redisHandler.debug("Redis Message: " + channel + "," + message);
 		if (channel.equals(this.channel)) {
-			redisHandler.onMessage(channel, message.split(Pattern.quote(":")));
+			onPayload.accept(channel, message); // full JSON payload
 		}
-	}
-
-	public void onPMessage(String pattern, String channel, String message) {
-	}
-
-	public void onPSubscribe(String pattern, int subscribedChannels) {
-	}
-
-	public void onPUnsubscribe(String pattern, int subscribedChannels) {
-	}
-
-	public void onSubscribe(String channel, int subscribedChannels) {
-	}
-
-	public void onUnsubscribe(String channel, int subscribedChannels) {
 	}
 }

@@ -1,6 +1,6 @@
 package com.bencodez.simpleapi.servercomm.global;
 
-import java.util.ArrayList;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 
 import lombok.Getter;
 
@@ -12,9 +12,9 @@ public abstract class GlobalMessageListener {
 		this.subChannel = subChannel;
 	}
 
-	public abstract void onReceive(ArrayList<String> message);
+	public abstract void onReceive(JsonEnvelope messageData);
 
-	public void sendMessage(GlobalMessageHandler globalMessageHandler, String subChannel, String... messageData) {
-		globalMessageHandler.sendMessage(subChannel, messageData);
+	public void sendMessage(GlobalMessageHandler globalMessageHandler, JsonEnvelope messageData) {
+		globalMessageHandler.sendMessage(messageData);
 	}
 }

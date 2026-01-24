@@ -2,6 +2,8 @@ package com.bencodez.simpleapi.servercomm.global;
 
 import java.util.ArrayList;
 
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+
 public abstract class GlobalMessageProxyHandler {
 
 	private ArrayList<GlobalMessageListener> globalMessageListeners = new ArrayList<>();
@@ -13,13 +15,13 @@ public abstract class GlobalMessageProxyHandler {
 		globalMessageListeners.add(globalMessageListener);
 	}
 
-	public void onMessage(String subChannel, ArrayList<String> message) {
+	public void onMessage(JsonEnvelope message) {
 		for (GlobalMessageListener listener : globalMessageListeners) {
-			if (listener.getSubChannel().equalsIgnoreCase(subChannel)) {
+			if (listener.getSubChannel().equalsIgnoreCase(message.getSubChannel())) {
 				listener.onReceive(message);
 			}
 		}
 	}
 
-	public abstract void sendMessage(String server, int delay, String subChannel, String... messageData);
+	public abstract void sendMessage(String server, int delay, JsonEnvelope envelope);
 }

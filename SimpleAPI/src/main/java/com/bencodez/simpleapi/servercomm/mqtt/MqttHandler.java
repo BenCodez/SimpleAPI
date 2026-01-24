@@ -6,105 +6,125 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
+
 /**
  * General-purpose MQTT communication handler with support for RPC and pub/sub.
+ * Envelope-first (no delimiter protocols).
  */
 public class MqttHandler {
 
-    public interface MessageHandler {
-        void onMessage(String topic, String payload);
-    }
+	public interface EnvelopeHandler {
+		void onEnvelope(String topic, JsonEnvelope envelope);
+	}
 
-    public interface RpcCallback {
-        void onComplete(RpcResponse response, Exception error);
-    }
+	public interface RpcCallback {
+		void onComplete(RpcResponse response, Exception error);
+	}
 
-    public static class RpcResponse {
-        private final String requestId;
-        private final String payload;
+	public static class RpcResponse {
+		private final String requestId;
+		private final JsonEnvelope envelope;
 
-        public RpcResponse(String requestId, String payload) {
-            this.requestId = requestId;
-            this.payload = payload;
-        }
+		public RpcResponse(String requestId, JsonEnvelope envelope) {
+			this.requestId = requestId;
+			this.envelope = envelope;
+		}
 
-        public String getRequestId() {
-            return requestId;
-        }
+		public String getRequestId() {
+			return requestId;
+		}
 
-        public String getPayload() {
-            return payload;
-        }
-    }
+		public JsonEnvelope getEnvelope() {
+			return envelope;
+		}
+	}
 
-    private final MqttServerComm mqtt;
-    private final ConcurrentHashMap<String, RpcCallback> pendingRpcs = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    private int defaultQos;
+	private final MqttServerComm mqtt;
+	private final ConcurrentHashMap<String, RpcCallback> pendingRpcs = new ConcurrentHashMap<>();
+	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+	private int defaultQos;
 
-    public MqttHandler(MqttServerComm mqtt, int defaultQos) {
-        this.mqtt = mqtt;
-        setDefaultQos(defaultQos);
-    }
+	public MqttHandler(MqttServerComm mqtt, int defaultQos) {
+		this.mqtt = mqtt;
+		setDefaultQos(defaultQos);
+	}
 
-    public MqttHandler(MqttServerComm mqtt) {
-        this(mqtt, 2);
-    }
+	public MqttHandler(MqttServerComm mqtt) {
+		this(mqtt, 2);
+	}
 
-    public void setDefaultQos(int qos) {
-        if (qos < 0 || qos > 2) {
-            throw new IllegalArgumentException("QoS must be 0, 1, or 2");
-        }
-        this.defaultQos = qos;
-    }
+	public void setDefaultQos(int qos) {
+		if (qos < 0 || qos > 2) {
+			throw new IllegalArgumentException("QoS must be 0, 1, or 2");
+		}
+		this.defaultQos = qos;
+	}
 
-    public void connect() throws Exception {
-        mqtt.connect();
-    }
+	public void connect() throws Exception {
+		mqtt.connect();
+	}
 
-    public void disconnect() throws Exception {
-        mqtt.disconnect();
-        scheduler.shutdownNow();
-    }
+	public void disconnect() throws Exception {
+		mqtt.disconnect();
+		scheduler.shutdownNow();
+	}
 
-    public boolean isConnected() {
-        return mqtt.isConnected();
-    }
+	public boolean isConnected() {
+		return mqtt.isConnected();
+	}
 
-    public void publish(String topic, String message) throws Exception {
-        mqtt.publish(topic, message, defaultQos, false);
-    }
+	public void publishEnvelope(String topic, JsonEnvelope envelope) throws Exception {
+		mqtt.publishEnvelope(topic, envelope, defaultQos, false);
+	}
 
-    public void subscribe(String topicFilter, MessageHandler handler) throws Exception {
-        mqtt.subscribe(topicFilter, defaultQos, (topic, msg) -> {
-            handler.onMessage(topic, new String(msg.getPayload()));
-        });
-    }
+	public void subscribeEnvelopes(String topicFilter, EnvelopeHandler handler) throws Exception {
+		mqtt.subscribeEnvelopes(topicFilter, defaultQos, (topic, env) -> handler.onEnvelope(topic, env));
+	}
 
-    public void unsubscribe(String topicFilter) throws Exception {
-        mqtt.unsubscribe(topicFilter);
-    }
+	public void unsubscribe(String topicFilter) throws Exception {
+		mqtt.unsubscribe(topicFilter);
+	}
 
-    public void request(String topic, String message, long timeoutMillis, RpcCallback callback) throws Exception {
-        String requestId = UUID.randomUUID().toString();
-        pendingRpcs.put(requestId, callback);
-        scheduler.schedule(() -> {
-            RpcCallback cb = pendingRpcs.remove(requestId);
-            if (cb != null) {
-                cb.onComplete(null, new Exception("RPC timeout"));
-            }
-        }, timeoutMillis, TimeUnit.MILLISECONDS);
+	/**
+	 * RPC-style request: publishes an envelope to topic/{requestId}
+	 * and expects the response on a separate subscription you wire to handleRpcEnvelopeResponse(...).
+	 */
+	public void requestEnvelope(String topic, JsonEnvelope envelope, long timeoutMillis, RpcCallback callback)
+			throws Exception {
+		String requestId = UUID.randomUUID().toString();
+		pendingRpcs.put(requestId, callback);
 
-        mqtt.publish(topic + "/" + requestId, message, defaultQos, false);
-    }
+		scheduler.schedule(() -> {
+			RpcCallback cb = pendingRpcs.remove(requestId);
+			if (cb != null) {
+				cb.onComplete(null, new Exception("RPC timeout"));
+			}
+		}, timeoutMillis, TimeUnit.MILLISECONDS);
 
-    public void handleRpcResponse(String topic, String payload) {
-        String[] parts = topic.split("/");
-        if (parts.length == 0) return;
-        String requestId = parts[parts.length - 1];
-        RpcCallback cb = pendingRpcs.remove(requestId);
-        if (cb != null) {
-            cb.onComplete(new RpcResponse(requestId, payload), null);
-        }
-    }
+		publishEnvelope(topic + "/" + requestId, envelope);
+	}
+
+	/**
+	 * Call this from your subscription handler when you receive an envelope on an RPC response topic.
+	 */
+	public void handleRpcEnvelopeResponse(String topic, JsonEnvelope envelope) {
+		String[] parts = topic.split("/");
+		if (parts.length == 0) {
+			return;
+		}
+		String requestId = parts[parts.length - 1];
+		RpcCallback cb = pendingRpcs.remove(requestId);
+		if (cb != null) {
+			cb.onComplete(new RpcResponse(requestId, envelope), null);
+		}
+	}
+
+	/**
+	 * Convenience if you still have raw payload string at the edge.
+	 */
+	public void handleRpcEnvelopeResponseRaw(String topic, String payload) {
+		handleRpcEnvelopeResponse(topic, JsonEnvelopeCodec.decode(payload));
+	}
 }

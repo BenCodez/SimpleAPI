@@ -6,33 +6,36 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 
 import com.bencodez.simpleapi.encryption.EncryptionHandler;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
 
 import lombok.Getter;
 
 public abstract class SocketServer extends Thread {
 
 	@Getter
-	private boolean debug = false;
+	private final boolean debug;
 
-	private EncryptionHandler encryptionHandler;
-
-	@Getter
-	private String host;
+	private final EncryptionHandler encryptionHandler;
 
 	@Getter
-	private int port;
+	private final String host;
 
-	private boolean running = true;
+	@Getter
+	private final int port;
+
+	private volatile boolean running = true;
 
 	private ServerSocket server;
 
-	public SocketServer(String version, String host, int port, EncryptionHandler handle, boolean debug) {
-		super(version);
+	public SocketServer(String threadName, String host, int port, EncryptionHandler handle, boolean debug) {
+		super(threadName);
 		this.host = host;
 		this.port = port;
-		encryptionHandler = handle;
+		this.encryptionHandler = handle;
 		this.debug = debug;
 		try {
 			server = new ServerSocket();
@@ -47,7 +50,7 @@ public abstract class SocketServer extends Thread {
 
 	private void restartServer() {
 		if (restartCount > 5) {
-			logger("Failed to restart server socket on " + host + ":" + port + " after 10 attempts, closing server");
+			logger("Failed to restart server socket on " + host + ":" + port + " after 5 attempts, closing server");
 			close();
 			return;
 		}
@@ -66,7 +69,9 @@ public abstract class SocketServer extends Thread {
 	public void close() {
 		try {
 			running = false;
-			server.close();
+			if (server != null) {
+				server.close();
+			}
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -74,7 +79,7 @@ public abstract class SocketServer extends Thread {
 
 	public abstract void logger(String str);
 
-	public abstract void onReceive(String[] data);
+	public abstract void onReceive(JsonEnvelope envelope);
 
 	private int restartCount = 0;
 
@@ -83,27 +88,32 @@ public abstract class SocketServer extends Thread {
 		while (running) {
 			try {
 				Socket socket = server.accept();
-				socket.setSoTimeout(5000); // Don't hang on slow connections.
+				socket.setSoTimeout(5000);
 				DataInputStream dis = new DataInputStream(socket.getInputStream());
 
-				final String msg = encryptionHandler.decrypt(dis.readUTF());
+				String raw = dis.readUTF();
+				String decrypted = encryptionHandler != null ? encryptionHandler.decrypt(raw) : raw;
+
 				if (debug) {
-					logger("Debug: Socket Receiving: " + msg);
+					logger("Debug: Socket Receiving Raw Bytes: " + decrypted.getBytes(StandardCharsets.UTF_8).length);
+					logger("Debug: Socket Receiving: " + decrypted);
 				}
-				onReceive(msg.split("%line%"));
+
+				JsonEnvelope env = JsonEnvelopeCodec.decode(decrypted);
+				onReceive(env);
+
 				dis.close();
 				socket.close();
 			} catch (EOFException e) {
-				logger("Error occured while receiving socket message, enable debug to see more: " + e.getMessage());
+				logger("Error occurred while receiving socket message, enable debug to see more: " + e.getMessage());
 				if (debug) {
 					e.printStackTrace();
 				}
 			} catch (Exception ex) {
-				logger("Error occured while receiving socket message");
+				logger("Error occurred while receiving socket message");
 				ex.printStackTrace();
 				restartServer();
 			}
 		}
-
 	}
 }
