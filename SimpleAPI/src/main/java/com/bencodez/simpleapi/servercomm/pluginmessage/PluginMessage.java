@@ -23,6 +23,12 @@ import lombok.Setter;
 
 public class PluginMessage implements PluginMessageListener {
 
+	// Plugin messaging hard limit is Short.MAX_VALUE (~32767)
+	private static final int PLUGIN_MESSAGE_HARD_LIMIT = 32767;
+
+	// Safety margin to account for channel + UTF overhead
+	private static final int PLUGIN_MESSAGE_SOFT_LIMIT = 30000;
+
 	@Getter
 	@Setter
 	private boolean debug = false;
@@ -118,7 +124,8 @@ public class PluginMessage implements PluginMessageListener {
 
 	public void onReceive(JsonEnvelope envelope) {
 		if (debug) {
-			plugin.getLogger().info("BungeeDebug: Received envelope: " + envelope.getSubChannel() + " " + envelope.getFields());
+			plugin.getLogger()
+					.info("BungeeDebug: Received envelope: " + envelope.getSubChannel() + " " + envelope.getFields());
 		}
 		for (PluginMessageHandler handle : pluginMessages) {
 			if (handle.getSubChannel() == null || handle.getSubChannel().equalsIgnoreCase(envelope.getSubChannel())) {
@@ -131,6 +138,26 @@ public class PluginMessage implements PluginMessageListener {
 		final String subChannel = envelope.getSubChannel();
 		final String payload = JsonEnvelopeCodec.encode(envelope);
 
+		byte[] payloadBytes = payload.getBytes(StandardCharsets.UTF_8);
+
+		// Estimate total message size on the wire
+		// writeUTF adds 2 bytes length prefix per UTF string
+		int estimatedSize = 2 + subChannel.getBytes(StandardCharsets.UTF_8).length + // subChannel UTF
+				4 + // int payload length
+				2 + payloadBytes.length; // payload UTF
+
+		if (estimatedSize > PLUGIN_MESSAGE_SOFT_LIMIT) {
+			plugin.getLogger().warning("[PluginMessage] Payload nearing plugin messaging limit (" + estimatedSize
+					+ " bytes) subChannel=" + subChannel + " — consider Redis instead");
+		}
+
+		if (estimatedSize > PLUGIN_MESSAGE_HARD_LIMIT) {
+			plugin.getLogger()
+					.severe("[PluginMessage] Payload TOO LARGE for plugin messaging (" + estimatedSize + " bytes, max="
+							+ PLUGIN_MESSAGE_HARD_LIMIT + ") subChannel=" + subChannel + " — message NOT sent");
+			return; // hard stop
+		}
+
 		ByteArrayOutputStream byteOutStream = new ByteArrayOutputStream();
 		DataOutputStream out = new DataOutputStream(byteOutStream);
 
@@ -142,7 +169,7 @@ public class PluginMessage implements PluginMessageListener {
 			}
 
 			// Keep an int for sanity checks (UTF-8 byte length of payload)
-			out.writeInt(payload.getBytes(StandardCharsets.UTF_8).length);
+			out.writeInt(payloadBytes.length);
 
 			if (encryptionHandler != null) {
 				out.writeUTF(encryptionHandler.encrypt(payload));
@@ -151,7 +178,8 @@ public class PluginMessage implements PluginMessageListener {
 			}
 
 			if (debug) {
-				plugin.getLogger().info("BungeeDebug: Sending envelope: " + subChannel + " " + envelope.getFields());
+				plugin.getLogger().info("BungeeDebug: Sending envelope (" + estimatedSize + " bytes): " + subChannel
+						+ " " + envelope.getFields());
 			}
 
 			Bukkit.getServer().sendPluginMessage(plugin, bungeeChannel, byteOutStream.toByteArray());
@@ -160,4 +188,5 @@ public class PluginMessage implements PluginMessageListener {
 			e.printStackTrace();
 		}
 	}
+
 }

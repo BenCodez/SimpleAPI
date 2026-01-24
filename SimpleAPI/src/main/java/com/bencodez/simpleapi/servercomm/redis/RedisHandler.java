@@ -1,39 +1,43 @@
 package com.bencodez.simpleapi.servercomm.redis;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
 
+import redis.clients.jedis.DefaultJedisClientConfig;
+import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.JedisPoolConfig;
+import redis.clients.jedis.JedisClientConfig;
 
 public abstract class RedisHandler {
-	private final JedisPool publishPool;
-	private final JedisPool subscribePool;
+
+	private final HostAndPort endpoint;
+	private final JedisClientConfig clientConfig;
 
 	private final Map<RedisListener, Thread> listenerThreads = new ConcurrentHashMap<>();
 
 	public RedisHandler(String host, int port, String username, String password, int dbIndex) {
-		int timeout = 2000;
-		JedisPoolConfig config = new JedisPoolConfig();
+		Objects.requireNonNull(host, "host");
 
-		boolean userBlank = username == null || username.isEmpty();
-		boolean passBlank = password == null || password.isEmpty();
+		this.endpoint = new HostAndPort(host, port);
 
-		if (userBlank && passBlank) {
-			publishPool = new JedisPool(config, host, port, timeout, null, dbIndex);
-			subscribePool = new JedisPool(config, host, port, timeout, null, dbIndex);
-		} else if (userBlank) {
-			publishPool = new JedisPool(config, host, port, timeout, password, dbIndex);
-			subscribePool = new JedisPool(config, host, port, timeout, password, dbIndex);
-		} else {
-			publishPool = new JedisPool(config, host, port, timeout, username, password, dbIndex);
-			subscribePool = new JedisPool(config, host, port, timeout, username, password, dbIndex);
+		DefaultJedisClientConfig.Builder cfg = DefaultJedisClientConfig.builder()
+				.database(dbIndex)
+				.connectionTimeoutMillis(2000)
+				.socketTimeoutMillis(2000);
+
+		if (username != null && !username.isEmpty()) {
+			cfg.user(username);
 		}
+		if (password != null && !password.isEmpty()) {
+			cfg.password(password);
+		}
+
+		this.clientConfig = cfg.build();
 	}
 
 	public void close() {
@@ -44,17 +48,24 @@ public abstract class RedisHandler {
 			}
 		}
 		listenerThreads.clear();
-		publishPool.close();
-		subscribePool.close();
 	}
 
 	public void loadListener(RedisListener listener) {
+		Objects.requireNonNull(listener, "listener");
+
+		if (listenerThreads.containsKey(listener)) {
+			return;
+		}
+
 		Thread thread = new Thread(() -> {
-			try (Jedis jedis = subscribePool.getResource()) {
+			try (Jedis jedis = new Jedis(endpoint, clientConfig)) {
 				debug("Starting Redis subscription for channel: " + listener.getChannel());
+				// 🔥 RedisListener is directly used here
 				jedis.subscribe(listener, listener.getChannel());
 			} catch (Exception e) {
 				debug("Redis subscribe error on channel " + listener.getChannel() + ": " + e.getMessage());
+			} finally {
+				listenerThreads.remove(listener);
 			}
 		}, "RedisSubscribeThread-" + listener.getChannel());
 
@@ -66,14 +77,18 @@ public abstract class RedisHandler {
 	/** Publish an envelope as a single JSON string. */
 	public void publishEnvelope(String channel, JsonEnvelope envelope) {
 		String payload = JsonEnvelopeCodec.encode(envelope);
-		try (Jedis jedis = publishPool.getResource()) {
+		try (Jedis jedis = new Jedis(endpoint, clientConfig)) {
 			debug("Redis Send: " + channel + ", " + payload);
 			jedis.publish(channel, payload);
+		} catch (Exception e) {
+			debug("Redis publish error on channel " + channel + ": " + e.getMessage());
 		}
 	}
 
-	/** Subscribe and decode envelopes, forwarding to your callback (external wiring). */
-	public RedisListener createEnvelopeListener(String channel, BiConsumer<String, JsonEnvelope> onEnvelope) {
+	/** Subscribe and decode envelopes, forwarding to your callback. */
+	public RedisListener createEnvelopeListener(String channel,
+			BiConsumer<String, JsonEnvelope> onEnvelope) {
+
 		return new RedisListener(this, channel, (ch, payload) -> {
 			try {
 				onEnvelope.accept(ch, JsonEnvelopeCodec.decode(payload));
