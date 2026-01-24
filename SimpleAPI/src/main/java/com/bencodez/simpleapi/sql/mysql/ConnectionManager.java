@@ -63,12 +63,6 @@ public class ConnectionManager {
 	@Setter
 	private boolean publicKeyRetrieval;
 
-	/**
-	 * Extra JDBC params appended to URL.
-	 *
-	 * MySQL/MariaDB: should generally start with "&" if adding params. Postgres:
-	 * can be "?foo=bar" or "&foo=bar" or "foo=bar" (we normalize).
-	 */
 	@Getter
 	@Setter
 	private String str = "";
@@ -88,9 +82,6 @@ public class ConnectionManager {
 	@Setter
 	private boolean useMariaDB = false;
 
-	/**
-	 * Optional explicit driver override. If empty, chosen based on dbType.
-	 */
 	@Getter
 	@Setter
 	private String mysqlDriver = "";
@@ -99,9 +90,6 @@ public class ConnectionManager {
 	@Setter
 	private String poolName = "SimpleAPI-Hikari";
 
-	/**
-	 * NEW: Explicit database type.
-	 */
 	@Getter
 	@Setter
 	private DbType dbType = DbType.MYSQL;

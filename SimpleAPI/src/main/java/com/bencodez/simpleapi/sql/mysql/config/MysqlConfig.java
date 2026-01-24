@@ -70,49 +70,26 @@ public class MysqlConfig {
 	@Setter
 	private int connectionTimeout;
 
-	// --- Driver / DB Selection ---
-	/**
-	 * Database type to use. MYSQL | MARIADB | POSTGRESQL
-	 */
 	@Getter
 	@Setter
 	private DbType dbType = DbType.MYSQL;
 
-	/**
-	 * Optional explicit JDBC driver override. Examples: - com.mysql.cj.jdbc.Driver
-	 * - org.mariadb.jdbc.Driver - org.postgresql.Driver
-	 */
 	@Getter
 	@Setter
 	private String driver;
 
-	/**
-	 * Whether to use SSL for the DB connection.
-	 */
 	@Getter
 	@Setter
 	private boolean useSSL;
 
-	/**
-	 * MySQL-only option (ignored for PostgreSQL).
-	 */
 	@Getter
 	@Setter
 	private boolean publicKeyRetrieval;
 
-	/**
-	 * Legacy convenience flag. If set and dbType is MYSQL, ConnectionManager will
-	 * treat it as MARIADB.
-	 */
 	@Getter
 	@Setter
 	private boolean useMariaDB;
 
-	// --- Additional Settings ---
-	/**
-	 * Extra JDBC parameters appended to the URL. Example: - MySQL: &useUnicode=true
-	 * - Postgres: &sslmode=require
-	 */
 	@Getter
 	@Setter
 	private String line;
