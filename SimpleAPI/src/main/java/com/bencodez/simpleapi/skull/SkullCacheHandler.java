@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 
+import com.bencodez.simpleapi.time.ParsedDuration;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -51,13 +53,31 @@ public abstract class SkullCacheHandler {
 
 	private final AtomicInteger rateLimitHitCount = new AtomicInteger(0);
 
-	public SkullCacheHandler() {
-		this.currentDelayMs = clamp(skullDelayTime, minDelayMs, maxDelayMs);
-	}
-
+	/**
+	 * Legacy constructor (milliseconds).
+	 */
 	public SkullCacheHandler(int skullDelayTime) {
 		this.skullDelayTime = skullDelayTime;
 		this.currentDelayMs = clamp(skullDelayTime, minDelayMs, maxDelayMs);
+	}
+
+	/**
+	 * Duration-based constructor (ParsedDuration).
+	 *
+	 * @param skullDelayTime duration string (e.g. 4s, 4000ms, 1m)
+	 */
+	public SkullCacheHandler(String skullDelayTime) {
+		this.skullDelayTime = clamp(parseMs(skullDelayTime, 4000), minDelayMs, maxDelayMs);
+		this.currentDelayMs = this.skullDelayTime;
+	}
+
+	private static int parseMs(String duration, int fallback) {
+		try {
+			long ms = ParsedDuration.parse(duration).getMillis();
+			return ms > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) ms;
+		} catch (Exception e) {
+			return fallback;
+		}
 	}
 
 	public void addToCache(UUID uuid, String name) {
