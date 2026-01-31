@@ -73,7 +73,7 @@ public abstract class SkullCacheHandler {
 
 	private static int parseMs(String duration, int fallback) {
 		try {
-			long ms = ParsedDuration.parse(duration).getMillis();
+			long ms = ParsedDuration.parse(duration, TimeUnit.MILLISECONDS).getMillis();
 			return ms > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) ms;
 		} catch (Exception e) {
 			return fallback;

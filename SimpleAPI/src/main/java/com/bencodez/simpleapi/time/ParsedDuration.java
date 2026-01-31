@@ -207,18 +207,9 @@ public final class ParsedDuration {
 	 * @param raw raw input string
 	 * @return parsed duration (never null)
 	 */
+	@Deprecated
 	public static ParsedDuration parse(String raw) {
 		return parse(raw, Unit.MINUTES);
-	}
-
-	/**
-	 * Parses the input using {@link TimeUnit#MINUTES} as the default unit for number-only strings.
-	 *
-	 * @param raw raw input string
-	 * @return parsed duration (never null)
-	 */
-	public static ParsedDuration parseTimeUnit(String raw) {
-		return parse(raw, TimeUnit.MINUTES);
 	}
 
 	/**
