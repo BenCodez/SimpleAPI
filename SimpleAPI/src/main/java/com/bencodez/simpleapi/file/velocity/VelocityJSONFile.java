@@ -1,10 +1,8 @@
 package com.bencodez.simpleapi.file.velocity;
 
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -12,13 +10,13 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import com.google.common.reflect.TypeToken;
+import org.spongepowered.configurate.BasicConfigurationNode;
+import org.spongepowered.configurate.ConfigurationNode;
+import org.spongepowered.configurate.gson.GsonConfigurationLoader;
+import org.spongepowered.configurate.serialize.SerializationException;
 
 import lombok.Getter;
 import lombok.Setter;
-import ninja.leaping.configurate.ConfigurationNode;
-import ninja.leaping.configurate.gson.GsonConfigurationLoader;
-import ninja.leaping.configurate.objectmapping.ObjectMappingException;
 
 public class VelocityJSONFile {
 	private static final Logger LOG = Logger.getLogger(VelocityJSONFile.class.getName());
@@ -65,9 +63,10 @@ public class VelocityJSONFile {
 		lock.writeLock().lock();
 		try {
 			Path dir = path.getParent();
-			if (dir != null)
+			if (dir != null) {
 				Files.createDirectories(dir);
-			loader.save(conf); // writes directly
+			}
+			loader.save(conf);
 		} catch (IOException e) {
 			LOG.log(Level.SEVERE, "Failed to save JSON config: " + path, e);
 		} finally {
@@ -89,7 +88,7 @@ public class VelocityJSONFile {
 	public ConfigurationNode getNode(Object... path) {
 		lock.readLock().lock();
 		try {
-			return conf.getNode(path);
+			return conf.node(path);
 		} finally {
 			lock.readLock().unlock();
 		}
@@ -98,7 +97,7 @@ public class VelocityJSONFile {
 	public boolean contains(Object... path) {
 		lock.readLock().lock();
 		try {
-			return !conf.getNode(path).isVirtual();
+			return !conf.node(path).virtual();
 		} finally {
 			lock.readLock().unlock();
 		}
@@ -144,7 +143,7 @@ public class VelocityJSONFile {
 		lock.readLock().lock();
 		try {
 			ArrayList<String> keys = new ArrayList<>();
-			for (Map.Entry<Object, ? extends ConfigurationNode> e : node.getChildrenMap().entrySet()) {
+			for (Map.Entry<Object, ? extends ConfigurationNode> e : node.childrenMap().entrySet()) {
 				keys.add(String.valueOf(e.getKey()));
 			}
 			return keys;
@@ -156,10 +155,12 @@ public class VelocityJSONFile {
 	public List<String> getStringList(ConfigurationNode node, List<String> def) {
 		lock.readLock().lock();
 		try {
-			return node.getList(TypeToken.of(String.class), def);
-		} catch (ObjectMappingException e) {
-			LOG.log(Level.WARNING, "Failed to read string list at " + safeNodePath(node) + ", using default.", e);
-			return def;
+			try {
+				return node.getList(String.class, def);
+			} catch (SerializationException e) {
+				LOG.log(Level.WARNING, "Failed to read string list at " + safeNodePath(node) + ", using default.", e);
+				return def;
+			}
 		} finally {
 			lock.readLock().unlock();
 		}
@@ -170,7 +171,11 @@ public class VelocityJSONFile {
 	public void set(Object[] path, Object value) {
 		lock.writeLock().lock();
 		try {
-			conf.getNode(path).setValue(value);
+			try {
+				conf.node(path).set(value);
+			} catch (SerializationException e) {
+				LOG.log(Level.SEVERE, "Failed to set value at path " + safePathString(path), e);
+			}
 		} finally {
 			lock.writeLock().unlock();
 		}
@@ -179,7 +184,11 @@ public class VelocityJSONFile {
 	public void remove(Object... path) {
 		lock.writeLock().lock();
 		try {
-			conf.getNode(path).setValue(null);
+			try {
+				conf.node(path).set(null);
+			} catch (SerializationException e) {
+				LOG.log(Level.SEVERE, "Failed to remove value at path " + safePathString(path), e);
+			}
 		} finally {
 			lock.writeLock().unlock();
 		}
@@ -188,7 +197,7 @@ public class VelocityJSONFile {
 	/* ===================== Internals ===================== */
 
 	private void buildLoader() {
-		this.loader = GsonConfigurationLoader.builder().setPath(this.path).build();
+		this.loader = GsonConfigurationLoader.builder().path(this.path).build();
 	}
 
 	private void loadInternal(boolean logErrors) {
@@ -196,14 +205,14 @@ public class VelocityJSONFile {
 		try {
 			conf = loader.load();
 			if (conf == null) {
-				conf = loader.createEmptyNode();
+				conf = BasicConfigurationNode.root(loader.defaultOptions());
 			}
 		} catch (IOException e) {
 			if (logErrors) {
 				LOG.log(Level.SEVERE, "Failed to load JSON config: " + path, e);
 			}
 			if (conf == null) {
-				conf = loader.createEmptyNode();
+				conf = BasicConfigurationNode.root(loader.defaultOptions());
 			}
 		} finally {
 			lock.writeLock().unlock();
@@ -212,13 +221,14 @@ public class VelocityJSONFile {
 
 	private void ensureFileExists(Path p) {
 		try {
-			if (p.getParent() != null) {
-				Files.createDirectories(p.getParent());
+			Path parent = p.getParent();
+			if (parent != null) {
+				Files.createDirectories(parent);
 			}
 			if (!Files.exists(p)) {
 				Files.createFile(p);
 				buildLoader();
-				conf = loader.createEmptyNode();
+				conf = BasicConfigurationNode.root(loader.defaultOptions());
 				save();
 			}
 		} catch (IOException e) {
@@ -228,9 +238,25 @@ public class VelocityJSONFile {
 
 	private String safeNodePath(ConfigurationNode node) {
 		try {
-			return node.getPath().toString();
+			return String.valueOf(node.path());
 		} catch (Throwable t) {
 			return "<unknown>";
 		}
+	}
+
+	private String safePathString(Object[] path) {
+		if (path == null) {
+			return "<null>";
+		}
+		StringBuilder sb = new StringBuilder();
+		sb.append('[');
+		for (int i = 0; i < path.length; i++) {
+			if (i > 0) {
+				sb.append(", ");
+			}
+			sb.append(String.valueOf(path[i]));
+		}
+		sb.append(']');
+		return sb.toString();
 	}
 }

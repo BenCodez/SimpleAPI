@@ -47,7 +47,7 @@ class VelocityJSONFileTest {
         writer.save();
 
         VelocityJSONFile reader = new VelocityJSONFile(file);
-        String value = reader.getString(reader.getNode("some", "nested", "key"), null);
+        String value = reader.getString(reader.getNode("some", "nested", "key"), "");
         assertEquals("myValue", value);
     }
 

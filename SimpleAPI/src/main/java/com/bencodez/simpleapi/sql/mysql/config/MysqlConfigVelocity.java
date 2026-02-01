@@ -1,9 +1,9 @@
 package com.bencodez.simpleapi.sql.mysql.config;
 
+import org.spongepowered.configurate.ConfigurationNode;
+
 import com.bencodez.simpleapi.file.velocity.VelocityYMLFile;
 import com.bencodez.simpleapi.sql.mysql.DbType;
-
-import ninja.leaping.configurate.ConfigurationNode;
 
 public class MysqlConfigVelocity extends MysqlConfig {
 

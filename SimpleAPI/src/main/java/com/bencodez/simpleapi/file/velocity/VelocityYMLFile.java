@@ -2,49 +2,67 @@ package com.bencodez.simpleapi.file.velocity;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.yaml.snakeyaml.DumperOptions;
-
-import com.google.common.reflect.TypeToken;
+import org.spongepowered.configurate.BasicConfigurationNode;
+import org.spongepowered.configurate.ConfigurationNode;
+import org.spongepowered.configurate.serialize.SerializationException;
+import org.spongepowered.configurate.yaml.NodeStyle;
+import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import lombok.Getter;
 import lombok.Setter;
-import ninja.leaping.configurate.ConfigurationNode;
-import ninja.leaping.configurate.objectmapping.ObjectMappingException;
-import ninja.leaping.configurate.yaml.YAMLConfigurationLoader;
 
 public class VelocityYMLFile {
+
 	@Getter
 	@Setter
 	private ConfigurationNode conf;
+
 	@Getter
-	private File file;
-	private YAMLConfigurationLoader loader;
+	private final File file;
+
+	private YamlConfigurationLoader loader;
 
 	public VelocityYMLFile(File file) {
-
 		this.file = file;
-		if (!file.exists()) {
-			try {
-				file.createNewFile();
-				if (file.getParentFile() != null && !file.getParentFile().exists()) {
-					file.getParentFile().mkdirs();
-				}
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
-		loader = YAMLConfigurationLoader.builder().setFlowStyle(DumperOptions.FlowStyle.BLOCK).setPath(file.toPath())
-				.build();
+		ensureFileExists(file);
 
+		this.loader = buildLoader(file.toPath());
+		this.conf = loadOrEmpty();
+	}
+
+	private static void ensureFileExists(File file) {
 		try {
-			conf = loader.load();
+			File parent = file.getParentFile();
+			if (parent != null && !parent.exists()) {
+				parent.mkdirs();
+			}
+			if (!file.exists()) {
+				file.createNewFile();
+			}
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+	}
 
+	private static YamlConfigurationLoader buildLoader(Path path) {
+		return YamlConfigurationLoader.builder()
+				.path(path)
+				.nodeStyle(NodeStyle.BLOCK)
+				.build();
+	}
+
+	private ConfigurationNode loadOrEmpty() {
+		try {
+			return loader.load();
+		} catch (IOException e) {
+			e.printStackTrace();
+			// Fallback root node using the loader's default options
+			return BasicConfigurationNode.root(loader.defaultOptions());
+		}
 	}
 
 	public boolean getBoolean(ConfigurationNode node, boolean def) {
@@ -65,8 +83,8 @@ public class VelocityYMLFile {
 
 	public ArrayList<String> getKeys(ConfigurationNode node) {
 		ArrayList<String> keys = new ArrayList<>();
-		for (ConfigurationNode key : node.getChildrenMap().values()) {
-			keys.add(key.getKey().toString());
+		for (Object key : node.childrenMap().keySet()) {
+			keys.add(String.valueOf(key));
 		}
 		return keys;
 	}
@@ -76,7 +94,7 @@ public class VelocityYMLFile {
 	}
 
 	public ConfigurationNode getNode(Object... path) {
-		return getData().getNode(path);
+		return getData().node(path);
 	}
 
 	public String getString(ConfigurationNode node, String def) {
@@ -85,22 +103,16 @@ public class VelocityYMLFile {
 
 	public List<String> getStringList(ConfigurationNode node, ArrayList<String> def) {
 		try {
-			return node.getList(TypeToken.of(String.class), def);
-		} catch (ObjectMappingException e) {
+			return node.getList(String.class, def);
+		} catch (SerializationException e) {
 			e.printStackTrace();
 			return def;
 		}
 	}
 
 	public void reload() {
-		loader = YAMLConfigurationLoader.builder().setFlowStyle(DumperOptions.FlowStyle.BLOCK).setPath(file.toPath())
-				.build();
-
-		try {
-			conf = loader.load();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+		this.loader = buildLoader(file.toPath());
+		this.conf = loadOrEmpty();
 	}
 
 	public void save() {
