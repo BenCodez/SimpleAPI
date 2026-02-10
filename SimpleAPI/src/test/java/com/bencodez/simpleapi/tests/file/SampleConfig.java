@@ -1,4 +1,4 @@
-package com.bencodez.simpleapi.tests;
+package com.bencodez.simpleapi.tests.file;
 
 import java.util.Arrays;
 import java.util.List;
