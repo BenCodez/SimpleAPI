@@ -72,7 +72,7 @@ public final class ParsedDuration {
 	}
 
 	/**
-	 * Checks if this duration is empty (<= 0ms).
+	 * Checks if this duration is empty.
 	 *
 	 * @return true if empty
 	 */
