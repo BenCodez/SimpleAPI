@@ -1,4 +1,4 @@
-package com.bencodez.simpleapi.tests;
+package com.bencodez.simpleapi.tests.servercom;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
