@@ -13,6 +13,7 @@ com.bencodez.simpleapi.metrics
 com.bencodez.simpleapi.nms
 com.bencodez.simpleapi.player
 com.bencodez.simpleapi.scheduler
+com.bencodez.simpleapi.servercomm.codec
 com.bencodez.simpleapi.servercomm.global
 com.bencodez.simpleapi.servercomm.mqtt
 com.bencodez.simpleapi.servercomm.mysql
@@ -28,5 +29,6 @@ com.bencodez.simpleapi.sql.mysql.config
 com.bencodez.simpleapi.sql.mysql.queries
 com.bencodez.simpleapi.sql.sqlite
 com.bencodez.simpleapi.sql.sqlite.db
+com.bencodez.simpleapi.time
 com.bencodez.simpleapi.updater
 com.bencodez.simpleapi.utils
