@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.bencodez</groupId>
     <artifactId>simpleapi</artifactId>
-    <version>1.0</version>
+    <version>1.0.1-SNAPSHOT</version>
     <name>SimpleAPI</name>
     <properties>
         <!-- github server corresponds to entry in ~/.m2/settings.xml -->
