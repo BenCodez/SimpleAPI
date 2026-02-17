@@ -9,6 +9,12 @@ import com.zaxxer.hikari.HikariDataSource;
 import lombok.Getter;
 import lombok.Setter;
 
+/**
+ * Manages a HikariCP-backed SQL connection pool for MySQL/MariaDB/PostgreSQL.
+ *
+ * Supports a failover mode where if {@link DbType#MARIADB} is selected but the MariaDB JDBC
+ * driver is not present, it will automatically fall back to the MySQL driver.
+ */
 public class ConnectionManager {
 
 	@Getter
@@ -94,6 +100,14 @@ public class ConnectionManager {
 	@Setter
 	private DbType dbType = DbType.MYSQL;
 
+	/**
+	 * If true and {@link DbType#MARIADB} is selected, but the MariaDB driver is not present,
+	 * fall back to using the MySQL driver automatically.
+	 */
+	@Getter
+	@Setter
+	private boolean mariadbFallbackToMysqlDriver = true;
+
 	public ConnectionManager(String host, String port, String username, String password, String database) {
 		this.host = host;
 		this.port = port;
@@ -143,6 +157,17 @@ public class ConnectionManager {
 		Class.forName(className);
 	}
 
+	/**
+	 * Resolves the JDBC driver class to use.
+	 *
+	 * Behavior:
+	 * - If {@link #mysqlDriver} is explicitly set, that driver must be present and is used.
+	 * - Otherwise, uses the driver implied by {@link #dbType}.
+	 * - If {@link DbType#MARIADB} is selected and the MariaDB driver isn't present, optionally falls back to the MySQL driver.
+	 *
+	 * @return The resolved driver class name.
+	 * @throws ClassNotFoundException if no suitable driver is available.
+	 */
 	private String resolveDriver() throws ClassNotFoundException {
 		// Allow explicit override (keeps field name mysqlDriver for minimal churn)
 		if (mysqlDriver != null && !mysqlDriver.isEmpty()) {
@@ -150,22 +175,36 @@ public class ConnectionManager {
 			return mysqlDriver;
 		}
 
-		String className;
 		switch (dbType) {
 		case POSTGRESQL:
-			className = "org.postgresql.Driver";
-			break;
+			ensureDriverPresent("org.postgresql.Driver");
+			return "org.postgresql.Driver";
 		case MARIADB:
-			className = "org.mariadb.jdbc.Driver";
-			break;
+			return resolveMariaDbWithFallback();
 		case MYSQL:
 		default:
-			className = "com.mysql.cj.jdbc.Driver";
-			break;
+			ensureDriverPresent("com.mysql.cj.jdbc.Driver");
+			return "com.mysql.cj.jdbc.Driver";
 		}
+	}
 
-		ensureDriverPresent(className);
-		return className;
+	/**
+	 * Resolves MariaDB driver with optional fallback to MySQL driver if MariaDB driver is missing.
+	 *
+	 * @return Driver class name to use.
+	 * @throws ClassNotFoundException if neither MariaDB nor fallback MySQL driver is present.
+	 */
+	private String resolveMariaDbWithFallback() throws ClassNotFoundException {
+		try {
+			ensureDriverPresent("org.mariadb.jdbc.Driver");
+			return "org.mariadb.jdbc.Driver";
+		} catch (ClassNotFoundException e) {
+			if (!mariadbFallbackToMysqlDriver) {
+				throw e;
+			}
+			ensureDriverPresent("com.mysql.cj.jdbc.Driver");
+			return "com.mysql.cj.jdbc.Driver";
+		}
 	}
 
 	private String buildJdbcUrl(String driverClassName) {
