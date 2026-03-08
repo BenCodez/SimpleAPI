@@ -34,7 +34,7 @@ public class MessageAPITest {
 	}
 
 	/**
-	 * Encoding-safe test: don't compare strings containing '§' at all.
+	 * Encoding-safe test: don't compare strings containing at all.
 	 * We strip colors and compare the plain text output.
 	 */
 	@Test

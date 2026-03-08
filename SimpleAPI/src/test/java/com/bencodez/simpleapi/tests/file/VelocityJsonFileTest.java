@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import org.junit.jupiter.api.DisplayName;
@@ -17,8 +18,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.bencodez.simpleapi.file.velocity.VelocityJSONFile;
-
-import lombok.var;
 
 class VelocityJSONFileTest {
 
@@ -119,7 +118,7 @@ class VelocityJSONFileTest {
         Path file = tmpRoot.resolve("conc/config.json");
         VelocityJSONFile v = new VelocityJSONFile(file);
 
-        var pool = Executors.newFixedThreadPool(4);
+       ExecutorService pool = Executors.newFixedThreadPool(4);
         try {
             for (int i = 0; i < 20; i++) {
                 final int n = i;
