@@ -2,6 +2,8 @@ package com.bencodez.simpleapi.messages;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -175,6 +177,47 @@ public class MessageAPI {
 		num = num / Math.pow(10, decimals);
 		DecimalFormat df = new DecimalFormat("#.00");
 		return df.format(num);
+	}
+
+	public static String replacePlaceHolder(String str, HashMap<String, String> placeholders) {
+		if (placeholders != null) {
+			for (Entry<String, String> entry : placeholders.entrySet()) {
+				str = replacePlaceHolder(str, entry.getKey(), entry.getValue());
+			}
+		}
+		return str;
+	}
+
+	public static String replacePlaceHolder(String str, HashMap<String, String> placeholders, boolean ignoreCase) {
+		if (placeholders != null) {
+			for (Entry<String, String> entry : placeholders.entrySet()) {
+				str = replacePlaceHolder(str, entry.getKey(), entry.getValue(), ignoreCase);
+			}
+		}
+		return str;
+	}
+
+	/**
+	 * Replace place holder.
+	 *
+	 * @param str         the str
+	 * @param toReplace   the to replace
+	 * @param replaceWith the replace with
+	 * @return the string
+	 */
+	public static String replacePlaceHolder(String str, String toReplace, String replaceWith) {
+		return replacePlaceHolder(str, toReplace, replaceWith, true);
+	}
+
+	public static String replacePlaceHolder(String str, String toReplace, String replaceWith, boolean ignoreCase) {
+		if (ignoreCase) {
+			return MessageAPI.replaceIgnoreCase(MessageAPI.replaceIgnoreCase(str, "%" + toReplace + "%", replaceWith),
+					"\\{" + toReplace + "\\}", replaceWith);
+		}
+		str = str.replaceAll("\\{", "%");
+		str = str.replaceAll("\\}", "%");
+		str = str.replace("%" + toReplace + "%", replaceWith);
+		return str;
 	}
 
 	public static void sendJson(Player player, ArrayList<TextComponent> messages) {
