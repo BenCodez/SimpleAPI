@@ -54,6 +54,14 @@ public class ConfirmationDialogBuilder {
 		return this;
 	}
 
+
+	public ConfirmationDialogBuilder input(String id, Consumer<DialogInputBuilder> builderConsumer) {
+		DialogInputBuilder builder = new DialogInputBuilder(id, player, placeholders);
+		builderConsumer.accept(builder);
+		request.addInput(builder.build());
+		return this;
+	}
+
 	public ConfirmationDialogBuilder namespace(String namespace) {
 		request.setNamespace(namespace);
 		return this;

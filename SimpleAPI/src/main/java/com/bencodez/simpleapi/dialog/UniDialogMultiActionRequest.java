@@ -18,5 +18,10 @@ public class UniDialogMultiActionRequest {
     private String namespace;
     private int columns = 1;
     private Integer buttonWidth;
-    private List<UniDialogButton> buttons = new ArrayList<>();
+    private List<UniDialogButton> buttons = new ArrayList<UniDialogButton>();
+    private List<UniDialogInput> inputs = new ArrayList<UniDialogInput>();
+
+    public void addInput(UniDialogInput input) {
+        inputs.add(input);
+    }
 }
