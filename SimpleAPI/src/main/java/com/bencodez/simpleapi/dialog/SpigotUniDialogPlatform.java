@@ -69,8 +69,7 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 			registerCustomAction(namespace, actionId, request.getCallback());
 		}
 
-		BungeeNoticeDialog<SpigotDialogOpener> dialog = manager.createNoticeDialog()
-				.title(request.getTitle())
+		BungeeNoticeDialog<SpigotDialogOpener> dialog = manager.createNoticeDialog().title(request.getTitle())
 				.body(builder -> builder.text().text(request.getBody()));
 
 		applyInputs(dialog, request.getInputs());
@@ -98,8 +97,7 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 
 		BungeeConfirmationDialog<SpigotDialogOpener> dialog = manager.createConfirmationDialog()
-				.title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody()));
+				.title(request.getTitle()).body(builder -> builder.text().text(request.getBody()));
 
 		applyInputs(dialog, request.getInputs());
 
@@ -120,10 +118,8 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 	public void showMultiAction(Player player, UniDialogMultiActionRequest request) {
 		String namespace = resolveNamespace(request.getNamespace());
 
-		BungeeMultiActionDialog<SpigotDialogOpener> dialog = manager.createMultiActionDialog()
-				.title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody()))
-				.columns(request.getColumns());
+		BungeeMultiActionDialog<SpigotDialogOpener> dialog = manager.createMultiActionDialog().title(request.getTitle())
+				.body(builder -> builder.text().text(request.getBody())).columns(request.getColumns());
 
 		applyInputs(dialog, request.getInputs());
 
@@ -157,12 +153,6 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 		dialog.opener().open(player.getUniqueId());
 	}
 
-	/**
-	 * Apply inputs to a notice dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param inputs the inputs
-	 */
 	private void applyInputs(BungeeNoticeDialog<SpigotDialogOpener> dialog, Iterable<UniDialogInput> inputs) {
 		if (inputs == null) {
 			return;
@@ -173,12 +163,6 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 	}
 
-	/**
-	 * Apply inputs to a confirmation dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param inputs the inputs
-	 */
 	private void applyInputs(BungeeConfirmationDialog<SpigotDialogOpener> dialog, Iterable<UniDialogInput> inputs) {
 		if (inputs == null) {
 			return;
@@ -189,12 +173,6 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 	}
 
-	/**
-	 * Apply inputs to a multi-action dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param inputs the inputs
-	 */
 	private void applyInputs(BungeeMultiActionDialog<SpigotDialogOpener> dialog, Iterable<UniDialogInput> inputs) {
 		if (inputs == null) {
 			return;
@@ -205,75 +183,74 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 	}
 
-	/**
-	 * Apply a single input to a notice dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param input  the input
-	 */
 	private void applyInput(BungeeNoticeDialog<SpigotDialogOpener> dialog, UniDialogInput input) {
 		if (input == null || input.getId() == null || input.getId().isEmpty()) {
 			return;
 		}
 
 		dialog.input(input.getId(), builder -> {
-			String label = getInputLabel(input);
-			builder.textInput().label(label);
+			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
+				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+			} else {
+				String initial = getInputInitial(input);
+				if (initial != null && !initial.isEmpty()) {
+					builder.textInput().label(getInputLabel(input)).initial(initial);
+				} else {
+					builder.textInput().label(getInputLabel(input));
+				}
+			}
 		});
 	}
 
-	/**
-	 * Apply a single input to a confirmation dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param input  the input
-	 */
 	private void applyInput(BungeeConfirmationDialog<SpigotDialogOpener> dialog, UniDialogInput input) {
 		if (input == null || input.getId() == null || input.getId().isEmpty()) {
 			return;
 		}
 
 		dialog.input(input.getId(), builder -> {
-			String label = getInputLabel(input);
-			builder.textInput().label(label);
+			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
+				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+			} else {
+				String initial = getInputInitial(input);
+				if (initial != null && !initial.isEmpty()) {
+					builder.textInput().label(getInputLabel(input)).initial(initial);
+				} else {
+					builder.textInput().label(getInputLabel(input));
+				}
+			}
 		});
 	}
 
-	/**
-	 * Apply a single input to a multi-action dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param input  the input
-	 */
 	private void applyInput(BungeeMultiActionDialog<SpigotDialogOpener> dialog, UniDialogInput input) {
 		if (input == null || input.getId() == null || input.getId().isEmpty()) {
 			return;
 		}
 
 		dialog.input(input.getId(), builder -> {
-			String label = getInputLabel(input);
-			builder.textInput().label(label);
+			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
+				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+			} else {
+				String initial = getInputInitial(input);
+				if (initial != null && !initial.isEmpty()) {
+					builder.textInput().label(getInputLabel(input)).initial(initial);
+				} else {
+					builder.textInput().label(getInputLabel(input));
+				}
+			}
 		});
 	}
 
-	/**
-	 * Get the best label to use for an input.
-	 *
-	 * @param input the input
-	 * @return the label
-	 */
 	private String getInputLabel(UniDialogInput input) {
 		String label = input.getLabel();
-
-		if ((label == null || label.isEmpty()) && input.getPlaceholder() != null
-				&& !input.getPlaceholder().isEmpty()) {
-			label = input.getPlaceholder();
-		}
 
 		if (label == null || label.isEmpty()) {
 			label = input.getId();
 		}
 
 		return label;
+	}
+
+	private String getInputInitial(UniDialogInput input) {
+		return input.getInitialValue();
 	}
 }

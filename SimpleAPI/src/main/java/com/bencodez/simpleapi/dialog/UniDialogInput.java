@@ -7,9 +7,15 @@ import lombok.Setter;
 @Setter
 public class UniDialogInput {
 
-    private String id;
-    private String label;
-    private String placeholder;
-    private boolean required = false;
+	public enum InputType {
+		TEXT,
+		BOOLEAN
+	}
 
+	private String id;
+	private String label;
+	private String initialValue;
+	private boolean required;
+	private InputType type = InputType.TEXT;
+	private boolean initialBoolean;
 }

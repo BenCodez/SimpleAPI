@@ -68,8 +68,7 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 			registerCustomAction(namespace, actionId, request.getCallback());
 		}
 
-		PaperNoticeDialog dialog = manager.createNoticeDialog()
-				.title(request.getTitle())
+		PaperNoticeDialog dialog = manager.createNoticeDialog().title(request.getTitle())
 				.body(builder -> builder.text().text(request.getBody()));
 
 		applyInputs(dialog, request.getInputs());
@@ -96,8 +95,7 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 			registerCustomAction(namespace, noActionId, request.getNoCallback());
 		}
 
-		PaperConfirmationDialog dialog = manager.createConfirmationDialog()
-				.title(request.getTitle())
+		PaperConfirmationDialog dialog = manager.createConfirmationDialog().title(request.getTitle())
 				.body(builder -> builder.text().text(request.getBody()));
 
 		applyInputs(dialog, request.getInputs());
@@ -119,10 +117,8 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 	public void showMultiAction(Player player, UniDialogMultiActionRequest request) {
 		String namespace = resolveNamespace(request.getNamespace());
 
-		PaperMultiActionDialog dialog = manager.createMultiActionDialog()
-				.title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody()))
-				.columns(request.getColumns());
+		PaperMultiActionDialog dialog = manager.createMultiActionDialog().title(request.getTitle())
+				.body(builder -> builder.text().text(request.getBody())).columns(request.getColumns());
 
 		applyInputs(dialog, request.getInputs());
 
@@ -156,12 +152,6 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 		dialog.opener().open(player.getUniqueId());
 	}
 
-	/**
-	 * Apply inputs to a notice dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param inputs the inputs
-	 */
 	private void applyInputs(PaperNoticeDialog dialog, Iterable<UniDialogInput> inputs) {
 		if (inputs == null) {
 			return;
@@ -172,12 +162,6 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 	}
 
-	/**
-	 * Apply inputs to a confirmation dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param inputs the inputs
-	 */
 	private void applyInputs(PaperConfirmationDialog dialog, Iterable<UniDialogInput> inputs) {
 		if (inputs == null) {
 			return;
@@ -188,12 +172,6 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 	}
 
-	/**
-	 * Apply inputs to a multi-action dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param inputs the inputs
-	 */
 	private void applyInputs(PaperMultiActionDialog dialog, Iterable<UniDialogInput> inputs) {
 		if (inputs == null) {
 			return;
@@ -204,75 +182,75 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 	}
 
-	/**
-	 * Apply a single input to a notice dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param input  the input
-	 */
 	private void applyInput(PaperNoticeDialog dialog, UniDialogInput input) {
 		if (input == null || input.getId() == null || input.getId().isEmpty()) {
 			return;
 		}
 
 		dialog.input(input.getId(), builder -> {
-			String label = getInputLabel(input);
-			builder.textInput().label(label);
+			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
+				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+			} else {
+				String initial = getInputInitial(input);
+				if (initial != null && !initial.isEmpty()) {
+					builder.textInput().label(getInputLabel(input)).initial(initial);
+				} else {
+					builder.textInput().label(getInputLabel(input));
+				}
+			}
 		});
 	}
 
-	/**
-	 * Apply a single input to a confirmation dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param input  the input
-	 */
 	private void applyInput(PaperConfirmationDialog dialog, UniDialogInput input) {
 		if (input == null || input.getId() == null || input.getId().isEmpty()) {
 			return;
 		}
 
 		dialog.input(input.getId(), builder -> {
-			String label = getInputLabel(input);
-			builder.textInput().label(label);
+			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
+				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+			} else {
+				String initial = getInputInitial(input);
+				if (initial != null && !initial.isEmpty()) {
+					builder.textInput().label(getInputLabel(input)).initial(initial);
+				} else {
+					builder.textInput().label(getInputLabel(input));
+				}
+			}
 		});
+
 	}
 
-	/**
-	 * Apply a single input to a multi-action dialog.
-	 *
-	 * @param dialog the dialog
-	 * @param input  the input
-	 */
 	private void applyInput(PaperMultiActionDialog dialog, UniDialogInput input) {
 		if (input == null || input.getId() == null || input.getId().isEmpty()) {
 			return;
 		}
 
 		dialog.input(input.getId(), builder -> {
-			String label = getInputLabel(input);
-			builder.textInput().label(label);
+			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
+				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+			} else {
+				String initial = getInputInitial(input);
+				if (initial != null && !initial.isEmpty()) {
+					builder.textInput().label(getInputLabel(input)).initial(initial);
+				} else {
+					builder.textInput().label(getInputLabel(input));
+				}
+			}
 		});
 	}
 
-	/**
-	 * Get the best label to use for an input.
-	 *
-	 * @param input the input
-	 * @return the label
-	 */
 	private String getInputLabel(UniDialogInput input) {
 		String label = input.getLabel();
-
-		if ((label == null || label.isEmpty()) && input.getPlaceholder() != null
-				&& !input.getPlaceholder().isEmpty()) {
-			label = input.getPlaceholder();
-		}
 
 		if (label == null || label.isEmpty()) {
 			label = input.getId();
 		}
 
 		return label;
+	}
+
+	private String getInputInitial(UniDialogInput input) {
+		return input.getInitialValue();
 	}
 }
