@@ -180,24 +180,6 @@ public class NMSManager {
 	}
 
 	/**
-	 * Gets the NMS class.
-	 *
-	 * @param className the class name
-	 * @return the NMS class
-	 */
-	@Deprecated
-	public Class<?> getNMSClass(String className) {
-		String fullName = "net.minecraft.server." + getVersion() + className;
-		Class<?> clazz = null;
-		try {
-			clazz = Class.forName(fullName);
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-		return clazz;
-	}
-
-	/**
 	 * Gets the player field.
 	 *
 	 * @param player the player
@@ -226,17 +208,6 @@ public class NMSManager {
 	 */
 	public Class<?> getPrimitiveType(Class<?> clazz) {
 		return CORRESPONDING_TYPES.containsKey(clazz) ? CORRESPONDING_TYPES.get(clazz) : clazz;
-	}
-
-	/**
-	 * Gets the version.
-	 *
-	 * @return the version
-	 */
-	@Deprecated
-	public String getVersion() {
-		String name = Bukkit.getServer().getClass().getPackage().getName();
-		return name.substring(name.lastIndexOf('.') + 1) + ".";
 	}
 
 	/**
@@ -272,6 +243,7 @@ public class NMSManager {
 		}
 	}
 
+	@Deprecated
 	public boolean isVersion(String... versions) {
 		String serverVersion = Bukkit.getVersion();
 		for (String version : versions) {
