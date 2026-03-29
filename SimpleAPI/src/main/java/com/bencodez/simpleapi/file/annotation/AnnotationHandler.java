@@ -5,8 +5,11 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import org.bukkit.configuration.ConfigurationSection;
+
+import com.bencodez.simpleapi.time.ParsedDuration;
 
 public class AnnotationHandler {
 
@@ -89,7 +92,7 @@ public class AnnotationHandler {
 
 					field.set(classToLoad, value);
 				}
-				
+
 				ConfigDataLong longAnnotation = field.getAnnotation(ConfigDataLong.class);
 				if (longAnnotation != null) {
 					long defaultValue = longAnnotation.defaultValue();
@@ -228,6 +231,40 @@ public class AnnotationHandler {
 					}
 
 					field.set(classToLoad, value);
+				}
+
+				ConfigDataParsedDuration durationAnnotation = field.getAnnotation(ConfigDataParsedDuration.class);
+				if (durationAnnotation != null) {
+
+					String defaultValue = durationAnnotation.defaultValue();
+
+					if (defaultValue.isEmpty()) {
+						try {
+							Object v = field.get(classToLoad);
+							if (v != null) {
+								defaultValue = v.toString();
+							}
+						} catch (Exception e) {
+
+						}
+					}
+
+					String value = "";
+
+					if (!durationAnnotation.secondPath().isEmpty()) {
+						value = config.getString(durationAnnotation.path(),
+								config.getString(durationAnnotation.secondPath(), defaultValue));
+					} else {
+						value = config.getString(durationAnnotation.path(), defaultValue);
+					}
+
+					try {
+						// Assumes ParsedDuration has a constructor or static parse method
+						Object parsedDuration = ParsedDuration.parse(value, durationAnnotation.defaultTimeUnit());
+						field.set(classToLoad, parsedDuration);
+					} catch (Exception e) {
+						e.printStackTrace();
+					}
 				}
 
 			} catch (Exception e) {
