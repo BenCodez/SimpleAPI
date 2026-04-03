@@ -8,45 +8,88 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import lombok.Getter;
+import lombok.Setter;
+
 /**
  * Parsed duration stored as fixed milliseconds.
  *
- * <p>
- * Supported formats (case-insensitive):
- * <ul>
- * <li>5000ms</li>
- * <li>60s</li>
- * <li>30m</li>
- * <li>12h</li>
- * <li>1d</li>
- * <li>2w</li>
- * <li>1mo (treated as a fixed 30 days)</li>
- * <li>Combined tokens: 1h30m, 2d12h, 1w2d3h4m5s6ms (spaces allowed between segments)</li>
- * <li>ISO-8601 (Duration.parse): PT30M, PT12H, P1D, etc (months/years not supported by Duration)</li>
- * <li>Plain number: "30" -> uses a configurable default unit</li>
- * </ul>
+ * Supported formats (case-insensitive): - 5000ms - 60s - 30m - 12h - 1d - 2w -
+ * 1mo (treated as a fixed 30 days) - Combined tokens: 1h30m, 2d12h,
+ * 1w2d3h4m5s6ms - ISO-8601 durations such as PT30M, PT12H, P1D - Plain number
+ * such as "30" using a configurable default unit
  *
- * <p>
- * This class stores durations as fixed milliseconds. Any parsing that uses
- * {@link TimeUnit#MICROSECONDS} or {@link TimeUnit#NANOSECONDS} will be truncated to milliseconds.
- * </p>
+ * This class stores durations as fixed milliseconds.
  */
+@Getter
+@Setter
 public final class ParsedDuration {
 
 	private static final Pattern PLAIN_NUMBER = Pattern.compile("^[0-9]+$");
 	private static final Pattern VALUE_SUFFIX = Pattern.compile("^([0-9]+)\\s*([a-zA-Z]+)$");
 	private static final Pattern SEGMENT = Pattern.compile("([0-9]+)\\s*([a-zA-Z]+)");
 
+	private static final DurationFormatLabels DEFAULT_LABELS = new DurationFormatLabels("s", "m", "h", "d", "w", "mo");
+
 	private final long millis;
+
+	/**
+	 * Formatting labels for this duration instance.
+	 */
+	private DurationFormatLabels formatLabels;
 
 	private ParsedDuration(long millis) {
 		this.millis = Math.max(0L, millis);
+		this.formatLabels = DEFAULT_LABELS.copy();
 	}
 
 	/**
-	 * Creates an empty duration (0ms).
+	 * Label container used for formatting durations.
+	 */
+	@Getter
+	@Setter
+	public static class DurationFormatLabels {
+		private String seconds;
+		private String minutes;
+		private String hours;
+		private String days;
+		private String weeks;
+		private String months;
+
+		/**
+		 * Creates a new label set.
+		 *
+		 * @param seconds Seconds label
+		 * @param minutes Minutes label
+		 * @param hours   Hours label
+		 * @param days    Days label
+		 * @param weeks   Weeks label
+		 * @param months  Months label
+		 */
+		public DurationFormatLabels(String seconds, String minutes, String hours, String days, String weeks,
+				String months) {
+			this.seconds = sanitizeLabel(seconds, "s");
+			this.minutes = sanitizeLabel(minutes, "m");
+			this.hours = sanitizeLabel(hours, "h");
+			this.days = sanitizeLabel(days, "d");
+			this.weeks = sanitizeLabel(weeks, "w");
+			this.months = sanitizeLabel(months, "mo");
+		}
+
+		/**
+		 * Creates a copy of this label set.
+		 *
+		 * @return Copied labels
+		 */
+		public DurationFormatLabels copy() {
+			return new DurationFormatLabels(seconds, minutes, hours, days, weeks, months);
+		}
+	}
+
+	/**
+	 * Creates an empty duration.
 	 *
-	 * @return empty duration
+	 * @return Empty duration
 	 */
 	public static ParsedDuration empty() {
 		return new ParsedDuration(0L);
@@ -55,36 +98,115 @@ public final class ParsedDuration {
 	/**
 	 * Creates a duration from milliseconds.
 	 *
-	 * @param millis milliseconds
-	 * @return duration
+	 * @param millis Milliseconds
+	 * @return Duration
 	 */
 	public static ParsedDuration ofMillis(long millis) {
 		return new ParsedDuration(millis);
 	}
 
 	/**
-	 * Gets the duration in fixed milliseconds.
+	 * Creates a duration from seconds.
 	 *
-	 * @return milliseconds
+	 * @param seconds Seconds
+	 * @return Duration
 	 */
-	public long getMillis() {
-		return millis;
+	public static ParsedDuration ofSeconds(long seconds) {
+		return ofMillis(TimeUnit.SECONDS.toMillis(seconds));
 	}
 
 	/**
-	 * Checks if this duration is empty.
+	 * Creates a duration from minutes.
 	 *
-	 * @return true if empty
+	 * @param minutes Minutes
+	 * @return Duration
 	 */
-	public boolean isEmpty() {
-		return millis <= 0L;
+	public static ParsedDuration ofMinutes(long minutes) {
+		return ofMillis(TimeUnit.MINUTES.toMillis(minutes));
+	}
+
+	/**
+	 * Creates a duration from hours.
+	 *
+	 * @param hours Hours
+	 * @return Duration
+	 */
+	public static ParsedDuration ofHours(long hours) {
+		return ofMillis(TimeUnit.HOURS.toMillis(hours));
+	}
+
+	/**
+	 * Creates a duration from days.
+	 *
+	 * @param days Days
+	 * @return Duration
+	 */
+	public static ParsedDuration ofDays(long days) {
+		return ofMillis(TimeUnit.DAYS.toMillis(days));
+	}
+
+	/**
+	 * Creates a duration from weeks.
+	 *
+	 * @param weeks Weeks
+	 * @return Duration
+	 */
+	public static ParsedDuration ofWeeks(long weeks) {
+		return ofMillis(safeMul(TimeUnit.DAYS.toMillis(7L), weeks));
+	}
+
+	/**
+	 * Creates a duration from fixed 30-day months.
+	 *
+	 * @param months Months
+	 * @return Duration
+	 */
+	public static ParsedDuration ofMonths(long months) {
+		return ofMillis(safeMul(TimeUnit.DAYS.toMillis(30L), months));
+	}
+
+	/**
+	 * Creates default formatting labels.
+	 *
+	 * @return Default labels
+	 */
+	public static DurationFormatLabels defaultLabels() {
+		return DEFAULT_LABELS.copy();
+	}
+
+	/**
+	 * Sets this instance's labels.
+	 *
+	 * @param labels Labels to use
+	 * @return This instance
+	 */
+	public ParsedDuration withFormatLabels(DurationFormatLabels labels) {
+		this.formatLabels = labels == null ? DEFAULT_LABELS.copy() : labels.copy();
+		return this;
+	}
+
+	/**
+	 * Sets this instance's labels using individual values.
+	 *
+	 * @param seconds Seconds label
+	 * @param minutes Minutes label
+	 * @param hours   Hours label
+	 * @param days    Days label
+	 * @param weeks   Weeks label
+	 * @param months  Months label
+	 * @return This instance
+	 */
+	public ParsedDuration withFormatLabels(String seconds, String minutes, String hours, String days, String weeks,
+			String months) {
+		this.formatLabels = new DurationFormatLabels(seconds, minutes, hours, days, weeks, months);
+		return this;
 	}
 
 	/**
 	 * Parses the input using MINUTES as the default unit for number-only strings.
 	 *
-	 * @param raw raw input string
-	 * @return parsed duration (never null)
+	 * @param raw Raw input
+	 * @return Parsed duration
 	 */
 	@Deprecated
 	public static ParsedDuration parse(String raw) {
@@ -92,33 +214,22 @@ public final class ParsedDuration {
 	}
 
 	/**
-	 * If {@code raw} is just a number, returns the same value with {@code defaultUnit} applied,
-	 * otherwise returns {@link #parse(String, TimeUnit)} result.
+	 * Parses the input using the provided default unit for number-only strings.
 	 *
-	 * @param raw raw input string
-	 * @param defaultUnit default unit for plain numbers and unknown suffixes
-	 * @return parsed duration (never null)
+	 * @param raw         Raw input
+	 * @param defaultUnit Default unit
+	 * @return Parsed duration
 	 */
 	public static ParsedDuration withDefaultUnit(String raw, TimeUnit defaultUnit) {
 		return parse(raw, defaultUnit);
 	}
 
 	/**
-	 * Parses the input using {@code defaultUnit} if the string is just a number.
+	 * Parses the input using the provided default unit for number-only strings.
 	 *
-	 * <p>
-	 * Example: {@code parse("30", TimeUnit.MINUTES)} => 30 minutes
-	 * </p>
-	 *
-	 * <p>
-	 * Note: {@link ParsedDuration} stores fixed milliseconds. If you use
-	 * {@link TimeUnit#MICROSECONDS} or {@link TimeUnit#NANOSECONDS} as the default unit,
-	 * the parsed value will be truncated to milliseconds (via {@link TimeUnit#toMillis(long)}).
-	 * </p>
-	 *
-	 * @param raw raw input string
-	 * @param defaultUnit default unit for plain numbers and unknown suffixes
-	 * @return parsed duration (never null)
+	 * @param raw         Raw input
+	 * @param defaultUnit Default unit
+	 * @return Parsed duration
 	 */
 	public static ParsedDuration parse(String raw, TimeUnit defaultUnit) {
 		if (raw == null) {
@@ -131,33 +242,28 @@ public final class ParsedDuration {
 
 		Objects.requireNonNull(defaultUnit, "defaultUnit");
 
-		// number-only -> default time unit
 		if (PLAIN_NUMBER.matcher(s).matches()) {
 			return applyDefaultTimeUnit(s, defaultUnit);
 		}
 
 		String lower = s.toLowerCase(Locale.ROOT);
 
-		// ISO-8601 Duration support (PT30M, PT12H, P1D, etc)
 		if (lower.startsWith("p")) {
 			try {
 				Duration d = Duration.parse(s.toUpperCase(Locale.ROOT));
 				return ofMillis(d.toMillis());
 			} catch (Exception ignored) {
-				// fall through
+				// Ignore and fall through to other parsing modes.
 			}
 		}
 
-		// Try combined token parsing first: "1h30m", "2d 12h", "1w2d3h", etc.
 		ParsedDuration combined = parseCombinedTokens(lower, defaultUnit);
 		if (combined != null) {
 			return combined;
 		}
 
-		// parse single suffix form: "10m", "5000ms", "1mo"
 		Matcher m = VALUE_SUFFIX.matcher(lower);
 		if (!m.matches()) {
-			// unknown -> best-effort fallback: try extract number, apply default unit
 			String digits = extractLeadingDigits(lower);
 			if (!digits.isEmpty()) {
 				return applyDefaultTimeUnit(digits, defaultUnit);
@@ -176,10 +282,10 @@ public final class ParsedDuration {
 	}
 
 	/**
-	 * Adds this duration to the provided instant using fixed millis.
+	 * Adds this duration to an instant.
 	 *
-	 * @param base base instant
-	 * @return base + duration, or base if null/empty
+	 * @param base Base instant
+	 * @return Updated instant
 	 */
 	public Instant addTo(Instant base) {
 		if (base == null || isEmpty()) {
@@ -189,11 +295,9 @@ public final class ParsedDuration {
 	}
 
 	/**
-	 * Delay in milliseconds from now until now + this duration.
+	 * Gets delay in milliseconds from now for this duration.
 	 *
-	 * Guaranteed to return at least 1ms when not empty.
-	 *
-	 * @return delay in milliseconds (>= 1)
+	 * @return Delay in milliseconds
 	 */
 	public long delayMillisFromNow() {
 		if (isEmpty()) {
@@ -203,17 +307,151 @@ public final class ParsedDuration {
 	}
 
 	/**
-	 * Parses strings with multiple "value+suffix" segments like "1h30m" or "2d 12h",
-	 * using {@link TimeUnit} as the default unit for unknown suffixes.
+	 * Checks if this duration is empty.
 	 *
-	 * <p>
-	 * Returns null if the input does not look like a valid combined-token duration.
-	 * </p>
-	 *
-	 * @param lower lowercase input
-	 * @param defaultUnit default unit
-	 * @return parsed duration, or null if not a combined-token string
+	 * @return True if empty
 	 */
+	public boolean isEmpty() {
+		return millis <= 0L;
+	}
+
+	/**
+	 * Formats this duration using this instance's labels.
+	 *
+	 * @return Formatted duration
+	 */
+	public String format() {
+		return formatDuration(this.millis, this.formatLabels);
+	}
+
+	/**
+	 * Formats this duration using the provided labels.
+	 *
+	 * @param labels Labels to use
+	 * @return Formatted duration
+	 */
+	public String format(DurationFormatLabels labels) {
+		return formatDuration(this.millis, labels);
+	}
+
+	/**
+	 * Formats milliseconds using default labels.
+	 *
+	 * @param millis Milliseconds
+	 * @return Formatted duration
+	 */
+	public static String formatDuration(long millis) {
+		return formatDuration(millis, DEFAULT_LABELS);
+	}
+
+	/**
+	 * Formats milliseconds using the provided labels.
+	 *
+	 * @param millis Milliseconds
+	 * @param labels Labels
+	 * @return Formatted duration
+	 */
+	public static String formatDuration(long millis, DurationFormatLabels labels) {
+		DurationFormatLabels use = labels == null ? DEFAULT_LABELS : labels;
+
+		if (millis <= 0) {
+			return "0" + use.getSeconds();
+		}
+
+		long remaining = millis;
+
+		long monthMillis = TimeUnit.DAYS.toMillis(30L);
+		long weekMillis = TimeUnit.DAYS.toMillis(7L);
+		long dayMillis = TimeUnit.DAYS.toMillis(1L);
+		long hourMillis = TimeUnit.HOURS.toMillis(1L);
+		long minuteMillis = TimeUnit.MINUTES.toMillis(1L);
+		long secondMillis = TimeUnit.SECONDS.toMillis(1L);
+
+		long months = remaining / monthMillis;
+		remaining %= monthMillis;
+
+		long weeks = remaining / weekMillis;
+		remaining %= weekMillis;
+
+		long days = remaining / dayMillis;
+		remaining %= dayMillis;
+
+		long hours = remaining / hourMillis;
+		remaining %= hourMillis;
+
+		long minutes = remaining / minuteMillis;
+		remaining %= minuteMillis;
+
+		long seconds = remaining / secondMillis;
+
+		StringBuilder sb = new StringBuilder();
+
+		appendPart(sb, months, use.getMonths());
+		appendPart(sb, weeks, use.getWeeks());
+		appendPart(sb, days, use.getDays());
+		appendPart(sb, hours, use.getHours());
+		appendPart(sb, minutes, use.getMinutes());
+		appendPart(sb, seconds, use.getSeconds());
+
+		if (sb.length() == 0) {
+			return "0" + use.getSeconds();
+		}
+
+		return sb.toString().trim();
+	}
+
+	/**
+	 * Formats milliseconds using the largest whole unit with default labels.
+	 *
+	 * @param millis Milliseconds
+	 * @return Short formatted duration
+	 */
+	public static String formatShort(long millis) {
+		return formatShort(millis, DEFAULT_LABELS);
+	}
+
+	/**
+	 * Formats milliseconds using the largest whole unit with the provided labels.
+	 *
+	 * @param millis Milliseconds
+	 * @param labels Labels
+	 * @return Short formatted duration
+	 */
+	public static String formatShort(long millis, DurationFormatLabels labels) {
+		DurationFormatLabels use = labels == null ? DEFAULT_LABELS : labels;
+
+		if (millis <= 0) {
+			return "0" + use.getSeconds();
+		}
+
+		long monthMillis = TimeUnit.DAYS.toMillis(30L);
+		long weekMillis = TimeUnit.DAYS.toMillis(7L);
+		long dayMillis = TimeUnit.DAYS.toMillis(1L);
+		long hourMillis = TimeUnit.HOURS.toMillis(1L);
+		long minuteMillis = TimeUnit.MINUTES.toMillis(1L);
+		long secondMillis = TimeUnit.SECONDS.toMillis(1L);
+
+		if (millis >= monthMillis) {
+			return (millis / monthMillis) + use.getMonths();
+		}
+		if (millis >= weekMillis) {
+			return (millis / weekMillis) + use.getWeeks();
+		}
+		if (millis >= dayMillis) {
+			return (millis / dayMillis) + use.getDays();
+		}
+		if (millis >= hourMillis) {
+			return (millis / hourMillis) + use.getHours();
+		}
+		if (millis >= minuteMillis) {
+			return (millis / minuteMillis) + use.getMinutes();
+		}
+		if (millis >= secondMillis) {
+			return (millis / secondMillis) + use.getSeconds();
+		}
+		return "0" + use.getSeconds();
+	}
+
 	private static ParsedDuration parseCombinedTokens(String lower, TimeUnit defaultUnit) {
 		Matcher seg = SEGMENT.matcher(lower);
 		int count = 0;
@@ -221,7 +459,6 @@ public final class ParsedDuration {
 		long totalMillis = 0L;
 
 		while (seg.find()) {
-			// Ensure we only skip whitespace between segments.
 			if (!onlyWhitespaceBetween(lower, pos, seg.start())) {
 				return null;
 			}
@@ -242,12 +479,10 @@ public final class ParsedDuration {
 			totalMillis = safeAddMillis(totalMillis, piece.millis);
 		}
 
-		// trailing non-whitespace means it's not a valid combined token string
 		if (!onlyWhitespaceBetween(lower, pos, lower.length())) {
 			return null;
 		}
 
-		// Must be at least 2 segments to count as combined tokens.
 		if (count < 2) {
 			return null;
 		}
@@ -278,49 +513,40 @@ public final class ParsedDuration {
 		if (value <= 0L) {
 			return empty();
 		}
-		// TimeUnit.toMillis includes overflow saturation to Long.MAX_VALUE
 		return ofMillis(unit.toMillis(value));
 	}
 
 	private static ParsedDuration applySuffix(long value, String suffixRaw, TimeUnit defaultUnit) {
 		String suffix = suffixRaw.toLowerCase(Locale.ROOT);
 
-		// Milliseconds
 		if (equalsAny(suffix, "ms", "msec", "msecs", "millisecond", "milliseconds")) {
 			return ofMillis(value);
 		}
 
-		// Seconds
 		if (equalsAny(suffix, "s", "sec", "secs", "second", "seconds")) {
 			return ofMillis(TimeUnit.SECONDS.toMillis(value));
 		}
 
-		// Minutes
 		if (equalsAny(suffix, "m", "min", "mins", "minute", "minutes")) {
 			return ofMillis(TimeUnit.MINUTES.toMillis(value));
 		}
 
-		// Hours
 		if (equalsAny(suffix, "h", "hr", "hrs", "hour", "hours")) {
 			return ofMillis(TimeUnit.HOURS.toMillis(value));
 		}
 
-		// Days
 		if (equalsAny(suffix, "d", "day", "days")) {
 			return ofMillis(TimeUnit.DAYS.toMillis(value));
 		}
 
-		// Weeks (fixed 7 days)
 		if (equalsAny(suffix, "w", "wk", "wks", "week", "weeks")) {
 			return ofMillis(safeMul(TimeUnit.DAYS.toMillis(7L), value));
 		}
 
-		// Months (fixed 30 days)
 		if (equalsAny(suffix, "mo", "mon", "mons", "month", "months")) {
 			return ofMillis(safeMul(TimeUnit.DAYS.toMillis(30L), value));
 		}
 
-		// Unknown suffix -> fallback to default timeunit
 		return applyDefaultTimeUnit(Long.toString(value), defaultUnit);
 	}
 
@@ -357,6 +583,31 @@ public final class ParsedDuration {
 		} catch (Exception e) {
 			return 0L;
 		}
+	}
+
+	private static void appendPart(StringBuilder sb, long value, String label) {
+		if (value <= 0) {
+			return;
+		}
+		if (sb.length() > 0) {
+			sb.append(' ');
+		}
+		sb.append(value);
+
+		if (label != null && !label.isEmpty()) {
+			if (label.length() > 1) {
+				sb.append(' ');
+			}
+			sb.append(label);
+		}
+	}
+
+	private static String sanitizeLabel(String value, String def) {
+		if (value == null) {
+			return def;
+		}
+		String trimmed = value.trim();
+		return trimmed.isEmpty() ? def : trimmed;
 	}
 
 	@Override
