@@ -164,7 +164,6 @@ public class CaseInsensitiveFileConfiguration {
 		return rp == null ? def : rp.section.getBoolean(rp.key, def);
 	}
 
-	@SuppressWarnings("unchecked")
 	public List<?> getList(String path) {
 		ResolvedPath rp = resolvePath(path);
 		if (rp == null)

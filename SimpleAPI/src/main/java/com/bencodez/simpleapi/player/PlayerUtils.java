@@ -1,12 +1,14 @@
 package com.bencodez.simpleapi.player;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.UUID;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -63,27 +65,34 @@ public class PlayerUtils {
 		return true;
 	}
 
-	public static java.util.UUID fetchUUID(String playerName) throws Exception {
-		// Get response from Mojang API
-		URL url = new URL("https://api.mojang.com/users/profiles/minecraft/" + playerName);
-		HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-		connection.connect();
+	/**
+	 * Fetches UUID from Mojang API.
+	 *
+	 * @param playerName player name
+	 * @return UUID or null if not found
+	 * @throws Exception if request fails
+	 */
+	public static UUID fetchUUID(String playerName) throws Exception {
+		HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
-		if (connection.getResponseCode() == 400) {
-			// plugin.debug("There is no player with the name \"" + playerName + "\"!");
+		HttpRequest request = HttpRequest.newBuilder()
+				.uri(URI.create("https://api.mojang.com/users/profiles/minecraft/" + playerName)).GET()
+				.timeout(Duration.ofSeconds(5)).build();
+
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+		if (response.statusCode() == 400 || response.statusCode() == 404) {
 			return null;
 		}
 
-		InputStream inputStream = connection.getInputStream();
-		BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+		if (response.statusCode() < 200 || response.statusCode() >= 300) {
+			throw new IOException("HTTP " + response.statusCode());
+		}
 
-		// Parse JSON response and get UUID
-
-		JsonElement element = JsonParser.parseReader(bufferedReader);
+		JsonElement element = JsonParser.parseString(response.body());
 		JsonObject object = element.getAsJsonObject();
 		String uuidAsString = object.get("id").getAsString();
 
-		// Return UUID
 		return parseUUIDFromString(uuidAsString);
 	}
 
@@ -185,37 +194,38 @@ public class PlayerUtils {
 			return serverHandle = new CraftBukkitHandle();
 		}
 	}
-	
-    /**
-     * Gets the nearest player to the given location within the specified max distance.
-     *
-     * @param location    The center location to search from.
-     * @param maxDistance The maximum distance (in blocks).
-     * @return The nearest Player, or null if none are within range.
-     */
-    public static Player getNearestPlayer(Location location, double maxDistance) {
-        if (location == null || location.getWorld() == null) {
-            return null;
-        }
 
-        Player nearest = null;
-        double maxDistanceSquared = maxDistance * maxDistance;
-        double closestSoFar = maxDistanceSquared;
+	/**
+	 * Gets the nearest player to the given location within the specified max
+	 * distance.
+	 *
+	 * @param location    The center location to search from.
+	 * @param maxDistance The maximum distance (in blocks).
+	 * @return The nearest Player, or null if none are within range.
+	 */
+	public static Player getNearestPlayer(Location location, double maxDistance) {
+		if (location == null || location.getWorld() == null) {
+			return null;
+		}
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.getWorld() != location.getWorld()) {
-                continue;
-            }
+		Player nearest = null;
+		double maxDistanceSquared = maxDistance * maxDistance;
+		double closestSoFar = maxDistanceSquared;
 
-            double distanceSquared = player.getLocation().distanceSquared(location);
-            if (distanceSquared <= closestSoFar) {
-                closestSoFar = distanceSquared;
-                nearest = player;
-            }
-        }
+		for (Player player : Bukkit.getOnlinePlayers()) {
+			if (player.getWorld() != location.getWorld()) {
+				continue;
+			}
 
-        return nearest;
-    }
+			double distanceSquared = player.getLocation().distanceSquared(location);
+			if (distanceSquared <= closestSoFar) {
+				closestSoFar = distanceSquared;
+				nearest = player;
+			}
+		}
+
+		return nearest;
+	}
 
 	private static java.util.UUID parseUUIDFromString(String uuidAsString) {
 		String[] parts = { "0x" + uuidAsString.substring(0, 8), "0x" + uuidAsString.substring(8, 12),

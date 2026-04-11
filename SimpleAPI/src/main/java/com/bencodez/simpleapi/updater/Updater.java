@@ -1,143 +1,162 @@
 package com.bencodez.simpleapi.updater;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.URL;
-
-import javax.net.ssl.HttpsURLConnection;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 
 import org.bukkit.plugin.java.JavaPlugin;
 
-// TODO: Auto-generated Javadoc
+import lombok.Getter;
+
 /**
- * The Class Updater.
+ * Handles checking for plugin updates from Spigot.
  */
 public class Updater {
 
 	/**
-	 * The Enum UpdateResult.
+	 * Possible update check results.
 	 */
 	public enum UpdateResult {
 
-		/** The bad resourceid. */
+		/**
+		 * Invalid resource id.
+		 */
 		BAD_RESOURCEID,
 
-		/** The disabled. */
+		/**
+		 * Update checking is disabled.
+		 */
 		DISABLED,
 
-		/** The fail noversion. */
+		/**
+		 * Failed because no version was returned.
+		 */
 		FAIL_NOVERSION,
 
-		/** The fail spigot. */
+		/**
+		 * Failed to contact Spigot.
+		 */
 		FAIL_SPIGOT,
 
-		/** The no update. */
+		/**
+		 * No update is available.
+		 */
 		NO_UPDATE,
 
-		/** The update available. */
+		/**
+		 * An update is available.
+		 */
 		UPDATE_AVAILABLE
 	}
 
-	// private final String API_KEY =
-	// "98BE0FE67F88AB82B4C197FAF1DC3B69206EFDCC4D3B80FC83A00037510B99B4";
-
-	// private HttpURLConnection connection;
-
-	// private final String HOST = "http://www.spigotmc.org";
-
-	/** The old version. */
-	private String oldVersion;
-
-	/** The plugin. */
-	private JavaPlugin plugin;
-
-	// private final String QUERY = "/api/general.php";
-
-	// private final String REQUEST_METHOD = "POST";
-
-	/** The resource id. */
-	private String RESOURCE_ID = "";
-
-	/** The result. */
-	private Updater.UpdateResult result = Updater.UpdateResult.DISABLED;
-
-	/** The version. */
-	private String version;
-
-	// private String WRITE_STRING;
+	/**
+	 * Shared HTTP client for update checks.
+	 */
+	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
 
 	/**
-	 * Instantiates a new updater.
+	 * Current installed plugin version.
+	 */
+	@Getter
+	private String oldVersion;
+
+	/**
+	 * Plugin instance.
+	 */
+	@Getter
+	private JavaPlugin plugin;
+
+	/**
+	 * Spigot resource id.
+	 */
+	@Getter
+	private String resourceId = "";
+
+	/**
+	 * Result of the update check.
+	 */
+	@Getter
+	private UpdateResult result = UpdateResult.DISABLED;
+
+	/**
+	 * Latest remote version.
+	 */
+	@Getter
+	private String version;
+
+	/**
+	 * Creates a new updater.
 	 *
-	 * @param plugin     the plugin
-	 * @param resourceId the resource id
-	 * @param disabled   the disabled
+	 * @param plugin     Plugin instance
+	 * @param resourceId Spigot resource id
+	 * @param disabled   Whether update checking is disabled
 	 */
 	public Updater(JavaPlugin plugin, Integer resourceId, boolean disabled) {
-		RESOURCE_ID = resourceId + "";
+		this.resourceId = String.valueOf(resourceId);
 		this.plugin = plugin;
-		oldVersion = this.plugin.getDescription().getVersion();
+		this.oldVersion = this.plugin.getDescription().getVersion();
 
 		if (disabled) {
-			result = UpdateResult.DISABLED;
+			this.result = UpdateResult.DISABLED;
 			return;
 		}
 
-		// WRITE_STRING = "key=" + API_KEY + "&resource=" + RESOURCE_ID;
 		run();
-	}
-
-	/**
-	 * Gets the result.
-	 *
-	 * @return the result
-	 */
-	public UpdateResult getResult() {
-		return result;
-	}
-
-	/**
-	 * Gets the version.
-	 *
-	 * @return the version
-	 */
-	public String getVersion() {
-		return version;
 	}
 
 	private void run() {
 		try {
-			HttpsURLConnection connection = (HttpsURLConnection) new URL(
-					"https://api.spigotmc.org/legacy/update.php?resource=" + RESOURCE_ID).openConnection();
-			int timed_out = 2000;
-			connection.setConnectTimeout(timed_out);
-			connection.setReadTimeout(timed_out);
-			BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-			this.version = reader.readLine();
-			connection.disconnect();
-			reader.close();
+			HttpRequest request = HttpRequest.newBuilder()
+					.uri(URI.create("https://api.spigotmc.org/legacy/update.php?resource=" + resourceId))
+					.timeout(Duration.ofSeconds(2)).GET().build();
+
+			HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+
+			if (response.statusCode() < 200 || response.statusCode() >= 300) {
+				result = UpdateResult.FAIL_SPIGOT;
+				return;
+			}
+
+			version = response.body();
+			if (version != null) {
+				version = version.trim();
+			}
+
+			if (version == null || version.isEmpty()) {
+				result = UpdateResult.FAIL_NOVERSION;
+				return;
+			}
+
 			versionCheck();
+			return;
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			result = UpdateResult.FAIL_SPIGOT;
+			return;
+		} catch (IOException e) {
+			result = UpdateResult.FAIL_SPIGOT;
 			return;
 		} catch (Exception e) {
 			result = UpdateResult.FAIL_SPIGOT;
-			// AdvancedCorePlugin.getInstance().debug(e);
 		}
-		result = UpdateResult.FAIL_SPIGOT;
 	}
 
 	/**
-	 * Should update.
+	 * Checks whether the local version should be updated.
 	 *
-	 * @param localVersion  the local version
-	 * @param remoteVersion the remote version
-	 * @return true, if successful
+	 * @param localVersion  Local version
+	 * @param remoteVersion Remote version
+	 * @return {@code true} if update is needed
 	 */
 	public boolean shouldUpdate(String localVersion, String remoteVersion) {
 		return !localVersion.equalsIgnoreCase(remoteVersion);
 	}
 
 	/**
-	 * Version check.
+	 * Compares local and remote versions and sets the result.
 	 */
 	private void versionCheck() {
 		if (shouldUpdate(oldVersion, version)) {

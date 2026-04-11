@@ -17,6 +17,7 @@ import com.bencodez.simpleapi.time.ParsedDuration.DurationFormatLabels;
  */
 public class ParsedDurationTest {
 
+	@SuppressWarnings("deprecation")
 	@Test
 	@DisplayName("Empty and null inputs return empty duration")
 	public void testEmptyInputs() {
@@ -77,6 +78,7 @@ public class ParsedDurationTest {
 	@Test
 	@DisplayName("Plain number uses default MINUTES when calling parse(String)")
 	public void testPlainNumberDefaultMinutes() {
+		@SuppressWarnings("deprecation")
 		ParsedDuration d = ParsedDuration.parse("30");
 		assertEquals(30 * 60_000L, d.getMillis());
 	}

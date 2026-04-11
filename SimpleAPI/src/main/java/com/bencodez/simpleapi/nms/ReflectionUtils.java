@@ -33,6 +33,7 @@ public class ReflectionUtils {
 
 	public static Object getFieldValue(Field field, Object object) {
 		try {
+			@SuppressWarnings("deprecation")
 			boolean a = !field.isAccessible();
 			if (a) {
 				field.setAccessible(true);
@@ -48,6 +49,7 @@ public class ReflectionUtils {
 		}
 	}
 
+	@SuppressWarnings("deprecation")
 	public static Object invokeMethod(Method method, Object object, Object... args) {
 		try {
 			boolean a = !method.isAccessible();
@@ -89,6 +91,7 @@ public class ReflectionUtils {
 	 */
 	public static Object setField(Field field, Object object, Object newValue) {
 		try {
+			@SuppressWarnings("deprecation")
 			boolean a = !field.isAccessible();
 			if (a) {
 				field.setAccessible(true);

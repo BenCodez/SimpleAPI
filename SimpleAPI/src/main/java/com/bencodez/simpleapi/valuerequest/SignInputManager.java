@@ -77,7 +77,8 @@ public class SignInputManager implements Listener {
      * @param start    optional starting text to display on the first line of the sign
      * @param callback the callback to invoke with the submitted value
      */
-    public static void requestSignInput(Player player, String start, Consumer<String> callback) {
+    @SuppressWarnings("deprecation")
+	public static void requestSignInput(Player player, String start, Consumer<String> callback) {
         if (!initialized && plugin != null) {
             // ensure we are registered
             initialize(plugin);
