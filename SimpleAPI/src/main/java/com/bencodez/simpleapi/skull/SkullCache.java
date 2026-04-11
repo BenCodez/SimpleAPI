@@ -2,7 +2,6 @@ package com.bencodez.simpleapi.skull;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URL;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -32,6 +31,10 @@ import lombok.Setter;
 
 public class SkullCache {
 
+	/**
+	 * Skulls and time are stored by uuid regardless of how they're cached or
+	 * accessed.
+	 */
 	private static final ConcurrentHashMap<UUID, ItemStack> skullMap = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, Long> timeMap = new ConcurrentHashMap<>();
 
@@ -48,30 +51,61 @@ public class SkullCache {
 	/**
 	 * Shared HTTP client for Mojang requests.
 	 */
-	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+			.connectTimeout(Duration.ofSeconds(5))
+			.build();
 
+	/**
+	 * Cache a skull from an offline player.
+	 *
+	 * @param offlinePlayer The offline player.
+	 * @throws IOException If an I/O error occurs
+	 */
 	public static void cacheSkull(OfflinePlayer offlinePlayer) throws IOException {
 		cacheSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
 	}
 
+	/**
+	 * Cache a skull from an online player.
+	 *
+	 * @param player The online player.
+	 * @throws IOException If an I/O error occurs
+	 */
 	public static void cacheSkull(Player player) throws IOException {
 		cacheSkull(player.getUniqueId(), player.getName());
 	}
 
+	/**
+	 * Cache a skull from a uuid.
+	 *
+	 * @param uuid The player's uuid.
+	 * @param name The player's name.
+	 * @throws IOException If an I/O error occurs
+	 */
 	public static void cacheSkull(UUID uuid, String name) throws IOException {
 		skullMap.put(uuid, itemWithUuid(uuid, name));
 		timeMap.put(uuid, System.currentTimeMillis());
 	}
 
+	/**
+	 * Cache a skull from a base64 texture string.
+	 *
+	 * @param base64 Base64 texture value
+	 */
 	public static void cacheSkullBase64(String base64) {
 		skullBase64Map.put(base64, itemWithBase64(base64));
 		timeBase64Map.put(base64, System.currentTimeMillis());
 	}
 
+	/**
+	 * Cache an array of skulls from uuids. Task will run asynchronously in an
+	 * attempt to prevent server lag.
+	 *
+	 * @param uuids Array of uuids.
+	 */
 	public static void cacheSkulls(HashMap<UUID, String> uuids) {
 		new Thread(() -> {
 			long start = System.currentTimeMillis();
-
 			for (Entry<UUID, String> entry : uuids.entrySet()) {
 				try {
 					skullMap.put(entry.getKey(), itemWithUuid(entry.getKey(), entry.getValue()));
@@ -83,7 +117,6 @@ public class SkullCache {
 
 			Inventory inventory = Bukkit.createInventory(null, 54, "Skull Cache Test");
 			int i = 0;
-
 			for (Entry<UUID, String> entry : uuids.entrySet()) {
 				if (i < Math.min(54, uuids.size())) {
 					try {
@@ -94,14 +127,17 @@ public class SkullCache {
 					i++;
 				}
 			}
-
 			inventory.clear();
-
 			Bukkit.getLogger().log(Level.INFO, ChatColor.GREEN + "[SkullCache] Cached " + uuids.size() + " skulls in "
 					+ (System.currentTimeMillis() - start) + "ms.");
 		}).start();
 	}
 
+	/**
+	 * Cache an array of skulls from offline players.
+	 *
+	 * @param offlinePlayers Array of offline players.
+	 */
 	public static void cacheSkulls(OfflinePlayer[] offlinePlayers) {
 		HashMap<UUID, String> map = new HashMap<>();
 		for (OfflinePlayer p : offlinePlayers) {
@@ -110,6 +146,11 @@ public class SkullCache {
 		cacheSkulls(map);
 	}
 
+	/**
+	 * Cache an array of skulls from online players.
+	 *
+	 * @param players Array of online players.
+	 */
 	public static void cacheSkulls(Player[] players) {
 		HashMap<UUID, String> map = new HashMap<>();
 		for (Player p : players) {
@@ -118,38 +159,66 @@ public class SkullCache {
 		cacheSkulls(map);
 	}
 
+	/**
+	 * Cache a skull from a texture URL.
+	 *
+	 * @param url Texture URL
+	 */
 	public static void cacheSkullURL(String url) {
 		skullURLMap.put(url, itemWithURL(url));
 		timeURLMap.put(url, System.currentTimeMillis());
 	}
 
+	/**
+	 * Remove skulls from memory if they haven't been cached or accessed within the
+	 * specified amount of time.
+	 *
+	 * @param milliseconds Duration of time given in milliseconds.
+	 */
 	public static void flush(long milliseconds) {
 		for (UUID uuid : skullMap.keySet()) {
-			if (System.currentTimeMillis() - timeMap.get(uuid) > milliseconds) {
+			Long time = timeMap.get(uuid);
+			if (time != null && System.currentTimeMillis() - time > milliseconds) {
 				skullMap.remove(uuid);
 				timeMap.remove(uuid);
 			}
 		}
 		for (String base64 : skullBase64Map.keySet()) {
-			if (System.currentTimeMillis() - timeBase64Map.get(base64) > milliseconds) {
+			Long time = timeBase64Map.get(base64);
+			if (time != null && System.currentTimeMillis() - time > milliseconds) {
 				skullBase64Map.remove(base64);
 				timeBase64Map.remove(base64);
 			}
 		}
 		for (String url : skullURLMap.keySet()) {
-			if (System.currentTimeMillis() - timeURLMap.get(url) > milliseconds) {
+			Long time = timeURLMap.get(url);
+			if (time != null && System.currentTimeMillis() - time > milliseconds) {
 				skullURLMap.remove(url);
 				timeURLMap.remove(url);
 			}
 		}
 	}
 
+	/**
+	 * Remove skulls from memory that haven't been cached or accessed within a week.
+	 */
 	public static void flushWeek() {
 		flush(604800000);
 	}
 
+	/**
+	 * Gets raw content from a link.
+	 *
+	 * @param link The link
+	 * @return Response body or null if 204
+	 * @throws IOException If an I/O error occurs
+	 * @throws InterruptedException If interrupted
+	 */
 	public static String getContent(String link) throws IOException, InterruptedException {
-		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(link)).GET().timeout(Duration.ofSeconds(5))
+		HttpRequest request = HttpRequest.newBuilder()
+				.uri(URI.create(link))
+				.GET()
+				.timeout(Duration.ofSeconds(5))
 				.build();
 
 		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
@@ -165,6 +234,13 @@ public class SkullCache {
 		return response.body();
 	}
 
+	/**
+	 * Gets a skin URL from a Mojang profile UUID string.
+	 *
+	 * @param uuid Mojang UUID without changes to formatting logic
+	 * @return Skin texture URL or null if unavailable
+	 * @throws IOException If an I/O error occurs
+	 */
 	public static String getSkinUrl(String uuid) throws IOException {
 		String json;
 		try {
@@ -182,11 +258,40 @@ public class SkullCache {
 		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
 
 		o = JsonParser.parseString(new String(Base64.getDecoder().decode(jsonBase64))).getAsJsonObject();
-
-		return o.get("textures").getAsJsonObject().get("SKIN").getAsJsonObject().get("url").getAsString();
+		String skinUrl = o.get("textures").getAsJsonObject().get("SKIN").getAsJsonObject().get("url").getAsString();
+		return skinUrl;
 	}
 
-	@SuppressWarnings("deprecation")
+	/**
+	 * Get a skull from an offline player. If the skull is not saved in memory it
+	 * will be fetched from Mojang and then cached for future use.
+	 *
+	 * @param offlinePlayer The offline player.
+	 * @return ItemStack of the offline player's skull.
+	 * @throws IOException If an I/O error occurs
+	 */
+	public static ItemStack getSkull(OfflinePlayer offlinePlayer) throws IOException {
+		return getSkull(offlinePlayer.getUniqueId(), offlinePlayer.getName());
+	}
+
+	/**
+	 * Get a skull from an online player. If the skull is not saved in memory it
+	 * will be fetched from Mojang and then cached for future use.
+	 *
+	 * @param player The online player.
+	 * @return ItemStack of the online player's skull.
+	 * @throws IOException If an I/O error occurs
+	 */
+	public static ItemStack getSkull(Player player) throws IOException {
+		return getSkull(player.getUniqueId(), player.getName());
+	}
+
+	/**
+	 * Creates a skull from a texture URL.
+	 *
+	 * @param url Texture URL
+	 * @return Skull item
+	 */
 	public static ItemStack getSkull(String url) {
 		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
 		if (url == null || url.isEmpty()) {
@@ -195,7 +300,7 @@ public class SkullCache {
 		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
 		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(UUID.randomUUID());
 		try {
-			profile.getTextures().setSkin(new URL(url));
+			profile.getTextures().setSkin(URI.create(url).toURL());
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -204,7 +309,14 @@ public class SkullCache {
 		return skull;
 	}
 
-	@SuppressWarnings("deprecation")
+	/**
+	 * Creates a skull from a texture URL and UUID.
+	 *
+	 * @param url Texture URL
+	 * @param uuid UUID to apply to the profile
+	 * @return Skull item
+	 * @throws IOException If URL conversion fails
+	 */
 	public static ItemStack getSkull(String url, UUID uuid) throws IOException {
 		ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
 		if (url == null || url.isEmpty()) {
@@ -212,12 +324,21 @@ public class SkullCache {
 		}
 		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
 		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(uuid);
-		profile.getTextures().setSkin(new URL(url));
+		profile.getTextures().setSkin(URI.create(url).toURL());
 		skullMeta.setOwnerProfile(profile);
 		skull.setItemMeta(skullMeta);
 		return skull;
 	}
 
+	/**
+	 * Get a skull from a uuid. If the skull is not saved in memory it will be
+	 * fetched from Mojang and then cached for future use.
+	 *
+	 * @param uuid The player's uuid.
+	 * @param name The player's name.
+	 * @return ItemStack of the player's skull.
+	 * @throws IOException If an I/O error occurs
+	 */
 	public static ItemStack getSkull(UUID uuid, String name) throws IOException {
 		timeMap.put(uuid, System.currentTimeMillis());
 		ItemStack skull = skullMap.get(uuid);
@@ -228,30 +349,149 @@ public class SkullCache {
 		return skull;
 	}
 
+	/**
+	 * Gets a skull from a base64 texture string.
+	 *
+	 * @param base64 Base64 texture value
+	 * @return Skull item
+	 */
+	public static ItemStack getSkullBase64(String base64) {
+		timeBase64Map.put(base64, System.currentTimeMillis());
+		ItemStack skull = skullBase64Map.get(base64);
+		if (skull == null) {
+			skull = itemWithBase64(base64);
+			cacheSkullBase64(base64);
+		}
+		return skull;
+	}
+
+	/**
+	 * Get an array of player skulls from uuids.
+	 *
+	 * @param players Array of uuids.
+	 * @return ItemStack array of skulls.
+	 * @throws IOException If an I/O error occurs
+	 */
+	public static ItemStack[] getSkulls(HashMap<UUID, String> players) throws IOException {
+		ItemStack[] itemStacks = new ItemStack[players.size()];
+		int i = 0;
+		for (Entry<UUID, String> entry : players.entrySet()) {
+			timeMap.put(entry.getKey(), System.currentTimeMillis());
+			itemStacks[i] = getSkull(entry.getKey(), entry.getValue());
+			i++;
+		}
+		return itemStacks;
+	}
+
+	/**
+	 * Get an array of offline player skulls from offline players.
+	 *
+	 * @param offlinePlayers Array of offline players.
+	 * @return ItemStack array of skulls.
+	 * @throws IOException If an I/O error occurs
+	 */
+	public static ItemStack[] getSkulls(OfflinePlayer[] offlinePlayers) throws IOException {
+		HashMap<UUID, String> map = new HashMap<>();
+		for (OfflinePlayer p : offlinePlayers) {
+			map.put(p.getUniqueId(), p.getName());
+		}
+		return getSkulls(map);
+	}
+
+	/**
+	 * Get an array of online player skulls from online players.
+	 *
+	 * @param players Array of online players.
+	 * @return ItemStack array of skulls.
+	 * @throws IOException If an I/O error occurs
+	 */
+	public static ItemStack[] getSkulls(Player[] players) throws IOException {
+		HashMap<UUID, String> map = new HashMap<>();
+		for (Player p : players) {
+			map.put(p.getUniqueId(), p.getName());
+		}
+		return getSkulls(map);
+	}
+
+	/**
+	 * Gets a skull from a texture URL cache.
+	 *
+	 * @param url Texture URL
+	 * @return Skull item
+	 */
+	public static ItemStack getSkullURL(String url) {
+		timeURLMap.put(url, System.currentTimeMillis());
+		ItemStack skull = skullURLMap.get(url);
+		if (skull == null) {
+			skull = itemWithURL(url);
+			cacheSkullURL(url);
+		}
+		return skull;
+	}
+
+	/**
+	 * Converts a base64 texture property into the URL inside it.
+	 *
+	 * @param base64 Base64 texture value
+	 * @return Texture URL
+	 */
 	public static String getUrlFromBase64(String base64) {
 		String decoded = new String(Base64.getDecoder().decode(base64));
 		return decoded.substring("{\"textures\":{\"SKIN\":{\"url\":\"".length(), decoded.length() - "\"}}}".length());
 	}
 
+	/**
+	 * Checks if a skull for the given UUID is already cached.
+	 *
+	 * @param uuid Player UUID
+	 * @return true if cached
+	 */
+	public static boolean isLoaded(UUID uuid) {
+		return uuid != null && skullMap.containsKey(uuid);
+	}
+
+	/**
+	 * Builds a skull from a base64 texture value.
+	 *
+	 * @param base64 Base64 texture value
+	 * @return Skull item
+	 */
 	public static ItemStack itemWithBase64(String base64) {
 		return getSkull(getUrlFromBase64(base64));
 	}
 
 	/**
-	 * Checks if a skull for the given UUID is already cached.
+	 * Builds a skull from a texture URL.
 	 *
-	 * @param uuid player UUID
-	 * @return true if cached
+	 * @param url Texture URL
+	 * @return Skull item
 	 */
-	public static boolean isLoaded(UUID uuid) {
-		return skullMap.containsKey(uuid);
-	}
-
 	public static ItemStack itemWithURL(String url) {
 		return getSkull(url);
 	}
 
+	/**
+	 * Builds a skull from a UUID.
+	 *
+	 * @param id UUID
+	 * @param playerName Player name
+	 * @return Skull item
+	 * @throws IOException If an I/O error occurs
+	 */
 	public static ItemStack itemWithUuid(UUID id, String playerName) throws IOException {
+		notNull(id, "id");
 		return getSkull(getSkinUrl(id.toString()), id);
+	}
+
+	/**
+	 * Null guard helper.
+	 *
+	 * @param o Object to check
+	 * @param name Object name
+	 */
+	private static void notNull(Object o, String name) {
+		if (o == null) {
+			throw new NullPointerException(name + " should not be null!");
+		}
 	}
 }
