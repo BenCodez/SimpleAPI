@@ -150,8 +150,8 @@
             <url>https://oss.sonatype.org/content/repositories/snapshots</url>
         </repository>
         <repository>
-            <id>tcoded-releases</id>
-            <url>https://repo.tcoded.com/releases</url>
+            <id>bencodez repo</id>
+            <url>https://nexus.bencodez.com/repository/maven-public/</url>
         </repository>
     </repositories>
     <dependencies>
