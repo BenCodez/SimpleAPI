@@ -59,10 +59,17 @@ public class AnnotationHandler {
 						}
 
 					}
-					boolean value = false;
-					if (!booleanAnnotation.secondPath().isEmpty()) {
-						value = config.getBoolean(booleanAnnotation.path(),
-								config.getBoolean(booleanAnnotation.secondPath(), defaultValue));
+
+					boolean value = defaultValue;
+					if (config.contains(booleanAnnotation.path())) {
+						value = config.getBoolean(booleanAnnotation.path(), defaultValue);
+					} else if (!booleanAnnotation.secondPath().isEmpty()
+							&& config.contains(booleanAnnotation.secondPath())) {
+						value = config.getBoolean(booleanAnnotation.secondPath(), defaultValue);
+
+						if (booleanAnnotation.secondPathInvert()) {
+							value = !value;
+						}
 					} else {
 						value = config.getBoolean(booleanAnnotation.path(), defaultValue);
 					}

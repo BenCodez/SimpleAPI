@@ -17,4 +17,6 @@ public @interface ConfigDataBoolean {
 	String path();
 
 	String secondPath() default "";
+
+	boolean secondPathInvert() default false;
 }
