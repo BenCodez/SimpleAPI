@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.HashMap;
@@ -257,7 +258,8 @@ public class SkullCache {
 		JsonObject o = JsonParser.parseString(json).getAsJsonObject();
 		String jsonBase64 = o.get("properties").getAsJsonArray().get(0).getAsJsonObject().get("value").getAsString();
 
-		o = JsonParser.parseString(new String(Base64.getDecoder().decode(jsonBase64))).getAsJsonObject();
+		o = JsonParser.parseString(new String(Base64.getDecoder().decode(jsonBase64), StandardCharsets.UTF_8))
+				.getAsJsonObject();
 		String skinUrl = o.get("textures").getAsJsonObject().get("SKIN").getAsJsonObject().get("url").getAsString();
 		return skinUrl;
 	}
@@ -297,13 +299,17 @@ public class SkullCache {
 		if (url == null || url.isEmpty()) {
 			return skull;
 		}
+
 		SkullMeta skullMeta = (SkullMeta) skull.getItemMeta();
-		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(UUID.randomUUID());
+		UUID uuid = UUID.nameUUIDFromBytes(("skull-url:" + url).getBytes(StandardCharsets.UTF_8));
+		PlayerProfile profile = Bukkit.getServer().createPlayerProfile(uuid);
+
 		try {
 			profile.getTextures().setSkin(URI.create(url).toURL());
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
+
 		skullMeta.setOwnerProfile(profile);
 		skull.setItemMeta(skullMeta);
 		return skull;
@@ -344,9 +350,10 @@ public class SkullCache {
 		ItemStack skull = skullMap.get(uuid);
 		if (skull == null) {
 			skull = itemWithUuid(uuid, name);
-			cacheSkull(uuid, name);
+			skullMap.put(uuid, skull);
+			timeMap.put(uuid, System.currentTimeMillis());
 		}
-		return skull;
+		return skull.clone();
 	}
 
 	/**
@@ -360,9 +367,10 @@ public class SkullCache {
 		ItemStack skull = skullBase64Map.get(base64);
 		if (skull == null) {
 			skull = itemWithBase64(base64);
-			cacheSkullBase64(base64);
+			skullBase64Map.put(base64, skull);
+			timeBase64Map.put(base64, System.currentTimeMillis());
 		}
-		return skull;
+		return skull.clone();
 	}
 
 	/**
@@ -424,9 +432,10 @@ public class SkullCache {
 		ItemStack skull = skullURLMap.get(url);
 		if (skull == null) {
 			skull = itemWithURL(url);
-			cacheSkullURL(url);
+			skullURLMap.put(url, skull);
+			timeURLMap.put(url, System.currentTimeMillis());
 		}
-		return skull;
+		return skull.clone();
 	}
 
 	/**
@@ -436,7 +445,7 @@ public class SkullCache {
 	 * @return Texture URL
 	 */
 	public static String getUrlFromBase64(String base64) {
-		String decoded = new String(Base64.getDecoder().decode(base64));
+		String decoded = new String(Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
 		return decoded.substring("{\"textures\":{\"SKIN\":{\"url\":\"".length(), decoded.length() - "\"}}}".length());
 	}
 
