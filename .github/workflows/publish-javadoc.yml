@@ -7,18 +7,29 @@ on:
       - master
       - main
 
+permissions:
+  contents: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy JavaDoc 🚀
-        uses: MathieuSoysal/Javadoc-publisher.yml@main
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          javadoc-branch: gh-pages
           java-version: 21
-          target-folder: ''
-          project: maven # or gradle
-          # subdirectories: moduleA moduleB #for subdirectories support, needs to be run with custom command
-          custom-command: mvn -f SimpleAPI/pom.xml -P javadoc javadoc:javadoc
-          javadoc-source-folder: 'SimpleAPI/target/reports/apidocs'
+          distribution: temurin
+          cache: maven
+
+      - name: Build Javadoc
+        run: mvn -B -f SimpleAPI/pom.xml -P javadoc javadoc:javadoc
+
+      - name: Deploy JavaDoc 🚀
+        uses: JamesIves/github-pages-deploy-action@v4.7.3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: gh-pages
+          folder: SimpleAPI/target/reports/apidocs
+          clean: true
