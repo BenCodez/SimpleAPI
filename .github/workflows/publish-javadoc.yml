@@ -20,5 +20,5 @@ jobs:
           target-folder: ''
           project: maven # or gradle
           # subdirectories: moduleA moduleB #for subdirectories support, needs to be run with custom command
-          custom-command: mvn -f SimpleAPI/pom.xml deploy -P javadoc javadoc:aggregate
+          custom-command: mvn -f SimpleAPI/pom.xml -P javadoc javadoc:javadoc
           javadoc-source-folder: 'SimpleAPI/target/apidocs'
