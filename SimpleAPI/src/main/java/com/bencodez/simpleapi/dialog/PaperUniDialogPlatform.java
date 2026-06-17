@@ -117,39 +117,54 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 	public void showMultiAction(Player player, UniDialogMultiActionRequest request) {
 		String namespace = resolveNamespace(request.getNamespace());
 
-		PaperMultiActionDialog dialog = manager.createMultiActionDialog().title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody())).columns(request.getColumns());
+		PaperMultiActionDialog dialog = manager.createMultiActionDialog()
+				.title(getTextOrEmpty(request.getTitle()))
+				.columns(Math.max(1, request.getColumns()));
+
+		if (request.getBody() != null && !request.getBody().isEmpty()) {
+			dialog.body(builder -> builder.text().text(request.getBody()));
+		}
 
 		applyInputs(dialog, request.getInputs());
 
-		for (UniDialogButton button : request.getButtons()) {
-			String actionId = resolveActionId(button.getActionId());
+		if (request.getButtons() != null) {
+			for (UniDialogButton button : request.getButtons()) {
+				if (button == null) {
+					continue;
+				}
 
-			if (button.getCallback() != null) {
-				registerCustomAction(namespace, actionId, button.getCallback());
+				String actionId = resolveActionId(button.getActionId());
+
+				if (button.getCallback() != null) {
+					registerCustomAction(namespace, actionId, button.getCallback());
+				}
+
+				dialog.action(action -> {
+					action.label(getTextOrEmpty(button.getText()));
+
+					if (button.getTooltip() != null && !button.getTooltip().isEmpty()) {
+						action.tooltip(button.getTooltip());
+					}
+
+					Integer width = button.getWidth();
+					if (width == null) {
+						width = request.getButtonWidth();
+					}
+
+					if (width != null && width.intValue() > 0) {
+						action.width(width.intValue());
+					}
+
+					action.dynamicCustom(namespace, actionId);
+				});
 			}
-
-			dialog.action(action -> {
-				action.label(button.getText());
-
-				if (button.getTooltip() != null && !button.getTooltip().isEmpty()) {
-					action.tooltip(button.getTooltip());
-				}
-
-				Integer width = button.getWidth();
-				if (width == null) {
-					width = request.getButtonWidth();
-				}
-
-				if (width != null) {
-					action.width(width.intValue());
-				}
-
-				action.dynamicCustom(namespace, actionId);
-			});
 		}
 
 		dialog.opener().open(player.getUniqueId());
+	}
+
+	private String getTextOrEmpty(String text) {
+		return text == null ? "" : text;
 	}
 
 	private void applyInputs(PaperNoticeDialog dialog, Iterable<UniDialogInput> inputs) {
