@@ -2,6 +2,7 @@ package com.bencodez.simpleapi.valuerequest;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 import org.bukkit.conversations.Conversable;
@@ -93,6 +94,22 @@ public class ValueRequest {
 			return defaultMethod;
 		}
 		return PlayerInputManager.getInputMethod(player.getUniqueId());
+	}
+
+
+	/**
+	 * Handles a dialog failure by changing the player's saved input method to chat.
+	 *
+	 * @param player the player whose dialog failed
+	 * @param throwable the error thrown while creating or opening the dialog
+	 */
+	private void handleDialogFailure(Player player, Throwable throwable) {
+		plugin.getLogger().log(Level.WARNING,
+				"Failed to open an input dialog for " + player.getName()
+						+ ". Falling back to chat input.",
+				throwable);
+
+		PlayerInputManager.setInputMethod(player.getUniqueId(), InputMethod.CHAT);
 	}
 
 	/**
@@ -201,8 +218,15 @@ public class ValueRequest {
 						newRequest.requestString(player, currentValue, options, allowCustom, promptText, listener);
 					}));
 
-			builder.open();
-			return;
+			try {
+				builder.open();
+				return;
+			} catch (RuntimeException | LinkageError ex) {
+				handleDialogFailure(player, ex);
+				ValueRequest fallbackRequest = new ValueRequest(plugin, dialogService, InputMethod.CHAT);
+				fallbackRequest.requestString(player, currentValue, options, allowCustom, promptText, listener);
+				return;
+			}
 		}
 
 		// Fallback to chat based conversation
@@ -366,8 +390,15 @@ public class ValueRequest {
 						ValueRequest newRequest = new ValueRequest(plugin, dialogService, newMethod);
 						newRequest.requestNumber(player, currentValue, options, allowCustom, promptText, listener);
 					}));
-			builder.open();
-			return;
+			try {
+				builder.open();
+				return;
+			} catch (RuntimeException | LinkageError ex) {
+				handleDialogFailure(player, ex);
+				ValueRequest fallbackRequest = new ValueRequest(plugin, dialogService, InputMethod.CHAT);
+				fallbackRequest.requestNumber(player, currentValue, options, allowCustom, promptText, listener);
+				return;
+			}
 		}
 
 		// Fallback to chat
@@ -490,8 +521,15 @@ public class ValueRequest {
 						ValueRequest newRequest = new ValueRequest(plugin, dialogService, newMethod);
 						newRequest.requestBoolean(player, currentValue, promptText, listener);
 					}));
-			builder.open();
-			return;
+			try {
+				builder.open();
+				return;
+			} catch (RuntimeException | LinkageError ex) {
+				handleDialogFailure(player, ex);
+				ValueRequest fallbackRequest = new ValueRequest(plugin, dialogService, InputMethod.CHAT);
+				fallbackRequest.requestBoolean(player, currentValue, promptText, listener);
+				return;
+			}
 		}
 
 		// Chat fallback
@@ -663,7 +701,13 @@ public class ValueRequest {
 			newRequest.requestMultipleValues(player, fields, listener);
 		}));
 
-		builder.open();
+		try {
+			builder.open();
+		} catch (RuntimeException | LinkageError ex) {
+			handleDialogFailure(player, ex);
+			ValueRequest fallbackRequest = new ValueRequest(plugin, dialogService, InputMethod.CHAT);
+			fallbackRequest.requestMultipleValues(player, fields, listener);
+		}
 	}
 
 	private void requestMultipleValuesSequential(Player player, List<MultiValueField> fields, int index,
