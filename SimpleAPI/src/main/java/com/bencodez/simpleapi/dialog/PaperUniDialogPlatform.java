@@ -6,6 +6,7 @@ import java.util.function.Consumer;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
+import io.github.projectunified.unidialog.core.dialog.Dialog.AfterAction;
 import io.github.projectunified.unidialog.core.payload.DialogPayload;
 import io.github.projectunified.unidialog.paper.PaperDialogManager;
 import io.github.projectunified.unidialog.paper.dialog.PaperConfirmationDialog;
@@ -68,13 +69,18 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 			registerCustomAction(namespace, actionId, request.getCallback());
 		}
 
-		PaperNoticeDialog dialog = manager.createNoticeDialog().title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody()));
+		PaperNoticeDialog dialog = manager.createNoticeDialog()
+				.title(getTextOrDefault(request.getTitle(), "Dialog"))
+				.afterAction(AfterAction.CLOSE);
+
+		if (request.getBody() != null && !request.getBody().isEmpty()) {
+			dialog.body(builder -> builder.text().text(request.getBody()));
+		}
 
 		applyInputs(dialog, request.getInputs());
 
 		dialog.action(action -> {
-			action.label(request.getButtonText());
+			action.label(getTextOrDefault(request.getButtonText(), "Ok"));
 			action.dynamicCustom(namespace, actionId);
 		});
 
@@ -95,18 +101,23 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 			registerCustomAction(namespace, noActionId, request.getNoCallback());
 		}
 
-		PaperConfirmationDialog dialog = manager.createConfirmationDialog().title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody()));
+		PaperConfirmationDialog dialog = manager.createConfirmationDialog()
+				.title(getTextOrDefault(request.getTitle(), "Confirm"))
+				.afterAction(AfterAction.CLOSE);
+
+		if (request.getBody() != null && !request.getBody().isEmpty()) {
+			dialog.body(builder -> builder.text().text(request.getBody()));
+		}
 
 		applyInputs(dialog, request.getInputs());
 
 		dialog.yesAction(action -> {
-			action.label(request.getYesText());
+			action.label(getTextOrDefault(request.getYesText(), "Yes"));
 			action.dynamicCustom(namespace, yesActionId);
 		});
 
 		dialog.noAction(action -> {
-			action.label(request.getNoText());
+			action.label(getTextOrDefault(request.getNoText(), "No"));
 			action.dynamicCustom(namespace, noActionId);
 		});
 
@@ -118,7 +129,8 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 		String namespace = resolveNamespace(request.getNamespace());
 
 		PaperMultiActionDialog dialog = manager.createMultiActionDialog()
-				.title(getTextOrEmpty(request.getTitle()))
+				.title(getTextOrDefault(request.getTitle(), "Select an action"))
+				.afterAction(AfterAction.CLOSE)
 				.columns(Math.max(1, request.getColumns()));
 
 		if (request.getBody() != null && !request.getBody().isEmpty()) {
@@ -127,44 +139,34 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 
 		applyInputs(dialog, request.getInputs());
 
-		if (request.getButtons() != null) {
-			for (UniDialogButton button : request.getButtons()) {
-				if (button == null) {
-					continue;
-				}
+		for (UniDialogButton button : request.getButtons()) {
+			String actionId = resolveActionId(button.getActionId());
 
-				String actionId = resolveActionId(button.getActionId());
-
-				if (button.getCallback() != null) {
-					registerCustomAction(namespace, actionId, button.getCallback());
-				}
-
-				dialog.action(action -> {
-					action.label(getTextOrEmpty(button.getText()));
-
-					if (button.getTooltip() != null && !button.getTooltip().isEmpty()) {
-						action.tooltip(button.getTooltip());
-					}
-
-					Integer width = button.getWidth();
-					if (width == null) {
-						width = request.getButtonWidth();
-					}
-
-					if (width != null && width.intValue() > 0) {
-						action.width(width.intValue());
-					}
-
-					action.dynamicCustom(namespace, actionId);
-				});
+			if (button.getCallback() != null) {
+				registerCustomAction(namespace, actionId, button.getCallback());
 			}
+
+			dialog.action(action -> {
+				action.label(getTextOrDefault(button.getText(), "Action"));
+
+				if (button.getTooltip() != null && !button.getTooltip().isEmpty()) {
+					action.tooltip(button.getTooltip());
+				}
+
+				Integer width = button.getWidth();
+				if (width == null) {
+					width = request.getButtonWidth();
+				}
+
+				if (width != null) {
+					action.width(width.intValue());
+				}
+
+				action.dynamicCustom(namespace, actionId);
+			});
 		}
 
 		dialog.opener().open(player.getUniqueId());
-	}
-
-	private String getTextOrEmpty(String text) {
-		return text == null ? "" : text;
 	}
 
 	private void applyInputs(PaperNoticeDialog dialog, Iterable<UniDialogInput> inputs) {
@@ -253,6 +255,13 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 				}
 			}
 		});
+	}
+
+	private String getTextOrDefault(String value, String defaultValue) {
+		if (value == null || value.isEmpty()) {
+			return defaultValue;
+		}
+		return value;
 	}
 
 	private String getInputLabel(UniDialogInput input) {
