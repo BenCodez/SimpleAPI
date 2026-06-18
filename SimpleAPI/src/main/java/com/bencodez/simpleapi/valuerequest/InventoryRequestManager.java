@@ -20,16 +20,22 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
 
 /**
- * Handles value requests that use an inventory interface for selection. Options
- * are presented as clickable items. Additional buttons are provided for custom
- * input and cycling the player's preferred input method.
+ * Handles value requests that use an inventory interface for selection.
+ *
+ * Options are presented as clickable items. Additional buttons are provided for
+ * custom input and cycling the player's preferred input method.
  */
 public class InventoryRequestManager implements Listener {
 
     /**
      * Flag to ensure the listener is only registered once per plugin instance.
      */
-    private static boolean initialized = false;
+    private static boolean initialized;
+
+    /**
+     * Plugin used for synchronous task scheduling.
+     */
+    private static Plugin plugin;
 
     /**
      * Map of active inventory requests keyed by the player's unique identifier.
@@ -42,399 +48,529 @@ public class InventoryRequestManager implements Listener {
     private static final Map<UUID, Consumer<InputMethod>> methodSelections = new ConcurrentHashMap<>();
 
     /**
-     * Register this listener with the plugin manager if not already registered.
+     * Registers this listener with the plugin manager if it has not already been
+     * registered.
      *
-     * @param plugin the plugin used for event registration
+     * @param pluginInstance the plugin used for event registration and scheduling
      */
-    public static void initialize(Plugin plugin) {
+    public static void initialize(Plugin pluginInstance) {
+        if (pluginInstance == null) {
+            throw new IllegalArgumentException("pluginInstance cannot be null");
+        }
+
+        plugin = pluginInstance;
+
         if (!initialized) {
-            Bukkit.getPluginManager().registerEvents(new InventoryRequestManager(), plugin);
+            Bukkit.getPluginManager().registerEvents(new InventoryRequestManager(), pluginInstance);
             initialized = true;
         }
     }
 
     /**
-     * Open an inventory for selecting a string value. Options are displayed as
-     * paper items, with optional buttons for custom input and changing the input
-     * method.
+     * Opens an inventory for selecting a string value.
      *
-     * @param plugin       the plugin instance
-     * @param request      the originating value request
-     * @param player       the player to prompt
-     * @param currentValue the current value (unused in this interface but may be
-     *                     displayed via the title)
-     * @param options      list of selectable string options
-     * @param allowCustom  whether a custom input button should be provided
-     * @param promptText   the inventory title
-     * @param listener     the callback invoked with the selected value
+     * @param pluginInstance the plugin instance
+     * @param request the originating value request
+     * @param player the player to prompt
+     * @param currentValue the current value
+     * @param options list of selectable string options
+     * @param allowCustom whether a custom input button should be provided
+     * @param promptText the inventory title
+     * @param listener the callback invoked with the selected value
      */
-    public static void openStringRequest(Plugin plugin, ValueRequest request, Player player, String currentValue,
-            List<String> options, boolean allowCustom, String promptText, StringListener listener) {
-        if (options == null) {
-            options = new ArrayList<>();
-        }
-        int slotCount = options.size();
-        if (allowCustom) {
-            slotCount++;
-        }
-        slotCount++; // for change method
-        int size = ((slotCount + 8) / 9) * 9;
-        if (size == 0) {
-            size = 9;
-        }
-        String title = (promptText != null && !promptText.isEmpty()) ? promptText : "Select a value";
-        Inventory inv = Bukkit.createInventory(null, size, title);
-        // add option items
-        for (String option : options) {
-            ItemStack item = new ItemStack(Material.PAPER);
-            ItemMeta meta = item.getItemMeta();
-            if (meta != null) {
-                meta.setDisplayName(option);
-                item.setItemMeta(meta);
-            }
-            inv.addItem(item);
-        }
-        // add custom input button
-        if (allowCustom) {
-            ItemStack custom = new ItemStack(Material.ANVIL);
-            ItemMeta m = custom.getItemMeta();
-            if (m != null) {
-                m.setDisplayName("Enter Custom Value");
-                custom.setItemMeta(m);
-            }
-            inv.addItem(custom);
-        }
-        // add change method button
-        ItemStack change = new ItemStack(Material.COMPASS);
-        ItemMeta cm = change.getItemMeta();
-        if (cm != null) {
-            cm.setDisplayName("Change Method");
-            change.setItemMeta(cm);
-        }
-        inv.addItem(change);
-        RequestContext ctx = new RequestContext();
-        ctx.type = RequestType.STRING;
-        ctx.stringOptions = options;
-        ctx.numberOptions = null;
-        ctx.stringListener = listener;
-        ctx.numberListener = null;
-        ctx.booleanListener = null;
-        ctx.currentString = currentValue;
-        ctx.currentNumber = null;
-        ctx.allowCustom = allowCustom;
-        ctx.request = request;
-        ctx.promptText = promptText;
-        contexts.put(player.getUniqueId(), ctx);
-        player.openInventory(inv);
+    public static void openStringRequest(Plugin pluginInstance, ValueRequest request, Player player,
+            String currentValue, List<String> options, boolean allowCustom, String promptText,
+            StringListener listener) {
+        List<String> safeOptions = options == null ? new ArrayList<>() : new ArrayList<>(options);
+
+        runSynchronously(pluginInstance, player, () -> openStringRequestSync(request, player, currentValue,
+                safeOptions, allowCustom, promptText, listener));
     }
 
     /**
-     * Open an inventory for selecting a numeric value. Numbers are displayed as
-     * paper items. A custom input button allows chat input for arbitrary values.
+     * Opens the string selection inventory on the server thread.
      *
-     * @param plugin       the plugin instance
-     * @param request      the originating value request
-     * @param player       the player to prompt
-     * @param currentValue the current numeric value
-     * @param options      list of selectable numbers
-     * @param allowCustom  whether a custom input button should be provided
-     * @param promptText   the inventory title
-     * @param listener     the callback invoked with the selected number
+     * @param request the originating value request
+     * @param player the player to prompt
+     * @param currentValue the current value
+     * @param options list of selectable string options
+     * @param allowCustom whether a custom input button should be provided
+     * @param promptText the inventory title
+     * @param listener the callback invoked with the selected value
      */
-    public static void openNumberRequest(Plugin plugin, ValueRequest request, Player player, Number currentValue,
+    private static void openStringRequestSync(ValueRequest request, Player player, String currentValue,
+            List<String> options, boolean allowCustom, String promptText, StringListener listener) {
+        int slotCount = options.size() + 1;
+
+        if (allowCustom) {
+            slotCount++;
+        }
+
+        Inventory inventory = Bukkit.createInventory(null, getInventorySize(slotCount),
+                getTitle(promptText, "Select a value"));
+
+        for (String option : options) {
+            if (option == null) {
+                continue;
+            }
+
+            inventory.addItem(createItem(Material.PAPER, option));
+        }
+
+        if (allowCustom) {
+            inventory.addItem(createItem(Material.ANVIL, "Enter Custom Value"));
+        }
+
+        inventory.addItem(createItem(Material.COMPASS, "Change Method"));
+
+        RequestContext context = new RequestContext();
+        context.type = RequestType.STRING;
+        context.stringOptions = options;
+        context.stringListener = listener;
+        context.currentString = currentValue;
+        context.allowCustom = allowCustom;
+        context.request = request;
+        context.promptText = promptText;
+
+        contexts.put(player.getUniqueId(), context);
+        player.openInventory(inventory);
+    }
+
+    /**
+     * Opens an inventory for selecting a numeric value.
+     *
+     * @param pluginInstance the plugin instance
+     * @param request the originating value request
+     * @param player the player to prompt
+     * @param currentValue the current numeric value
+     * @param options list of selectable numbers
+     * @param allowCustom whether a custom input button should be provided
+     * @param promptText the inventory title
+     * @param listener the callback invoked with the selected number
+     */
+    public static void openNumberRequest(Plugin pluginInstance, ValueRequest request, Player player,
+            Number currentValue, List<? extends Number> options, boolean allowCustom, String promptText,
+            NumberListener listener) {
+        List<? extends Number> safeNumberOptions = options == null ? new ArrayList<>() : new ArrayList<>(options);
+
+        runSynchronously(pluginInstance, player, () -> openNumberRequestSync(request, player, currentValue,
+                safeNumberOptions, allowCustom, promptText, listener));
+    }
+
+    /**
+     * Opens the numeric selection inventory on the server thread.
+     *
+     * @param request the originating value request
+     * @param player the player to prompt
+     * @param currentValue the current numeric value
+     * @param options list of selectable numbers
+     * @param allowCustom whether a custom input button should be provided
+     * @param promptText the inventory title
+     * @param listener the callback invoked with the selected number
+     */
+    private static void openNumberRequestSync(ValueRequest request, Player player, Number currentValue,
             List<? extends Number> options, boolean allowCustom, String promptText, NumberListener listener) {
         List<String> stringOptions = new ArrayList<>();
-        if (options != null) {
-            for (Number n : options) {
-                stringOptions.add(n.toString());
+
+        for (Number number : options) {
+            if (number != null) {
+                stringOptions.add(number.toString());
             }
         }
-        int slotCount = stringOptions.size();
+
+        int slotCount = stringOptions.size() + 1;
+
         if (allowCustom) {
             slotCount++;
         }
-        slotCount++;
-        int size = ((slotCount + 8) / 9) * 9;
-        if (size == 0) {
-            size = 9;
-        }
-        String title = (promptText != null && !promptText.isEmpty()) ? promptText : "Select a value";
-        Inventory inv = Bukkit.createInventory(null, size, title);
+
+        Inventory inventory = Bukkit.createInventory(null, getInventorySize(slotCount),
+                getTitle(promptText, "Select a value"));
+
         for (String option : stringOptions) {
-            ItemStack item = new ItemStack(Material.PAPER);
-            ItemMeta meta = item.getItemMeta();
-            if (meta != null) {
-                meta.setDisplayName(option);
-                item.setItemMeta(meta);
-            }
-            inv.addItem(item);
+            inventory.addItem(createItem(Material.PAPER, option));
         }
+
         if (allowCustom) {
-            ItemStack custom = new ItemStack(Material.ANVIL);
-            ItemMeta m = custom.getItemMeta();
-            if (m != null) {
-                m.setDisplayName("Enter Custom Value");
-                custom.setItemMeta(m);
-            }
-            inv.addItem(custom);
+            inventory.addItem(createItem(Material.ANVIL, "Enter Custom Value"));
         }
-        ItemStack change = new ItemStack(Material.COMPASS);
-        ItemMeta cm = change.getItemMeta();
-        if (cm != null) {
-            cm.setDisplayName("Change Method");
-            change.setItemMeta(cm);
-        }
-        inv.addItem(change);
-        RequestContext ctx = new RequestContext();
-        ctx.type = RequestType.NUMBER;
-        ctx.stringOptions = stringOptions;
-        ctx.numberOptions = options;
-        ctx.stringListener = null;
-        ctx.numberListener = listener;
-        ctx.booleanListener = null;
-        ctx.currentString = null;
-        ctx.currentNumber = currentValue;
-        ctx.allowCustom = allowCustom;
-        ctx.request = request;
-        ctx.promptText = promptText;
-        contexts.put(player.getUniqueId(), ctx);
-        player.openInventory(inv);
+
+        inventory.addItem(createItem(Material.COMPASS, "Change Method"));
+
+        RequestContext context = new RequestContext();
+        context.type = RequestType.NUMBER;
+        context.stringOptions = stringOptions;
+        context.numberOptions = options;
+        context.numberListener = listener;
+        context.currentNumber = currentValue;
+        context.allowCustom = allowCustom;
+        context.request = request;
+        context.promptText = promptText;
+
+        contexts.put(player.getUniqueId(), context);
+        player.openInventory(inventory);
     }
 
     /**
-     * Open an inventory for selecting a boolean value. Two items represent true and
-     * false along with a button to change the player's preferred method. There
-     * is no custom input for boolean values.
+     * Opens an inventory for selecting a boolean value.
      *
-     * @param plugin       the plugin instance
-     * @param request      the originating value request
-     * @param player       the player to prompt
-     * @param currentValue the current boolean value (unused in this interface)
-     * @param promptText   the inventory title
-     * @param listener     the callback invoked with the selected boolean
+     * @param pluginInstance the plugin instance
+     * @param request the originating value request
+     * @param player the player to prompt
+     * @param currentValue the current boolean value
+     * @param promptText the inventory title
+     * @param listener the callback invoked with the selected boolean
      */
-    public static void openBooleanRequest(Plugin plugin, ValueRequest request, Player player, Boolean currentValue,
-            String promptText, BooleanListener listener) {
-        int size = 9;
-        String title = (promptText != null && !promptText.isEmpty()) ? promptText : "Select an option";
-        Inventory inv = Bukkit.createInventory(null, size, title);
-        // True button
-        ItemStack trueItem = new ItemStack(Material.LIME_DYE);
-        ItemMeta trueMeta = trueItem.getItemMeta();
-        if (trueMeta != null) {
-            trueMeta.setDisplayName("True");
-            trueItem.setItemMeta(trueMeta);
-        }
-        inv.setItem(3, trueItem);
-        // False button
-        ItemStack falseItem = new ItemStack(Material.RED_DYE);
-        ItemMeta falseMeta = falseItem.getItemMeta();
-        if (falseMeta != null) {
-            falseMeta.setDisplayName("False");
-            falseItem.setItemMeta(falseMeta);
-        }
-        inv.setItem(5, falseItem);
-        // Change method button
-        ItemStack change = new ItemStack(Material.COMPASS);
-        ItemMeta cm = change.getItemMeta();
-        if (cm != null) {
-            cm.setDisplayName("Change Method");
-            change.setItemMeta(cm);
-        }
-        inv.setItem(8, change);
-        RequestContext ctx = new RequestContext();
-        ctx.type = RequestType.BOOLEAN;
-        ctx.stringOptions = null;
-        ctx.numberOptions = null;
-        ctx.stringListener = null;
-        ctx.numberListener = null;
-        ctx.booleanListener = listener;
-        ctx.currentString = null;
-        ctx.currentNumber = null;
-        ctx.allowCustom = false;
-        ctx.request = request;
-        ctx.promptText = promptText;
-        ctx.currentBoolean = currentValue;
-        contexts.put(player.getUniqueId(), ctx);
-        player.openInventory(inv);
+    public static void openBooleanRequest(Plugin pluginInstance, ValueRequest request, Player player,
+            Boolean currentValue, String promptText, BooleanListener listener) {
+        runSynchronously(pluginInstance, player,
+                () -> openBooleanRequestSync(request, player, currentValue, promptText, listener));
     }
 
     /**
-     * Open an inventory that lets a player choose their preferred input method
-     * from the available list. Once the player clicks one of the methods, the
-     * provided callback is invoked with the selected method.
+     * Opens the boolean selection inventory on the server thread.
+     *
+     * @param request the originating value request
+     * @param player the player to prompt
+     * @param currentValue the current boolean value
+     * @param promptText the inventory title
+     * @param listener the callback invoked with the selected boolean
+     */
+    private static void openBooleanRequestSync(ValueRequest request, Player player, Boolean currentValue,
+            String promptText, BooleanListener listener) {
+        Inventory inventory = Bukkit.createInventory(null, 9, getTitle(promptText, "Select an option"));
+
+        inventory.setItem(3, createItem(Material.LIME_DYE, "True"));
+        inventory.setItem(5, createItem(Material.RED_DYE, "False"));
+        inventory.setItem(8, createItem(Material.COMPASS, "Change Method"));
+
+        RequestContext context = new RequestContext();
+        context.type = RequestType.BOOLEAN;
+        context.booleanListener = listener;
+        context.currentBoolean = currentValue;
+        context.request = request;
+        context.promptText = promptText;
+
+        contexts.put(player.getUniqueId(), context);
+        player.openInventory(inventory);
+    }
+
+    /**
+     * Opens an inventory that lets a player choose their preferred input method.
      *
      * @param player the player to show the method selection to
      * @param callback the callback invoked with the selected method
      */
     public static void openMethodSelection(Player player, Consumer<InputMethod> callback) {
-        if (player == null || callback == null) {
-            return;
+        Plugin schedulingPlugin = plugin;
+
+        if (schedulingPlugin == null) {
+            throw new IllegalStateException("InventoryRequestManager has not been initialized");
         }
-        InputMethod[] methods = InputMethod.values();
-        int size = ((methods.length + 8) / 9) * 9;
-        if (size == 0) {
-            size = 9;
-        }
-        Inventory inv = Bukkit.createInventory(null, size, "Select Input Method");
-        for (InputMethod method : methods) {
-            ItemStack item = new ItemStack(Material.PAPER);
-            ItemMeta meta = item.getItemMeta();
-            if (meta != null) {
-                meta.setDisplayName(method.name());
-                item.setItemMeta(meta);
-            }
-            inv.addItem(item);
-        }
-        methodSelections.put(player.getUniqueId(), callback);
-        player.openInventory(inv);
+
+        runSynchronously(schedulingPlugin, player, () -> openMethodSelectionSync(player, callback));
     }
 
     /**
-     * Handle inventory clicks for value selection. When a player interacts with a
-     * request inventory this method determines the clicked item and invokes the
-     * appropriate callback or action.
+     * Opens the input method selection inventory on the server thread.
+     *
+     * @param player the player to show the method selection to
+     * @param callback the callback invoked with the selected method
+     */
+    private static void openMethodSelectionSync(Player player, Consumer<InputMethod> callback) {
+        if (callback == null) {
+            return;
+        }
+
+        InputMethod[] methods = InputMethod.values();
+        Inventory inventory = Bukkit.createInventory(null, getInventorySize(methods.length),
+                "Select Input Method");
+
+        for (InputMethod method : methods) {
+            inventory.addItem(createItem(Material.PAPER, method.name()));
+        }
+
+        methodSelections.put(player.getUniqueId(), callback);
+        player.openInventory(inventory);
+    }
+
+    /**
+     * Handles inventory clicks for value selection.
      *
      * @param event the inventory click event
      */
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
-        if (!(event.getWhoClicked() instanceof Player)) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        Player player = (Player) event.getWhoClicked();
+
         UUID uuid = player.getUniqueId();
-
         Consumer<InputMethod> selectionCallback = methodSelections.get(uuid);
+
         if (selectionCallback != null) {
-            event.setCancelled(true);
-            ItemStack selectionItem = event.getCurrentItem();
-            if (selectionItem == null || selectionItem.getType() == Material.AIR) {
-                return;
-            }
-            ItemMeta selectionMeta = selectionItem.getItemMeta();
-            if (selectionMeta == null || !selectionMeta.hasDisplayName()) {
-                return;
-            }
-            String methodName = selectionMeta.getDisplayName();
-            try {
-                InputMethod selectedMethod = InputMethod.valueOf(methodName.toUpperCase());
-                methodSelections.remove(uuid);
-                player.closeInventory();
-                selectionCallback.accept(selectedMethod);
-            } catch (IllegalArgumentException ex) {
-                player.sendMessage("Invalid input method: " + methodName);
-            }
+            handleMethodSelection(event, player, uuid, selectionCallback);
             return;
         }
 
-        RequestContext ctx = contexts.get(uuid);
-        if (ctx == null) {
+        RequestContext context = contexts.get(uuid);
+
+        if (context == null) {
             return;
         }
+
         event.setCancelled(true);
-        ItemStack clicked = event.getCurrentItem();
-        if (clicked == null || clicked.getType() == Material.AIR) {
+
+        String itemName = getItemName(event.getCurrentItem());
+
+        if (itemName == null) {
             return;
         }
-        ItemMeta meta = clicked.getItemMeta();
-        if (meta == null || !meta.hasDisplayName()) {
-            return;
-        }
-        String name = meta.getDisplayName();
-        // Change method button
-        if (name.equalsIgnoreCase("Change Method")) {
+
+        if (itemName.equalsIgnoreCase("Change Method")) {
             contexts.remove(uuid);
             player.closeInventory();
-            openMethodSelection(player, newMethod -> {
+
+            runNextTick(player, () -> openMethodSelectionSync(player, newMethod -> {
                 PlayerInputManager.setInputMethod(uuid, newMethod);
-                if (ctx.type == RequestType.STRING) {
-                    new ValueRequest(ctx.request.getPlugin(), ctx.request.getDialogService(), newMethod)
-                            .requestString(player, ctx.currentString, ctx.stringOptions, ctx.allowCustom, ctx.promptText,
-                                    ctx.stringListener);
-                } else if (ctx.type == RequestType.NUMBER) {
-                    new ValueRequest(ctx.request.getPlugin(), ctx.request.getDialogService(), newMethod)
-                            .requestNumber(player, ctx.currentNumber, ctx.numberOptions, ctx.allowCustom,
-                                    ctx.promptText, ctx.numberListener);
-                } else if (ctx.type == RequestType.BOOLEAN) {
-                    new ValueRequest(ctx.request.getPlugin(), ctx.request.getDialogService(), newMethod)
-                            .requestBoolean(player, ctx.currentBoolean, ctx.promptText, ctx.booleanListener);
-                }
-            });
+                reopenRequest(player, context, newMethod);
+            }));
             return;
         }
-        // Custom input button
-        if (name.equalsIgnoreCase("Enter Custom Value")) {
+
+        if (itemName.equalsIgnoreCase("Enter Custom Value")) {
             contexts.remove(uuid);
-            // fallback to chat
-            if (ctx.type == RequestType.STRING) {
-                new ValueRequest(ctx.request.getPlugin(), ctx.request.getDialogService(), InputMethod.CHAT)
-                        .requestString(player, ctx.currentString, ctx.stringOptions, ctx.allowCustom, ctx.promptText,
-                                ctx.stringListener);
-            } else if (ctx.type == RequestType.NUMBER) {
-                new ValueRequest(ctx.request.getPlugin(), ctx.request.getDialogService(), InputMethod.CHAT)
-                        .requestNumber(player, ctx.currentNumber,
-                                ctx.numberOptions,
-                                ctx.allowCustom, ctx.promptText, ctx.numberListener);
-            }
             player.closeInventory();
+
+            runNextTick(player, () -> reopenRequest(player, context, InputMethod.CHAT));
             return;
         }
-        // handle selection
+
         contexts.remove(uuid);
-        if (ctx.type == RequestType.STRING) {
-            String selected = name;
-            ctx.stringListener.onInput(player, selected);
-        } else if (ctx.type == RequestType.NUMBER) {
+
+        if (context.type == RequestType.STRING && context.stringListener != null) {
+            context.stringListener.onInput(player, itemName);
+        } else if (context.type == RequestType.NUMBER && context.numberListener != null) {
             try {
-                Double number = Double.valueOf(name);
-                ctx.numberListener.onInput(player, number);
-            } catch (NumberFormatException ex) {
-                player.sendMessage("Invalid number: " + name);
+                context.numberListener.onInput(player, Double.valueOf(itemName));
+            } catch (NumberFormatException exception) {
+                player.sendMessage("Invalid number: " + itemName);
             }
-        } else if (ctx.type == RequestType.BOOLEAN) {
-            if (name.equalsIgnoreCase("True")) {
-                ctx.booleanListener.onInput(player, true);
-            } else if (name.equalsIgnoreCase("False")) {
-                ctx.booleanListener.onInput(player, false);
+        } else if (context.type == RequestType.BOOLEAN && context.booleanListener != null) {
+            if (itemName.equalsIgnoreCase("True")) {
+                context.booleanListener.onInput(player, true);
+            } else if (itemName.equalsIgnoreCase("False")) {
+                context.booleanListener.onInput(player, false);
             }
         }
+
         player.closeInventory();
     }
 
     /**
-     * Clean up context when a player closes the request inventory. This prevents
-     * stale data and unintended interactions after the inventory is closed.
+     * Handles selection of a preferred input method.
+     *
+     * @param event the inventory click event
+     * @param player the player selecting a method
+     * @param uuid the player's unique identifier
+     * @param callback the method-selection callback
+     */
+    private void handleMethodSelection(InventoryClickEvent event, Player player, UUID uuid,
+            Consumer<InputMethod> callback) {
+        event.setCancelled(true);
+
+        String methodName = getItemName(event.getCurrentItem());
+
+        if (methodName == null) {
+            return;
+        }
+
+        try {
+            InputMethod selectedMethod = InputMethod.valueOf(methodName.toUpperCase());
+            methodSelections.remove(uuid);
+            player.closeInventory();
+            callback.accept(selectedMethod);
+        } catch (IllegalArgumentException exception) {
+            player.sendMessage("Invalid input method: " + methodName);
+        }
+    }
+
+    /**
+     * Reopens a request using the supplied input method.
+     *
+     * @param player the target player
+     * @param context the stored request context
+     * @param inputMethod the input method to use
+     */
+    private static void reopenRequest(Player player, RequestContext context, InputMethod inputMethod) {
+        ValueRequest valueRequest = new ValueRequest(context.request.getPlugin(),
+                context.request.getDialogService(), inputMethod);
+
+        if (context.type == RequestType.STRING) {
+            valueRequest.requestString(player, context.currentString, context.stringOptions,
+                    context.allowCustom, context.promptText, context.stringListener);
+        } else if (context.type == RequestType.NUMBER) {
+            valueRequest.requestNumber(player, context.currentNumber, context.numberOptions,
+                    context.allowCustom, context.promptText, context.numberListener);
+        } else if (context.type == RequestType.BOOLEAN) {
+            valueRequest.requestBoolean(player, context.currentBoolean, context.promptText,
+                    context.booleanListener);
+        }
+    }
+
+    /**
+     * Cleans up context when a player closes a request inventory.
      *
      * @param event the inventory close event
      */
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (event.getPlayer() instanceof Player) {
-            UUID uuid = ((Player) event.getPlayer()).getUniqueId();
-            contexts.remove(uuid);
-            methodSelections.remove(uuid);
+        if (!(event.getPlayer() instanceof Player player)) {
+            return;
         }
+
+        UUID uuid = player.getUniqueId();
+        contexts.remove(uuid);
+        methodSelections.remove(uuid);
+    }
+
+    /**
+     * Runs an operation synchronously.
+     *
+     * @param pluginInstance the plugin used for scheduling
+     * @param player the target player
+     * @param operation the operation to run
+     */
+    private static void runSynchronously(Plugin pluginInstance, Player player, Runnable operation) {
+        if (pluginInstance == null || player == null || operation == null) {
+            return;
+        }
+
+        if (Bukkit.isPrimaryThread()) {
+            if (player.isOnline()) {
+                operation.run();
+            }
+            return;
+        }
+
+        Bukkit.getScheduler().runTask(pluginInstance, () -> {
+            if (player.isOnline()) {
+                operation.run();
+            }
+        });
+    }
+
+    /**
+     * Runs an operation on the next server tick.
+     *
+     * @param player the target player
+     * @param operation the operation to run
+     */
+    private static void runNextTick(Player player, Runnable operation) {
+        Plugin schedulingPlugin = plugin;
+
+        if (schedulingPlugin == null || player == null || operation == null) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTask(schedulingPlugin, () -> {
+            if (player.isOnline()) {
+                operation.run();
+            }
+        });
+    }
+
+    /**
+     * Creates an inventory item with a display name.
+     *
+     * @param material the item material
+     * @param displayName the display name
+     * @return the created item
+     */
+    private static ItemStack createItem(Material material, String displayName) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+
+        if (meta != null) {
+            meta.setDisplayName(displayName == null ? "" : displayName);
+            item.setItemMeta(meta);
+        }
+
+        return item;
+    }
+
+    /**
+     * Gets the display name of an inventory item.
+     *
+     * @param item the inventory item
+     * @return the display name, or null when unavailable
+     */
+    private static String getItemName(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return null;
+        }
+
+        ItemMeta meta = item.getItemMeta();
+
+        if (meta == null || !meta.hasDisplayName()) {
+            return null;
+        }
+
+        return meta.getDisplayName();
+    }
+
+    /**
+     * Calculates a valid chest inventory size.
+     *
+     * @param slotCount the number of required slots
+     * @return a chest inventory size between 9 and 54
+     */
+    private static int getInventorySize(int slotCount) {
+        int size = Math.max(9, ((slotCount + 8) / 9) * 9);
+        return Math.min(size, 54);
+    }
+
+    /**
+     * Resolves an inventory title.
+     *
+     * @param requestedTitle the requested title
+     * @param fallbackTitle the fallback title
+     * @return the resolved title
+     */
+    private static String getTitle(String requestedTitle, String fallbackTitle) {
+        if (requestedTitle == null || requestedTitle.isEmpty()) {
+            return fallbackTitle;
+        }
+
+        return requestedTitle;
     }
 
     /**
      * Types of requests supported by the inventory interface.
      */
     private enum RequestType {
-        /** String request type. */
+
+        /**
+         * String request type.
+         */
         STRING,
-        /** Number request type. */
+
+        /**
+         * Number request type.
+         */
         NUMBER,
-        /** Boolean request type. */
+
+        /**
+         * Boolean request type.
+         */
         BOOLEAN
     }
 
     /**
-     * Context information for an active inventory request. Stores the request
-     * parameters so they can be reused when the player selects to change their
-     * input method or enters a custom value.
+     * Context information for an active inventory request.
      */
     private static class RequestContext {
+
         private RequestType type;
         private List<String> stringOptions;
         private List<? extends Number> numberOptions;
@@ -444,9 +580,6 @@ public class InventoryRequestManager implements Listener {
         private String currentString;
         private Number currentNumber;
         private boolean allowCustom;
-        /**
-         * The current boolean value when requesting a boolean input. May be null.
-         */
         private Boolean currentBoolean;
         private ValueRequest request;
         private String promptText;
