@@ -5,6 +5,7 @@ import java.util.UUID;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
+import org.bukkit.Bukkit;
 import org.bukkit.conversations.Conversable;
 import org.bukkit.conversations.ConversationContext;
 import org.bukkit.conversations.ConversationFactory;
@@ -15,6 +16,7 @@ import org.bukkit.plugin.Plugin;
 
 import com.bencodez.simpleapi.dialog.MultiActionDialogBuilder;
 import com.bencodez.simpleapi.dialog.UniDialogService;
+import com.bencodez.simpleapi.messages.MessageAPI;
 
 // Imports intentionally left minimal; inventory and book handling is delegated
 import lombok.Getter;
@@ -49,6 +51,22 @@ public class ValueRequest {
 	@Setter
 	private InputMethod defaultMethod;
 
+	private static String changeInputMethodMessage = "&7Input method not working? [Text=\"&e[Change Input Method]\",hover=\"&eClick to change your input method\",command=\"/av inputmethod\"]";
+
+	public static void initializeInputMethodChanger(String message) {
+		if (message != null && !message.trim().isEmpty()) {
+			changeInputMethodMessage = message;
+		}
+	}
+
+	public void sendChangeInputMethodMessage(Player player) {
+		if (player == null || !player.isOnline()) {
+			return;
+		}
+
+		MessageAPI.sendJson(player, MessageAPI.parseJson(MessageAPI.colorize(changeInputMethodMessage)));
+	}
+
 	/**
 	 * Create a new value requester using the provided plugin and dialog service.
 	 * The {@code method} parameter can be used to override the player's preferred
@@ -69,6 +87,32 @@ public class ValueRequest {
 		BookInputManager.initialize(plugin);
 		// ensure sign input manager registered
 		SignInputManager.initialize(plugin);
+	}
+	
+	public void openInputMethodSelection(Player player) {
+	    if (player == null || plugin == null) {
+	        return;
+	    }
+
+	    Runnable task = () -> {
+	        if (!player.isOnline()) {
+	            return;
+	        }
+
+	        InventoryRequestManager.initialize(plugin);
+
+	        InventoryRequestManager.openMethodSelection(player, newMethod -> {
+	            PlayerInputManager.setInputMethod(player.getUniqueId(), newMethod);
+
+	            player.sendMessage(MessageAPI.colorize("&aInput method set to &e" + newMethod.name()));
+	        });
+	    };
+
+	    if (Bukkit.isPrimaryThread()) {
+	        task.run();
+	    } else {
+	        Bukkit.getScheduler().runTask(plugin, task);
+	    }
 	}
 
 	/**
@@ -96,20 +140,36 @@ public class ValueRequest {
 		return PlayerInputManager.getInputMethod(player.getUniqueId());
 	}
 
-
 	/**
 	 * Handles a dialog failure by changing the player's saved input method to chat.
 	 *
-	 * @param player the player whose dialog failed
+	 * @param player    the player whose dialog failed
 	 * @param throwable the error thrown while creating or opening the dialog
 	 */
 	private void handleDialogFailure(Player player, Throwable throwable) {
 		plugin.getLogger().log(Level.WARNING,
-				"Failed to open an input dialog for " + player.getName()
-						+ ". Falling back to chat input.",
-				throwable);
+				"Failed to open an input dialog for " + player.getName() + ". Falling back to chat input.", throwable);
 
 		PlayerInputManager.setInputMethod(player.getUniqueId(), InputMethod.CHAT);
+	}
+
+	/**
+	 * Runs a callback on the next server tick after the active conversation has
+	 * ended.
+	 *
+	 * @param player the player associated with the callback
+	 * @param runnable the callback to run
+	 */
+	private void runNextTick(Player player, Runnable runnable) {
+		if (plugin == null || player == null || runnable == null) {
+			return;
+		}
+
+		Bukkit.getScheduler().runTask(plugin, () -> {
+			if (player.isOnline()) {
+				runnable.run();
+			}
+		});
 	}
 
 	/**
@@ -141,6 +201,8 @@ public class ValueRequest {
 	 */
 	public void requestString(Player player, String currentValue, List<String> options, boolean allowCustom,
 			String promptText, StringListener listener) {
+
+		sendChangeInputMethodMessage(player);
 		InputMethod method = getEffectiveMethod(player);
 		boolean hasOptions = options != null && !options.isEmpty();
 
@@ -185,7 +247,7 @@ public class ValueRequest {
 					if (currentValue != null && !currentValue.isEmpty()) {
 						inputBuilder.textInput().initial(currentValue);
 					} else {
-						inputBuilder.textInput().initial("Enter a value");
+						inputBuilder.textInput().label("Enter a value");
 					}
 					inputBuilder.required(!hasOptions);
 				});
@@ -263,7 +325,7 @@ public class ValueRequest {
 					player.sendMessage("Invalid value: " + value);
 					return Prompt.END_OF_CONVERSATION;
 				}
-				listener.onInput(player, value);
+				runNextTick(player, () -> listener.onInput(player, value));
 				return Prompt.END_OF_CONVERSATION;
 			}
 		}).buildConversation((Conversable) player).begin();
@@ -284,6 +346,8 @@ public class ValueRequest {
 	 */
 	public void requestNumber(Player player, Number currentValue, List<? extends Number> options, boolean allowCustom,
 			String promptText, NumberListener listener) {
+		sendChangeInputMethodMessage(player);
+
 		InputMethod method = getEffectiveMethod(player);
 		boolean hasOptions = options != null && !options.isEmpty();
 		boolean canUseDialog = hasOptions || allowCustom;
@@ -450,7 +514,8 @@ public class ValueRequest {
 						return Prompt.END_OF_CONVERSATION;
 					}
 				}
-				listener.onInput(player, number);
+				Double finalNumber = number;
+				runNextTick(player, () -> listener.onInput(player, finalNumber));
 				return Prompt.END_OF_CONVERSATION;
 			}
 		}).buildConversation((Conversable) player).begin();
@@ -467,6 +532,7 @@ public class ValueRequest {
 	 * @param listener     the callback to invoke with the provided boolean value
 	 */
 	public void requestBoolean(Player player, Boolean currentValue, String promptText, BooleanListener listener) {
+		sendChangeInputMethodMessage(player);
 		InputMethod method = getEffectiveMethod(player);
 		if (method == InputMethod.SIGN) {
 			// Use sign input for boolean values
@@ -558,10 +624,10 @@ public class ValueRequest {
 					return Prompt.END_OF_CONVERSATION;
 				}
 				if (value.equalsIgnoreCase("true") || value.equalsIgnoreCase("yes") || value.equalsIgnoreCase("y")) {
-					listener.onInput(player, true);
+					runNextTick(player, () -> listener.onInput(player, true));
 				} else if (value.equalsIgnoreCase("false") || value.equalsIgnoreCase("no")
 						|| value.equalsIgnoreCase("n")) {
-					listener.onInput(player, false);
+					runNextTick(player, () -> listener.onInput(player, false));
 				} else {
 					player.sendMessage("Invalid boolean value: " + value);
 				}
@@ -594,6 +660,7 @@ public class ValueRequest {
 	}
 
 	public void requestMultipleValues(Player player, List<MultiValueField> fields, MultiValueListener listener) {
+		sendChangeInputMethodMessage(player);
 		if (fields == null || fields.isEmpty()) {
 			listener.onInput(player, new MultiValueResult());
 			return;
@@ -752,49 +819,49 @@ public class ValueRequest {
 	 * {@link MultiValueField} objects and delegates to
 	 * {@link #requestMultipleValues(Player, List, MultiValueListener)}.
 	 *
-	 * @param player the player to prompt
-	 * @param prompts list of prompt labels
+	 * @param player        the player to prompt
+	 * @param prompts       list of prompt labels
 	 * @param currentValues optional default values
-	 * @param listener callback containing ordered string results
+	 * @param listener      callback containing ordered string results
 	 */
 	public void requestMultipleStrings(Player player, List<String> prompts, List<String> currentValues,
-	        MultiStringListener listener) {
+			MultiStringListener listener) {
 
-	    if (prompts == null || prompts.isEmpty()) {
-	        listener.onInput(player, java.util.Collections.emptyList());
-	        return;
-	    }
+		if (prompts == null || prompts.isEmpty()) {
+			listener.onInput(player, java.util.Collections.emptyList());
+			return;
+		}
 
-	    List<MultiValueField> fields = new java.util.ArrayList<MultiValueField>();
+		List<MultiValueField> fields = new java.util.ArrayList<MultiValueField>();
 
-	    for (int i = 0; i < prompts.size(); i++) {
-	        String id = "value" + i;
-	        String label = prompts.get(i);
+		for (int i = 0; i < prompts.size(); i++) {
+			String id = "value" + i;
+			String label = prompts.get(i);
 
-	        MultiValueField field = new MultiValueField(id, label, MultiValueField.FieldType.STRING);
+			MultiValueField field = new MultiValueField(id, label, MultiValueField.FieldType.STRING);
 
-	        if (currentValues != null && i < currentValues.size()) {
-	            field.stringValue(currentValues.get(i));
-	        }
+			if (currentValues != null && i < currentValues.size()) {
+				field.stringValue(currentValues.get(i));
+			}
 
-	        field.required(true);
+			field.required(true);
 
-	        fields.add(field);
-	    }
+			fields.add(field);
+		}
 
-	    requestMultipleValues(player, fields, (p, result) -> {
-	        java.util.List<String> values = new java.util.ArrayList<String>();
+		requestMultipleValues(player, fields, (p, result) -> {
+			java.util.List<String> values = new java.util.ArrayList<String>();
 
-	        for (int i = 0; i < prompts.size(); i++) {
-	            String id = "value" + i;
-	            String value = result.getString(id);
-	            if (value == null) {
-	                value = "";
-	            }
-	            values.add(value);
-	        }
+			for (int i = 0; i < prompts.size(); i++) {
+				String id = "value" + i;
+				String value = result.getString(id);
+				if (value == null) {
+					value = "";
+				}
+				values.add(value);
+			}
 
-	        listener.onInput(p, values);
-	    });
+			listener.onInput(p, values);
+		});
 	}
 }

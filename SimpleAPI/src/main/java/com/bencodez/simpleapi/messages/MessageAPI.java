@@ -16,6 +16,7 @@ import com.bencodez.simpleapi.player.PlayerUtils;
 import lombok.Getter;
 import net.md_5.bungee.api.ChatColor;
 import net.md_5.bungee.api.chat.BaseComponent;
+import net.md_5.bungee.api.chat.ClickEvent;
 import net.md_5.bungee.api.chat.TextComponent;
 import net.md_5.bungee.chat.ComponentSerializer;
 
@@ -218,6 +219,74 @@ public class MessageAPI {
 		str = str.replaceAll("\\}", "%");
 		str = str.replace("%" + toReplace + "%", replaceWith);
 		return str;
+	}
+	
+	@SuppressWarnings("deprecation")
+	public static TextComponent parseJson(String msg) {
+		TextComponent comp = new TextComponent("");
+		if (MessageAPI.contains(msg, "[Text=\"")) {
+			String preMessage = "";
+			String postMessage = "";
+
+			int startIndex = msg.indexOf("[Text=\"");
+			int endIndex = msg.indexOf("\"]");
+			int middle = msg.indexOf("\",", startIndex);
+			preMessage = msg.substring(0, startIndex);
+			postMessage = msg.substring(endIndex + "\"]".length());
+
+			int postText = startIndex + "[Text=\"".length();
+
+			String text = MessageAPI.colorize(msg.substring(postText, middle));
+
+			TextComponent t = new TextComponent(text);
+
+			String typeMsg = msg;
+			// types
+			boolean parsing = true;
+			while (parsing) {
+				int nextTypeIndex = typeMsg.indexOf("\",");
+				int typeMiddle = typeMsg.indexOf("=\"", nextTypeIndex);
+				String type = typeMsg.substring(nextTypeIndex + "\",".length(), typeMiddle);
+				int typeEndIndex = typeMsg.indexOf("\",", typeMiddle);
+				int endIndex1 = typeMsg.indexOf("\"]");
+
+				if (typeEndIndex == -1 || typeEndIndex > endIndex1) {
+					typeEndIndex = endIndex1;
+					parsing = false;
+				}
+				String typeData = typeMsg.substring(typeMiddle + "=\"".length(), typeEndIndex);
+				if (parsing) {
+					typeMsg = typeMsg.substring(typeEndIndex);
+				}
+
+				if (type.equalsIgnoreCase("hover")) {
+					BaseComponent[] hoverContent = TextComponent.fromLegacyText(typeData);
+					t.setHoverEvent(MessageAPI.getHoverEventSupport().createHoverEvent(hoverContent));
+				} else if (type.equalsIgnoreCase("command")) {
+					t.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, typeData));
+				} else if (type.equalsIgnoreCase("url")) {
+					t.setClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, typeData));
+				} else if (type.equalsIgnoreCase("suggest_command")) {
+					t.setClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, typeData));
+				}
+
+			}
+			/*
+			 * int secondMiddle = msg.indexOf("=\"", middle); String type =
+			 * msg.substring(middle + "\",".length(), secondMiddle); String typeData =
+			 * msg.substring(secondMiddle + "=\"".length(), endIndex);
+			 */
+
+			comp.addExtra(parseJson(preMessage));
+
+			comp.addExtra(t);
+
+			comp.addExtra(parseJson(postMessage));
+		} else {
+
+			comp.addExtra(new TextComponent(TextComponent.fromLegacyText(msg)));
+		}
+		return comp;
 	}
 
 	public static void sendJson(Player player, ArrayList<TextComponent> messages) {

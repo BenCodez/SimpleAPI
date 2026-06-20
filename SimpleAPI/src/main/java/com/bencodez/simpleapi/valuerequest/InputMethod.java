@@ -1,5 +1,7 @@
 package com.bencodez.simpleapi.valuerequest;
 
+import java.util.ArrayList;
+
 /**
  * Represents the different input mechanisms available when requesting a value
  * from a player. DIALOG is preferred on modern servers with UniDialog
@@ -58,4 +60,13 @@ public enum InputMethod {
         }
         return DIALOG;
     }
+    
+    public static ArrayList<String> getMethodNames() {
+		ArrayList<String> names = new ArrayList<>();
+		for (InputMethod method : values()) {
+			names.add(method.toString());
+		}
+		return names;
+	}
+    
 }
