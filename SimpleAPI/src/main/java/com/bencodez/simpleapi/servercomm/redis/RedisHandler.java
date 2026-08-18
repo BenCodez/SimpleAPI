@@ -2,7 +2,11 @@ package com.bencodez.simpleapi.servercomm.redis;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
@@ -12,11 +16,17 @@ import redis.clients.jedis.DefaultJedisClientConfig;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisClientConfig;
+import redis.clients.jedis.JedisPool;
 
 public abstract class RedisHandler {
 
+	private static final int PUBLISH_QUEUE_CAPACITY = 1024;
+	private static final long PUBLISHER_SHUTDOWN_TIMEOUT_SECONDS = 3L;
+
 	private final HostAndPort endpoint;
 	private final JedisClientConfig clientConfig;
+	private final JedisPool publisherPool;
+	private final ThreadPoolExecutor publisherExecutor;
 
 	private final Map<RedisListener, Thread> listenerThreads = new ConcurrentHashMap<>();
 	private volatile boolean shuttingDown = false;
@@ -42,6 +52,13 @@ public abstract class RedisHandler {
 		}
 
 		this.clientConfig = cfg.build();
+		this.publisherPool = new JedisPool(endpoint, clientConfig);
+		this.publisherExecutor = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+				new ArrayBlockingQueue<>(PUBLISH_QUEUE_CAPACITY), runnable -> {
+					Thread thread = new Thread(runnable, "RedisPublishThread-" + endpoint);
+					thread.setDaemon(true);
+					return thread;
+				}, new ThreadPoolExecutor.AbortPolicy());
 	}
 
 	public void close() {
@@ -58,6 +75,22 @@ public abstract class RedisHandler {
 			}
 		}
 		listenerThreads.clear();
+
+		publisherExecutor.shutdown();
+		boolean interrupted = false;
+		try {
+			if (!publisherExecutor.awaitTermination(PUBLISHER_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+				publisherExecutor.shutdownNow();
+			}
+		} catch (InterruptedException e) {
+			publisherExecutor.shutdownNow();
+			interrupted = true;
+		} finally {
+			publisherPool.close();
+			if (interrupted) {
+				Thread.currentThread().interrupt();
+			}
+		}
 	}
 
 	public void loadListener(RedisListener listener) {
@@ -117,11 +150,31 @@ public abstract class RedisHandler {
 		thread.start();
 	}
 
-	/** Publish an envelope as a single JSON string. */
+	/**
+	 * Queues an envelope for ordered asynchronous publishing. Network connection,
+	 * authentication and publish I/O are never performed on the caller thread.
+	 */
 	public void publishEnvelope(String channel, JsonEnvelope envelope) {
-		String payload = JsonEnvelopeCodec.encode(envelope);
+		if (shuttingDown) {
+			return;
+		}
 
-		try (Jedis jedis = new Jedis(endpoint, clientConfig)) {
+		String payload = JsonEnvelopeCodec.encode(envelope);
+		try {
+			publisherExecutor.execute(() -> publishNow(channel, payload));
+		} catch (RejectedExecutionException e) {
+			if (!shuttingDown) {
+				debug("Redis publish queue is full; dropping message for channel " + channel);
+			}
+		}
+	}
+
+	/**
+	 * Performs one publish using the pooled publisher connection. Kept protected so
+	 * transport scheduling can be regression-tested without a live Redis server.
+	 */
+	protected void publishNow(String channel, String payload) {
+		try (Jedis jedis = publisherPool.getResource()) {
 			debug("Redis Send: " + channel + ", " + payload);
 			jedis.publish(channel, payload);
 		} catch (Exception e) {
