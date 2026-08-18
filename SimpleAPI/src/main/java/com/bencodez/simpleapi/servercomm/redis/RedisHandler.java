@@ -17,6 +17,7 @@ import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 
 public abstract class RedisHandler {
 
@@ -52,7 +53,9 @@ public abstract class RedisHandler {
 		}
 
 		this.clientConfig = cfg.build();
-		this.publisherPool = new JedisPool(endpoint, clientConfig);
+		JedisPoolConfig publisherPoolConfig = new JedisPoolConfig();
+		publisherPoolConfig.setTestOnBorrow(true);
+		this.publisherPool = new JedisPool(publisherPoolConfig, endpoint, clientConfig);
 		this.publisherExecutor = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
 				new ArrayBlockingQueue<>(PUBLISH_QUEUE_CAPACITY), runnable -> {
 					Thread thread = new Thread(runnable, "RedisPublishThread-" + endpoint);
