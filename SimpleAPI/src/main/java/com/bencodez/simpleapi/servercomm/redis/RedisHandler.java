@@ -9,6 +9,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
+import javax.net.ssl.SSLParameters;
+
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelopeCodec;
 
@@ -37,22 +39,14 @@ public abstract class RedisHandler {
 	private static final long RECONNECT_MAX_MS = 30000L;
 
 	public RedisHandler(String host, int port, String username, String password, int dbIndex) {
+		this(host, port, username, password, dbIndex, false);
+	}
+
+	public RedisHandler(String host, int port, String username, String password, int dbIndex, boolean ssl) {
 		Objects.requireNonNull(host, "host");
 		this.endpoint = new HostAndPort(host, port);
+		this.clientConfig = buildClientConfig(username, password, dbIndex, ssl);
 
-		DefaultJedisClientConfig.Builder cfg = DefaultJedisClientConfig.builder()
-				.database(dbIndex)
-				.connectionTimeoutMillis(2000)
-				.socketTimeoutMillis(2000);
-
-		if (username != null && !username.isEmpty()) {
-			cfg.user(username);
-		}
-		if (password != null && !password.isEmpty()) {
-			cfg.password(password);
-		}
-
-		this.clientConfig = cfg.build();
 		JedisPoolConfig publisherPoolConfig = new JedisPoolConfig();
 		publisherPoolConfig.setTestOnBorrow(true);
 		this.publisherPool = new JedisPool(publisherPoolConfig, endpoint, clientConfig);
@@ -62,6 +56,27 @@ public abstract class RedisHandler {
 					thread.setDaemon(true);
 					return thread;
 				}, new ThreadPoolExecutor.AbortPolicy());
+	}
+
+	static DefaultJedisClientConfig buildClientConfig(String username, String password, int dbIndex, boolean ssl) {
+		DefaultJedisClientConfig.Builder cfg = DefaultJedisClientConfig.builder()
+				.database(dbIndex)
+				.ssl(ssl)
+				.connectionTimeoutMillis(2000)
+				.socketTimeoutMillis(2000);
+		if (ssl) {
+			SSLParameters sslParameters = new SSLParameters();
+			sslParameters.setEndpointIdentificationAlgorithm("HTTPS");
+			cfg.sslParameters(sslParameters);
+		}
+
+		if (username != null && !username.isEmpty()) {
+			cfg.user(username);
+		}
+		if (password != null && !password.isEmpty()) {
+			cfg.password(password);
+		}
+		return cfg.build();
 	}
 
 	public void close() {
