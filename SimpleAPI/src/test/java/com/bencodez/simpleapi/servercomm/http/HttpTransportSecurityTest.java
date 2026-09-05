@@ -356,6 +356,47 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void lostEnrollmentResponseCanRetryUntilCertificatePossessionIsProved() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("retry-enrollment-proxy"), "localhost");
+		Path state = directory.resolve("retry-enrollment-state");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
+		HttpConnectionCode code = authority.createConnectionCode("lobby-1",
+				URI.create("https://localhost:8443/"), Duration.ofMinutes(5));
+		HttpTlsIdentity.IssuedClientCertificate lost = authority.enroll("lobby-1", code.enrollmentToken());
+
+		HttpEnrollmentAuthority restarted = new HttpEnrollmentAuthority(identity, state);
+		HttpTlsIdentity.IssuedClientCertificate retried = restarted.enroll("lobby-1", code.enrollmentToken());
+		HttpEnrollmentAuthority beforeProof = new HttpEnrollmentAuthority(identity, state);
+		assertFalse(beforeProof.authenticate("lobby-1", lost.certificate()),
+				"retrying enrollment must supersede the certificate from the lost response");
+		assertTrue(beforeProof.authenticate("lobby-1", retried.certificate()),
+				"the first authenticated request must promote the certificate durably");
+
+		HttpEnrollmentAuthority afterProof = new HttpEnrollmentAuthority(identity, state);
+		assertTrue(afterProof.authenticate("lobby-1", retried.certificate()));
+		assertThrows(IllegalArgumentException.class,
+				() -> afterProof.enroll("lobby-1", code.enrollmentToken()),
+				"proof of possession must consume the one-time enrollment token");
+	}
+
+	@Test
+	void failedPendingCertificateWriteLeavesEnrollmentTokenRetryable() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("failed-enrollment-proxy"), "localhost");
+		Path state = directory.resolve("failed-enrollment-state");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
+		HttpConnectionCode code = authority.createConnectionCode("lobby-1",
+				URI.create("https://localhost:8443/"), Duration.ofMinutes(5));
+		Path stateFile = state.resolve("http-transport-clients.properties");
+		Files.delete(stateFile);
+		Files.createDirectory(stateFile);
+
+		assertThrows(java.io.IOException.class, () -> authority.enroll("lobby-1", code.enrollmentToken()));
+		Files.delete(stateFile);
+		HttpTlsIdentity.IssuedClientCertificate retried = authority.enroll("lobby-1", code.enrollmentToken());
+		assertTrue(authority.authenticate("lobby-1", retried.certificate()));
+	}
+
+	@Test
 	void authorityStatePrunesRevocationsAndBoundsActiveBindings() throws Exception {
 		Path proxy = directory.resolve("bounded-proxy");
 		Path state = directory.resolve("bounded-state");

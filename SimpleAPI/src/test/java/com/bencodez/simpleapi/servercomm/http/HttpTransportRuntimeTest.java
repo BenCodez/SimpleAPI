@@ -144,11 +144,13 @@ class HttpTransportRuntimeTest {
 				JsonEnvelope.builder("durable").build());
 
 		assertFalse(state.enqueue(delivery), "post-publication failure must not confirm durable acceptance");
-		assertEquals(java.util.List.of(delivery),
-				state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages());
+		assertTrue(state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty(),
+				"an uncertain publication must remain hidden until its durability retry succeeds");
 		assertEquals(1L, countRegularFiles(queueRoot));
 		assertTrue(state.enqueue(delivery), "same-ID retry must confirm the existing published file");
 		assertEquals(1L, countRegularFiles(queueRoot), "durability retry must not create a duplicate file");
+		assertEquals(java.util.List.of(delivery),
+				state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages());
 		state.acknowledge(java.util.List.of(deliveryId));
 		assertEquals(0L, countRegularFiles(queueRoot), "the tracked published file must be removable by ACK");
 	}

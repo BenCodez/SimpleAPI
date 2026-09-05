@@ -396,11 +396,6 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			}
 			if (outgoing.size() >= HttpTransportProtocol.MAX_QUEUE) return false;
 			if (durableOutgoing != null) try { durableOutgoing.persist(serverId, delivery); }
-			catch (DurableFiles.PublishedException uncertain) {
-				// Keep the published entry reachable for delivery, acknowledgement, and a
-				// same-ID durability retry even though acceptance cannot yet be confirmed.
-				outgoing.put(delivery.id(), delivery); touch(); signal(); return false;
-			}
 			catch (IOException failure) { return false; }
 			outgoing.put(delivery.id(), delivery); touch(); signal(); return true;
 		}
@@ -599,6 +594,17 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				// its parent. Persist the root entry before accepting the first message.
 				if (created) directoryForcer.force(root);
 			}
+			Map<String, Path> serverFiles = files.computeIfAbsent(serverId, ignored -> new HashMap<>());
+			Path existing = serverFiles.get(delivery.id());
+			if (existing != null) {
+				if (Files.isSymbolicLink(existing) || !Files.isRegularFile(existing, LinkOption.NOFOLLOW_LINKS)
+						|| Files.size(existing) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L
+						|| !Arrays.equals(Files.readAllBytes(existing), HttpTransportProtocol.storedDelivery(delivery)))
+					throw new IOException("HTTP outgoing queue delivery id conflicts with persisted data");
+				ownerOnlyFile(existing);
+				directoryForcer.force(directory);
+				return;
+			}
 			if (sequence == Long.MAX_VALUE) throw new IOException("HTTP outgoing queue sequence is exhausted");
 			String name = String.format(java.util.Locale.ROOT, "%020d-%s.json", ++sequence, delivery.id());
 			Path target = directory.resolve(name);
@@ -609,7 +615,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				DurableFiles.forceFile(temporary);
 				try { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE); }
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, target); }
-				files.computeIfAbsent(serverId, ignored -> new HashMap<>()).put(delivery.id(), target);
+				serverFiles.put(delivery.id(), target);
 				try { ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
 					throw new DurableFiles.PublishedException(postPublicationFailure);

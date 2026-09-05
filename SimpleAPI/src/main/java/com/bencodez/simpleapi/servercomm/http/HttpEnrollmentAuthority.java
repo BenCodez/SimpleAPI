@@ -19,8 +19,9 @@ import java.util.EnumSet;
 import com.bencodez.simpleapi.file.DurableFiles;
 
 /**
- * Single-use enrollment tokens and client-certificate binding.  Token material is never retained;
- * only SHA-256 hashes are kept until expiry.  This type is thread-safe.
+ * Single-activation enrollment tokens and client-certificate binding. A token may retry certificate
+ * issuance until possession is proved, but can activate only one binding. Token material is never
+ * retained; only SHA-256 hashes are kept until expiry. This type is thread-safe.
  */
 public final class HttpEnrollmentAuthority {
 	private static final Duration MAX_ENROLLMENT_LIFETIME = Duration.ofMinutes(15);
@@ -63,7 +64,7 @@ public final class HttpEnrollmentAuthority {
 		String token = HttpTransportSecrets.randomToken();
 		byte[] tokenHash = HttpTransportSecrets.sha256(token.getBytes(StandardCharsets.US_ASCII));
 		String lookup = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(tokenHash);
-		enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId));
+		enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, null));
 		try { persistState(); }
 		catch (java.io.IOException failure) {
 			enrollments.remove(lookup);
@@ -84,13 +85,17 @@ public final class HttpEnrollmentAuthority {
 		if (!serverId.equals(enrollment.serverId())) throw new IllegalArgumentException("Enrollment was rejected");
 		ClientBinding existing = bindings.get(serverId);
 		if (existing != null && !existing.revoked()) throw new IllegalStateException("Server id is already enrolled");
-		if (existing == null && bindings.size() >= MAX_BINDINGS)
+		if (existing == null && !hasPendingCertificate(serverId) && reservedBindingCount() >= MAX_BINDINGS)
 			throw new IllegalStateException("Too many enrolled HTTP backends");
-		enrollments.remove(lookup); // consume only after all checks for the token and its intended backend pass.
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate(serverId);
-		bindings.put(serverId, new ClientBinding(HttpTransportSecrets.certificatePin(issued.certificate()), null, false));
-		try { persistState(); }
-		catch (java.io.IOException failure) { persistenceFailure = true; throw failure; }
+		enrollments.put(lookup, new Enrollment(enrollment.tokenHash(), enrollment.expiresAt(), serverId,
+				HttpTransportSecrets.certificatePin(issued.certificate())));
+		try { persistState(); persistenceFailure = false; }
+		catch (java.io.IOException failure) {
+			if (!(failure instanceof DurableFiles.PublishedException)) enrollments.put(lookup, enrollment);
+			else persistenceFailure = true;
+			throw failure;
+		}
 		return issued;
 	}
 
@@ -101,12 +106,28 @@ public final class HttpEnrollmentAuthority {
 		if (!identity.validClientCertificate(serverId, certificate)) return false;
 		ClientBinding binding = bindings.get(serverId);
 		String pin = HttpTransportSecrets.certificatePin(certificate);
-		if (binding == null || binding.revoked()) return false;
-		if (samePin(binding.certificatePin(), pin)) return true;
-		if (!samePin(binding.pendingCertificatePin(), pin)) return false;
+		if (binding != null && !binding.revoked()) {
+			if (samePin(binding.certificatePin(), pin)) return true;
+			if (!samePin(binding.pendingCertificatePin(), pin)) return false;
+			bindings.put(serverId, new ClientBinding(pin, null, false));
+			try { persistState(); return true; }
+			catch (java.io.IOException failure) { persistenceFailure = true; return false; }
+		}
+		Map.Entry<String, Enrollment> pending = pendingCertificate(serverId, pin);
+		if (pending == null || bindings.size() >= MAX_BINDINGS) return false;
+		enrollments.remove(pending.getKey());
 		bindings.put(serverId, new ClientBinding(pin, null, false));
 		try { persistState(); return true; }
-		catch (java.io.IOException failure) { persistenceFailure = true; return false; }
+		catch (DurableFiles.PublishedException published) {
+			// The visible state is active. If its directory entry is lost on a crash, the
+			// prior pending state can promote this same certificate again after restart.
+			return true;
+		}
+		catch (java.io.IOException failure) {
+			bindings.remove(serverId);
+			enrollments.put(pending.getKey(), pending.getValue());
+			return false;
+		}
 	}
 
 	/** Issues a replacement while the currently bound certificate is still valid. The old binding remains active
@@ -161,7 +182,7 @@ public final class HttpEnrollmentAuthority {
 		Properties properties = new Properties();
 		try (var input = Files.newInputStream(stateFile, LinkOption.NOFOLLOW_LINKS)) { properties.load(input); }
 		String version = properties.getProperty("version");
-		if (!("1".equals(version) || "2".equals(version) || "3".equals(version)))
+		if (!("1".equals(version) || "2".equals(version) || "3".equals(version) || "4".equals(version)))
 			throw new java.io.IOException("HTTP enrollment state is invalid");
 		for (String key : properties.stringPropertyNames()) {
 			if (key.startsWith("binding.")) {
@@ -169,7 +190,7 @@ public final class HttpEnrollmentAuthority {
 				serverId = HttpTlsIdentity.canonicalServerId(serverId);
 				String[] value = properties.getProperty(key, "").split(":", -1);
 				if (!((value.length == 2 && "1".equals(version))
-						|| (value.length == 3 && ("2".equals(version) || "3".equals(version))))
+						|| (value.length == 3 && ("2".equals(version) || "3".equals(version) || "4".equals(version))))
 						|| !value[0].matches("[0-9a-f]{64}"))
 					throw new java.io.IOException("HTTP enrollment state is invalid");
 				String pending = value.length == 3 && !"-".equals(value[1]) ? value[1] : null;
@@ -180,7 +201,7 @@ public final class HttpEnrollmentAuthority {
 					if (bindings.size() >= MAX_BINDINGS) throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 					bindings.put(serverId, new ClientBinding(value[0], pending, false));
 				}
-			} else if (key.startsWith("enrollment.") && "3".equals(version)) {
+			} else if (key.startsWith("enrollment.") && ("3".equals(version) || "4".equals(version))) {
 				String lookup = key.substring("enrollment.".length());
 				if (!lookup.matches("[A-Za-z0-9_-]{43}")) throw new java.io.IOException("HTTP enrollment state is invalid");
 				byte[] tokenHash;
@@ -188,28 +209,34 @@ public final class HttpEnrollmentAuthority {
 				catch (IllegalArgumentException invalid) { throw new java.io.IOException("HTTP enrollment state is invalid", invalid); }
 				if (tokenHash.length != 32) throw new java.io.IOException("HTTP enrollment state is invalid");
 				String[] value = properties.getProperty(key, "").split(":", -1);
-				if (value.length != 2) throw new java.io.IOException("HTTP enrollment state is invalid");
+				if (!(value.length == 2 && "3".equals(version)) && !(value.length == 3 && "4".equals(version)))
+					throw new java.io.IOException("HTTP enrollment state is invalid");
 				Instant expiresAt;
 				String serverId;
+				String pendingPin = value.length == 3 && !"-".equals(value[2]) ? value[2] : null;
 				try {
 					expiresAt = Instant.ofEpochMilli(Long.parseLong(value[0]));
 					serverId = HttpTlsIdentity.canonicalServerId(new String(Base64.getUrlDecoder().decode(value[1]), StandardCharsets.UTF_8));
 				} catch (RuntimeException invalid) { throw new java.io.IOException("HTTP enrollment state is invalid", invalid); }
+				if (pendingPin != null && !pendingPin.matches("[0-9a-f]{64}"))
+					throw new java.io.IOException("HTTP enrollment state is invalid");
 				if (expiresAt.isAfter(clock.instant())) {
 					if (enrollments.size() >= MAX_PENDING_ENROLLMENTS)
 						throw new java.io.IOException("HTTP enrollment state exceeds its bound");
-					enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId));
+					enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, pendingPin));
 				}
 			} else if (!"version".equals(key)) throw new java.io.IOException("HTTP enrollment state is invalid");
 		}
+		if (reservedBindingCount() > MAX_BINDINGS)
+			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 	}
 
 	private synchronized void persistState() throws java.io.IOException {
 		if (stateFile == null) return;
-		if (bindings.size() > MAX_BINDINGS || enrollments.size() > MAX_PENDING_ENROLLMENTS)
+		if (reservedBindingCount() > MAX_BINDINGS || enrollments.size() > MAX_PENDING_ENROLLMENTS)
 			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 		Properties properties = new Properties();
-		properties.setProperty("version", "3");
+		properties.setProperty("version", "4");
 		for (Map.Entry<String, ClientBinding> entry : bindings.entrySet()) {
 			String key = Base64.getUrlEncoder().withoutPadding().encodeToString(entry.getKey().getBytes(StandardCharsets.UTF_8));
 			properties.setProperty("binding." + key, entry.getValue().certificatePin() + ":"
@@ -220,7 +247,8 @@ public final class HttpEnrollmentAuthority {
 			String server = Base64.getUrlEncoder().withoutPadding().encodeToString(
 					entry.getValue().serverId().getBytes(StandardCharsets.UTF_8));
 			properties.setProperty("enrollment." + entry.getKey(),
-					entry.getValue().expiresAt().toEpochMilli() + ":" + server);
+					entry.getValue().expiresAt().toEpochMilli() + ":" + server + ":"
+							+ (entry.getValue().pendingCertificatePin() == null ? "-" : entry.getValue().pendingCertificatePin()));
 		}
 		java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
 		properties.store(bytes, "VotingPlugin HTTP transport authority state");
@@ -271,7 +299,28 @@ public final class HttpEnrollmentAuthority {
 		enrollments.entrySet().removeIf(entry -> !entry.getValue().expiresAt().isAfter(now));
 	}
 
-	private record Enrollment(byte[] tokenHash, Instant expiresAt, String serverId) {
+	private int reservedBindingCount() {
+		java.util.Set<String> reserved = new java.util.HashSet<>(bindings.keySet());
+		for (Enrollment enrollment : enrollments.values())
+			if (enrollment.pendingCertificatePin() != null) reserved.add(enrollment.serverId());
+		return reserved.size();
+	}
+
+	private boolean hasPendingCertificate(String serverId) {
+		for (Enrollment enrollment : enrollments.values())
+			if (serverId.equals(enrollment.serverId()) && enrollment.pendingCertificatePin() != null) return true;
+		return false;
+	}
+
+	private Map.Entry<String, Enrollment> pendingCertificate(String serverId, String pin) {
+		for (Map.Entry<String, Enrollment> entry : enrollments.entrySet()) {
+			Enrollment enrollment = entry.getValue();
+			if (serverId.equals(enrollment.serverId()) && samePin(enrollment.pendingCertificatePin(), pin)) return entry;
+		}
+		return null;
+	}
+
+	private record Enrollment(byte[] tokenHash, Instant expiresAt, String serverId, String pendingCertificatePin) {
 		private Enrollment { tokenHash = tokenHash.clone(); }
 		@Override public byte[] tokenHash() { return tokenHash.clone(); }
 	}
