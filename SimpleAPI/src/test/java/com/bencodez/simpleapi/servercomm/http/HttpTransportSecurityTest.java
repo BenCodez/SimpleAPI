@@ -292,6 +292,31 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void failedRevocationPersistenceCanBeRetriedWithoutLosingState() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("retry-revoke-proxy"), "localhost");
+		Path stateDirectory = directory.resolve("retry-revoke-state");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, stateDirectory);
+		URI endpoint = URI.create("https://localhost:8443/");
+		HttpConnectionCode active = authority.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
+		HttpTlsIdentity.IssuedClientCertificate issued = authority.enroll("lobby-1", active.enrollmentToken());
+		HttpConnectionCode pending = authority.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
+		Path stateFile = stateDirectory.resolve("http-transport-clients.properties");
+		Files.delete(stateFile);
+		Files.createDirectory(stateFile);
+
+		assertThrows(IllegalStateException.class, () -> authority.revoke("lobby-1"));
+		assertFalse(authority.authenticate("lobby-1", issued.certificate()),
+				"an unpersisted revocation must fail authentication closed");
+		Files.delete(stateFile);
+		authority.revoke("lobby-1");
+
+		HttpEnrollmentAuthority restarted = new HttpEnrollmentAuthority(identity, stateDirectory);
+		assertFalse(restarted.authenticate("lobby-1", issued.certificate()));
+		assertThrows(IllegalArgumentException.class,
+				() -> restarted.enroll("lobby-1", pending.enrollmentToken()));
+	}
+
+	@Test
 	void pendingEnrollmentSurvivesRestartAndRevocationRemainsDurable() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pending-restart-proxy"), "localhost");
 		Path state = directory.resolve("pending-restart-state");

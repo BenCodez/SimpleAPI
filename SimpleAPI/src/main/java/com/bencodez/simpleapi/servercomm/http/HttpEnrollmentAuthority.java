@@ -33,6 +33,7 @@ public final class HttpEnrollmentAuthority {
 	private final Map<String, Enrollment> enrollments = new HashMap<>();
 	private final Map<String, ClientBinding> bindings = new HashMap<>();
 	private boolean persistenceFailure;
+	private boolean revocationRetryRequired;
 
 	/** Creates a restart-safe authority. State contains public certificate pins plus bounded hashes of pending tokens. */
 	public HttpEnrollmentAuthority(HttpTlsIdentity identity, Path stateDirectory) throws java.io.IOException {
@@ -127,11 +128,29 @@ public final class HttpEnrollmentAuthority {
 		try { serverId = HttpTlsIdentity.canonicalServerId(serverId); }
 		catch (IllegalArgumentException invalid) { return; }
 		final String revokedServer = serverId;
-		boolean pendingRemoved = enrollments.entrySet().removeIf(entry -> revokedServer.equals(entry.getValue().serverId()));
+		Map<String, Enrollment> removedEnrollments = new HashMap<>();
+		enrollments.entrySet().removeIf(entry -> {
+			if (!revokedServer.equals(entry.getValue().serverId())) return false;
+			removedEnrollments.put(entry.getKey(), entry.getValue());
+			return true;
+		});
 		// Absence is the durable revocation fence: authentication always requires an exact active binding.
-		boolean bindingRemoved = bindings.remove(serverId) != null;
-		if (bindingRemoved || pendingRemoved) try { persistState(); }
-		catch (java.io.IOException failure) { persistenceFailure = true; throw new IllegalStateException("Could not persist HTTP certificate revocation", failure); }
+		ClientBinding removedBinding = bindings.remove(serverId);
+		if (removedBinding != null || !removedEnrollments.isEmpty() || revocationRetryRequired) try {
+			persistState();
+			revocationRetryRequired = false;
+		}
+		catch (java.io.IOException failure) {
+			// Before publication, restore the exact disk-backed state so a retry still has work to persist.
+			// After publication, retain the fail-closed new state and let a retry force it durably again.
+			if (!(failure instanceof DurableFiles.PublishedException)) {
+				if (removedBinding != null) bindings.put(serverId, removedBinding);
+				enrollments.putAll(removedEnrollments);
+			}
+			persistenceFailure = true;
+			revocationRetryRequired = true;
+			throw new IllegalStateException("Could not persist HTTP certificate revocation", failure);
+		}
 	}
 
 	private synchronized void loadState() throws java.io.IOException {
@@ -212,8 +231,12 @@ public final class HttpEnrollmentAuthority {
 			DurableFiles.forceFile(temporary);
 			try { Files.move(temporary, stateFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
 			catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, stateFile, StandardCopyOption.REPLACE_EXISTING); }
-			setOwnerOnly(stateFile);
-			DurableFiles.forceDirectory(stateFile.getParent());
+			try {
+				setOwnerOnly(stateFile);
+				DurableFiles.forceDirectory(stateFile.getParent());
+			} catch (java.io.IOException postPublicationFailure) {
+				throw new DurableFiles.PublishedException(postPublicationFailure);
+			}
 		} finally { Files.deleteIfExists(temporary); }
 	}
 
