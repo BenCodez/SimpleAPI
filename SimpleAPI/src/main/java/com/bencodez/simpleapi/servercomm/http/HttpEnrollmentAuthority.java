@@ -218,14 +218,26 @@ public final class HttpEnrollmentAuthority {
 
 	private static Path stateFile(Path directory) throws java.io.IOException {
 		if (directory == null) throw new IllegalArgumentException("State directory is required");
-		Files.createDirectories(directory);
-		Path file = directory.toAbsolutePath().normalize().resolve("http-transport-clients.properties");
+		Path stateDirectory = directory.toAbsolutePath().normalize();
+		boolean created = !Files.exists(stateDirectory, LinkOption.NOFOLLOW_LINKS);
+		Files.createDirectories(stateDirectory);
+		if (Files.isSymbolicLink(stateDirectory) || !Files.isDirectory(stateDirectory, LinkOption.NOFOLLOW_LINKS))
+			throw new java.io.IOException("HTTP enrollment state directory is unsafe");
+		setOwnerOnlyDirectory(stateDirectory);
+		if (created) DurableFiles.forceDirectory(stateDirectory.getParent());
+		Path file = stateDirectory.resolve("http-transport-clients.properties");
 		if (Files.isSymbolicLink(file)) throw new java.io.IOException("Refusing unsafe HTTP enrollment state path");
 		return file;
 	}
 
 	private static void setOwnerOnly(Path path) throws java.io.IOException {
 		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)); }
+		catch (UnsupportedOperationException ignored) { }
+	}
+
+	private static void setOwnerOnlyDirectory(Path path) throws java.io.IOException {
+		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ,
+				PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE)); }
 		catch (UnsupportedOperationException ignored) { }
 	}
 

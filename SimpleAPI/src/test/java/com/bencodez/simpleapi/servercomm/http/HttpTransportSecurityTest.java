@@ -132,11 +132,12 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
-	void incompleteFirstRunTlsProvisioningRecoversWithoutManualCleanup() throws Exception {
+	void markedIncompleteFirstRunTlsProvisioningRecoversWithoutManualCleanup() throws Exception {
 		Path source = directory.resolve("complete-identity");
 		HttpTlsIdentity original = HttpTlsIdentity.loadOrCreate(source, "localhost");
 		Path interrupted = directory.resolve("interrupted-identity");
 		Files.createDirectories(interrupted);
+		Files.writeString(interrupted.resolve("http-transport-initializing"), "initializing\n");
 		Files.copy(source.resolve("http-transport-ca.p12"), interrupted.resolve("http-transport-ca.p12"));
 		Files.copy(source.resolve("http-transport-server.p12"), interrupted.resolve("http-transport-server.p12"));
 
@@ -147,6 +148,23 @@ class HttpTransportSecurityTest {
 		assertTrue(Files.exists(interrupted.resolve("http-transport-server.p12")));
 		assertTrue(Files.exists(interrupted.resolve("http-transport-password")));
 		assertFalse(Files.exists(interrupted.resolve("http-transport-initializing")));
+	}
+
+	@Test
+	void unmarkedPartialIdentityFailsClosedWithExternalTransportState() throws Exception {
+		Path source = directory.resolve("external-state-source");
+		HttpTlsIdentity.loadOrCreate(source, "localhost");
+		Path partial = directory.resolve("external-state-partial");
+		Files.createDirectories(partial);
+		Files.copy(source.resolve("http-transport-ca.p12"), partial.resolve("http-transport-ca.p12"));
+		byte[] retainedCa = Files.readAllBytes(partial.resolve("http-transport-ca.p12"));
+		Path externalState = directory.resolve("external-authority");
+		Files.createDirectories(externalState);
+		Files.writeString(externalState.resolve("http-transport-clients.properties"), "version=3\n");
+
+		assertThrows(java.io.IOException.class, () -> HttpTlsIdentity.loadOrCreate(partial, "localhost"));
+		assertTrue(Arrays.equals(retainedCa, Files.readAllBytes(partial.resolve("http-transport-ca.p12"))),
+				"fail-closed recovery must preserve the surviving CA bytes");
 	}
 
 	@Test

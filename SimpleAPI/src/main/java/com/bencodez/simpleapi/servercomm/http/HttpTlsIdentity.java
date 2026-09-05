@@ -107,10 +107,11 @@ public final class HttpTlsIdentity {
 		boolean anyIdentityFile = caExists || serverExists || passwordExists;
 		boolean completeIdentity = caExists && serverExists && passwordExists;
 		boolean persistentTransportState = hasPersistentTransportState(directory);
-		if (initializing || (anyIdentityFile && !completeIdentity)) {
+		if (anyIdentityFile && !completeIdentity && !initializing)
+			throw new IOException("HTTP TLS identity files are incomplete");
+		if (initializing) {
 			if (persistentTransportState)
 				throw new IOException("HTTP TLS identity files are incomplete");
-			if (!initializing) writeInitializationMarker(initializingFile);
 			discardUncommittedIdentity(caFile, serverFile, passwordFile);
 			caExists = false;
 			serverExists = false;
