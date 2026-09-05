@@ -132,6 +132,30 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void privateCredentialRootsRejectSymbolicLinks() throws Exception {
+		Path identityTarget = directory.resolve("identity-target");
+		Path identityLink = directory.resolve("identity-link");
+		Files.createDirectory(identityTarget);
+		Files.createSymbolicLink(identityLink, identityTarget);
+		assertThrows(java.io.IOException.class, () -> HttpTlsIdentity.loadOrCreate(identityLink, "localhost"));
+		assertFalse(Files.exists(identityTarget.resolve("http-transport-ca.p12")));
+
+		HttpTlsIdentity authority = HttpTlsIdentity.loadOrCreate(directory.resolve("safe-identity"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = authority.issueClientCertificate("lobby-1");
+		Path credentialTarget = directory.resolve("credential-target");
+		Path credentialLink = directory.resolve("credential-link");
+		Files.createDirectory(credentialTarget);
+		Files.createSymbolicLink(credentialLink, credentialTarget);
+		assertThrows(java.io.IOException.class, () -> HttpClientCredentialStore.save(credentialLink, issued));
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				authority.serverCertificatePin(), authority.caCertificatePin(), Instant.now().plusSeconds(60), "A".repeat(43));
+		assertThrows(java.io.IOException.class, () -> HttpClientCredentialStore.saveEnrolled(credentialLink, code, issued));
+		try (var files = Files.list(credentialTarget)) {
+			assertTrue(files.findAny().isEmpty(), "a symlinked credential root must receive no private files");
+		}
+	}
+
+	@Test
 	void markedIncompleteFirstRunTlsProvisioningRecoversWithoutManualCleanup() throws Exception {
 		Path source = directory.resolve("complete-identity");
 		HttpTlsIdentity original = HttpTlsIdentity.loadOrCreate(source, "localhost");

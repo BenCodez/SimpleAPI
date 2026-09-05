@@ -29,7 +29,7 @@ public final class HttpClientCredentialStore {
 
 	public static void save(Path directory, HttpTlsIdentity.IssuedClientCertificate issued) throws IOException {
 		if (issued == null) throw new IllegalArgumentException("Issued credential is required");
-		Files.createDirectories(directory);
+		directory = credentialRoot(directory, true);
 		byte[] bundle = issued.pkcs12();
 		try { writePrivate(safe(directory.resolve(BUNDLE_FILE)), bundle); }
 		finally { java.util.Arrays.fill(bundle, (byte) 0); }
@@ -97,15 +97,15 @@ public final class HttpClientCredentialStore {
 	private static StagedCredential stage(Path directory, HttpTlsIdentity.IssuedClientCertificate issued,
 			HttpClientProfile profile, String connectionCodeDigest) throws Exception {
 		if (directory == null || issued == null) throw new IllegalArgumentException("Credential replacement is required");
-		Path credentialDirectory = directory.toAbsolutePath().normalize();
-		boolean created = !Files.exists(credentialDirectory, LinkOption.NOFOLLOW_LINKS);
+		Path credentialDirectory = credentialRoot(directory, true);
 		Path generations = credentialDirectory.resolve(GENERATIONS_DIRECTORY);
+		if (Files.isSymbolicLink(generations)) throw new IOException("HTTP credential generation directory is unsafe");
+		boolean generationsCreated = !Files.exists(generations, LinkOption.NOFOLLOW_LINKS);
 		Files.createDirectories(generations);
-		// Credential files cannot make the newly created credential-root entry durable.
-		// Persist its parent before an enrolled transport can activate this root.
-		if (created) DurableFiles.forceDirectory(credentialDirectory.getParent());
 		if (Files.isSymbolicLink(generations) || !Files.isDirectory(generations, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP credential generation directory is unsafe");
+		setOwnerOnlyDirectory(generations);
+		if (generationsCreated) DurableFiles.forceDirectory(credentialDirectory);
 		String name = java.util.UUID.randomUUID().toString();
 		Path generation = generations.resolve(name);
 		Files.createDirectory(generation);
@@ -136,7 +136,10 @@ public final class HttpClientCredentialStore {
 	static void activateReplacement(Path directory, StagedCredential staged) throws IOException {
 		if (directory == null || staged == null || !staged.name().matches("[0-9a-f-]{36}"))
 			throw new IllegalArgumentException("Staged credential is invalid");
-		Path generations = directory.toAbsolutePath().normalize().resolve(GENERATIONS_DIRECTORY);
+		directory = credentialRoot(directory, false);
+		Path generations = directory.resolve(GENERATIONS_DIRECTORY);
+		if (Files.isSymbolicLink(generations) || !Files.isDirectory(generations, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP credential generation directory is unsafe");
 		Path generation = generations.resolve(staged.name()).normalize();
 		if (!generation.getParent().equals(generations) || Files.isSymbolicLink(generation)
 				|| !Files.isRegularFile(generation.resolve(BUNDLE_FILE), LinkOption.NOFOLLOW_LINKS)
@@ -232,8 +235,11 @@ public final class HttpClientCredentialStore {
 	/** Atomically restores a previously validated credential generation after replacement rollback. */
 	public static void restoreActiveGeneration(Path directory, ActiveCredentialGeneration snapshot) throws Exception {
 		if (directory == null || snapshot == null) throw new IllegalArgumentException("Credential rollback is required");
-		Path root = directory.toAbsolutePath().normalize();
+		Path root = credentialRoot(directory, false);
 		Path generations = root.resolve(GENERATIONS_DIRECTORY);
+		if (!snapshot.name().isEmpty() && (Files.isSymbolicLink(generations)
+				|| !Files.isDirectory(generations, LinkOption.NOFOLLOW_LINKS)))
+			throw new IOException("HTTP credential generation directory is unsafe");
 		Path target = snapshot.name().isEmpty() ? root : generations.resolve(snapshot.name()).normalize();
 		if (!snapshot.name().isEmpty() && (!target.getParent().equals(generations)
 				|| Files.isSymbolicLink(target) || !Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)))
@@ -302,7 +308,7 @@ public final class HttpClientCredentialStore {
 	}
 
 	private static Path activeDirectory(Path directory) throws IOException {
-		Path root = directory.toAbsolutePath().normalize();
+		Path root = credentialRoot(directory, false);
 		Path current = safe(root.resolve(CURRENT_FILE));
 		if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) return root;
 		if (!Files.isRegularFile(current, LinkOption.NOFOLLOW_LINKS) || Files.size(current) > 64)
@@ -310,6 +316,8 @@ public final class HttpClientCredentialStore {
 		String name = Files.readString(current, StandardCharsets.US_ASCII);
 		if (!name.matches("[0-9a-f-]{36}")) throw new IOException("HTTP client credential pointer is invalid");
 		Path generations = root.resolve(GENERATIONS_DIRECTORY);
+		if (Files.isSymbolicLink(generations) || !Files.isDirectory(generations, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP credential generation directory is unsafe");
 		Path generation = generations.resolve(name).normalize();
 		if (!generation.getParent().equals(generations) || Files.isSymbolicLink(generation) || !Files.isDirectory(generation, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP client credential generation is invalid");
@@ -324,6 +332,21 @@ public final class HttpClientCredentialStore {
 		String value = Files.readString(digest, StandardCharsets.US_ASCII);
 		if (!value.matches("[0-9a-f]{64}")) throw new IOException("HTTP connection-code marker is invalid");
 		return value;
+	}
+
+	private static Path credentialRoot(Path directory, boolean create) throws IOException {
+		if (directory == null) throw new IllegalArgumentException("Credential directory is required");
+		Path root = directory.toAbsolutePath().normalize();
+		if (Files.isSymbolicLink(root)) throw new IOException("HTTP credential directory is unsafe");
+		boolean created = !Files.exists(root, LinkOption.NOFOLLOW_LINKS);
+		if (create) Files.createDirectories(root);
+		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP credential directory is unsafe");
+		if (create) {
+			setOwnerOnlyDirectory(root);
+			if (created) DurableFiles.forceDirectory(root.getParent());
+		}
+		return root;
 	}
 
 	private static String connectionCodeDigest(HttpConnectionCode code) {

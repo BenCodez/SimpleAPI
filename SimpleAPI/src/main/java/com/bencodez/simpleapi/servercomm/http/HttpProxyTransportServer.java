@@ -47,6 +47,7 @@ import javax.net.ssl.SSLPeerUnverifiedException;
  * Every normal request is certificate-authenticated in the handler, rather than relying on TLS WANT auth.
  */
 public final class HttpProxyTransportServer implements AutoCloseable {
+	private static final int MAX_BACKENDS = 128;
 	static {
 		// JDK HttpServer reads these once when its internal server configuration is initialized.
 		// Set conservative process-wide bounds before this transport creates its listener.
@@ -238,6 +239,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		synchronized (backends) {
 			BackendState existing = backends.get(serverId);
 			if (existing != null) return existing;
+			if (backends.size() >= MAX_BACKENDS) throw new IOException("HTTP backend state exceeds its bound");
 			HttpInboundDeliveryStore inbound = durableIncomingRoot == null ? null
 					: HttpInboundDeliveryStore.open(durableIncomingRoot, serverId);
 			BackendState created = new BackendState(serverId, durableOutgoing, inbound, onAcknowledged);
@@ -476,8 +478,10 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 
 		private synchronized Map<String, List<HttpTransportProtocol.Delivery>> load() throws IOException {
 			Map<String, List<HttpTransportProtocol.Delivery>> loaded = new LinkedHashMap<>();
+			int serverDirectories = 0;
 			try (DirectoryStream<Path> servers = Files.newDirectoryStream(root)) {
 				for (Path directory : servers) {
+					if (++serverDirectories > MAX_BACKENDS) throw new IOException("HTTP outgoing queue exceeds its backend bound");
 					if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
 						throw new IOException("HTTP outgoing queue contains an invalid entry");
 					String serverId;

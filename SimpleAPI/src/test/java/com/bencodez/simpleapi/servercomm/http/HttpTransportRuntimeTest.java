@@ -246,6 +246,21 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void proxyBackendStateIsGloballyBounded() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("bounded-backend-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity,
+				directory.resolve("bounded-backend-authority"));
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, ignored -> { })) {
+			for (int index = 0; index < 128; index++)
+				assertTrue(server.send("server-" + index, JsonEnvelope.builder("x").build()));
+			assertFalse(server.send("server-overflow", JsonEnvelope.builder("x").build()));
+			assertTrue(server.send("server-0", JsonEnvelope.builder("existing").build()),
+					"the global bound must not reject an existing backend state");
+		}
+	}
+
+	@Test
 	void proxyOutgoingQueueSurvivesRestartUntilBackendAcknowledges() throws Exception {
 		Path proxyDirectory = directory.resolve("proxy");
 		Path authorityDirectory = directory.resolve("authority");
