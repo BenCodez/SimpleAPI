@@ -281,6 +281,49 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void authorityStatePrunesRevocationsAndBoundsActiveBindings() throws Exception {
+		Path proxy = directory.resolve("bounded-proxy");
+		Path state = directory.resolve("bounded-state");
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(proxy, "localhost");
+		Files.createDirectories(state);
+		java.util.Properties properties = new java.util.Properties();
+		properties.setProperty("version", "3");
+		String firstServer = boundedServerId(0);
+		for (int index = 0; index < 128; index++) {
+			String serverId = boundedServerId(index);
+			String encodedServer = java.util.Base64.getUrlEncoder().withoutPadding()
+					.encodeToString(serverId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			properties.setProperty("binding." + encodedServer, pin('a') + ":-:0");
+			byte[] hash = new byte[32];
+			java.nio.ByteBuffer.wrap(hash).putInt(index);
+			properties.setProperty("enrollment." + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(hash),
+					Instant.parse("2099-01-01T00:00:00Z").toEpochMilli() + ":" + java.util.Base64.getUrlEncoder()
+							.withoutPadding().encodeToString(firstServer.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+		}
+		Path stateFile = state.resolve("http-transport-clients.properties");
+		try (var output = Files.newOutputStream(stateFile)) { properties.store(output, "bounded authority state"); }
+		assertTrue(Files.size(stateFile) < 65536, "the maximum supported state must fit the read bound");
+
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
+		authority.revoke(firstServer);
+		assertFalse(Files.readString(stateFile).contains("binding." + java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(firstServer.getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+				"revoked bindings must not accumulate in durable state");
+		HttpEnrollmentAuthority restarted = new HttpEnrollmentAuthority(identity, state);
+		HttpConnectionCode replacement = restarted.createConnectionCode("replacement", URI.create("https://localhost:8443/"),
+				Duration.ofMinutes(5));
+		restarted.enroll("replacement", replacement.enrollmentToken());
+		HttpConnectionCode overflow = restarted.createConnectionCode("overflow", URI.create("https://localhost:8443/"),
+				Duration.ofMinutes(5));
+		assertThrows(IllegalStateException.class, () -> restarted.enroll("overflow", overflow.enrollmentToken()));
+		restarted.revoke(boundedServerId(1));
+		assertDoesNotThrow(() -> restarted.enroll("overflow", overflow.enrollmentToken()),
+				"a capacity rejection must not consume the enrollment token");
+		assertTrue(Files.size(stateFile) <= 65536);
+		assertDoesNotThrow(() -> new HttpEnrollmentAuthority(identity, state));
+	}
+
+	@Test
 	void renewalKeepsOldCredentialUntilReplacementAuthenticates() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("state"));
@@ -439,4 +482,5 @@ class HttpTransportSecurityTest {
 	}
 
 	private static String pin(char character) { return String.valueOf(character).repeat(64); }
+	private static String boundedServerId(int index) { return String.format("s%03d", index) + "x".repeat(60); }
 }

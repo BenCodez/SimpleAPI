@@ -134,7 +134,16 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 
 	public void start() { if (closed) throw new IllegalStateException("HTTP transport is closed"); server.start(); }
 	public int port() { return server.getAddress().getPort(); }
-	public URI endpoint(String host) { return URI.create("https://" + host + ":" + port() + "/"); }
+	public URI endpoint(String host) {
+		if (host == null || host.isBlank()) throw new IllegalArgumentException("Advertised host is required");
+		try {
+			URI endpoint = new URI("https", null, host, port(), "/", null, null);
+			if (endpoint.getHost() == null) throw new IllegalArgumentException("Advertised host is invalid");
+			return endpoint;
+		} catch (java.net.URISyntaxException invalid) {
+			throw new IllegalArgumentException("Advertised host is invalid", invalid);
+		}
+	}
 
 	/** Queues a proxy-origin envelope durably before reporting acceptance. */
 	public boolean send(String serverId, JsonEnvelope envelope) {

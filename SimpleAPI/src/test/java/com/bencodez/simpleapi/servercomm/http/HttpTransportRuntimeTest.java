@@ -28,6 +28,20 @@ class HttpTransportRuntimeTest {
 	@TempDir Path directory;
 
 	@Test
+	void endpointHelperSupportsIpv6Literals() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("ipv6-proxy"), "::1");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("ipv6-authority"));
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, directory.resolve("ipv6-outgoing"), ignored -> { })) {
+			URI endpoint = server.endpoint("::1");
+			assertTrue(endpoint.getHost() != null);
+			assertTrue(endpoint.toASCIIString().startsWith("https://[::1]:"));
+			assertDoesNotThrow(() -> new HttpConnectionCode("lobby-1", endpoint, identity.serverCertificatePin(),
+					identity.caCertificatePin(), Instant.now().plusSeconds(60), "A".repeat(43)));
+		}
+	}
+
+	@Test
 	void enrollsThenDeliversBothDirectionsWithAuthenticatedIdentity() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
