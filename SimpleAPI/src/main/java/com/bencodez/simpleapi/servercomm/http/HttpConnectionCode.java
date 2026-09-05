@@ -88,7 +88,9 @@ public record HttpConnectionCode(String serverId, URI endpoint, String serverCer
 		if (path == null || path.isEmpty()) path = "/";
 		if (!path.endsWith("/")) path += "/";
 		try {
-			return new URI("https", null, value.getHost().toLowerCase(Locale.ROOT), value.getPort(), path, null, null);
+			URI authority = new URI("https", null, value.getHost().toLowerCase(Locale.ROOT),
+					value.getPort(), null, null, null);
+			return new URI(authority.toASCIIString() + path);
 		} catch (URISyntaxException failure) {
 			throw new IllegalArgumentException("Endpoint is invalid", failure);
 		}

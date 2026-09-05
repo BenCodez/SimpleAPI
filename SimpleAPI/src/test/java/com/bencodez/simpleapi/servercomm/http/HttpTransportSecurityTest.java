@@ -65,6 +65,16 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void connectionCodePreservesEscapedEndpointPaths() {
+		HttpConnectionCode original = new HttpConnectionCode("lobby.eu",
+				URI.create("https://Proxy.Example.test:8443/api%20root/%2F"), pin('a'), pin('b'),
+				Instant.parse("2030-01-01T00:00:00Z"), HttpTransportSecrets.randomToken());
+		URI expected = URI.create("https://proxy.example.test:8443/api%20root/%2F/");
+		assertEquals(expected, original.endpoint());
+		assertEquals(expected, HttpConnectionCode.parse(original.encode()).endpoint());
+	}
+
+	@Test
 	void legacyConnectionCodesAndConsumedMarkersRemainCompatible() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("legacy-code-proxy"), "proxy.example.test");
 		HttpConnectionCode legacy = new HttpConnectionCode("lobby", URI.create("https://proxy.example.test:8443/"),
@@ -300,6 +310,8 @@ class HttpTransportSecurityTest {
 		HttpConnectionCode active = authority.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
 		HttpTlsIdentity.IssuedClientCertificate issued = authority.enroll("lobby-1", active.enrollmentToken());
 		HttpConnectionCode pending = authority.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
+		HttpConnectionCode unaffected = authority.createConnectionCode("lobby-2", endpoint, Duration.ofMinutes(5));
+		HttpTlsIdentity.IssuedClientCertificate unaffectedIssued = authority.enroll("lobby-2", unaffected.enrollmentToken());
 		Path stateFile = stateDirectory.resolve("http-transport-clients.properties");
 		Files.delete(stateFile);
 		Files.createDirectory(stateFile);
@@ -307,8 +319,12 @@ class HttpTransportSecurityTest {
 		assertThrows(IllegalStateException.class, () -> authority.revoke("lobby-1"));
 		assertFalse(authority.authenticate("lobby-1", issued.certificate()),
 				"an unpersisted revocation must fail authentication closed");
+		assertFalse(authority.authenticate("lobby-2", unaffectedIssued.certificate()),
+				"all authentication must fail closed while persistence is unresolved");
 		Files.delete(stateFile);
 		authority.revoke("lobby-1");
+		assertTrue(authority.authenticate("lobby-2", unaffectedIssued.certificate()),
+				"a successful full-state retry must restore authentication availability");
 
 		HttpEnrollmentAuthority restarted = new HttpEnrollmentAuthority(identity, stateDirectory);
 		assertFalse(restarted.authenticate("lobby-1", issued.certificate()));

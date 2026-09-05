@@ -138,6 +138,7 @@ public final class HttpEnrollmentAuthority {
 		ClientBinding removedBinding = bindings.remove(serverId);
 		if (removedBinding != null || !removedEnrollments.isEmpty() || revocationRetryRequired) try {
 			persistState();
+			persistenceFailure = false;
 			revocationRetryRequired = false;
 		}
 		catch (java.io.IOException failure) {
