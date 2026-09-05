@@ -72,7 +72,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	private final DeliveryAcknowledgement onAcknowledged;
 	private volatile boolean closed;
 
-	public HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
+	/** In-memory constructor for tests; production callers must supply a durable state directory. */
+	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
 			Consumer<ReceivedEnvelope> onEnvelope) throws Exception {
 		this(bind, identity, authority, null, onEnvelope, (serverId, deliveryId) -> { });
 	}
@@ -203,6 +204,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (!backend.allowRequest()) throw new IllegalArgumentException("transport rate limited");
 			if (!backend.acceptSession(packet.session(), packet.sequence())) throw new IllegalArgumentException("stale session request");
 		}
+		backend.confirmIncoming(packet.acks());
 		backend.acknowledge(packet.acks());
 		synchronized (backend) { accepted = backend.acceptIncoming(packet.messages()); }
 		for (HttpTransportProtocol.Delivery delivery : accepted) dispatch(packet.server(), backend, delivery);
@@ -381,13 +383,21 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		}
 		void beginIncoming(String id) throws IOException {
 			if (durableIncoming == null) return;
-			if (durableIncoming.state(id) == null) durableIncoming.reserveReplacingCompleted(id);
+			if (durableIncoming.state(id) == null) durableIncoming.reserve(id);
 			durableIncoming.markRunning(id);
 		}
 		void completeIncomingDurably(String id) throws IOException {
 			if (durableIncoming != null) durableIncoming.markCompleted(id);
 		}
 		synchronized void completeIncoming(String id, boolean success) { processing.remove(id); if (success) { seen.add(id); while (seen.size() > HttpTransportProtocol.MAX_QUEUE) seen.remove(seen.iterator().next()); queueAck(id); signal(); } }
+		synchronized void confirmIncoming(Collection<String> ids) throws IOException {
+			for (String id : ids) {
+				if (durableIncoming != null && durableIncoming.state(id) == HttpInboundDeliveryStore.State.COMPLETED)
+					durableIncoming.remove(id);
+				seen.remove(id);
+				acknowledgements.removeIf(id::equals);
+			}
+		}
 		private void seal() { if (durableIncoming != null) durableIncoming.seal(); }
 		private void queueAck(String id) { if (acknowledgements.size() < HttpTransportProtocol.MAX_QUEUE && !acknowledgements.contains(id)) acknowledgements.add(id); }
 		synchronized Response await(String serverId, String requestedSession, long requestedSequence) {

@@ -77,19 +77,25 @@ final class HttpInboundDeliveryStore {
 		} finally { Files.deleteIfExists(temporary); }
 	}
 
-	/** Admits a new proxy-side fence by retiring one completed bounded-window entry when necessary. */
-	synchronized void reserveReplacingCompleted(String id) throws IOException {
+	/** Records receipt of a remote acknowledgement before its confirmation is sent. */
+	synchronized void recordCompleted(String id) throws IOException {
+		requireWritable();
 		id = canonical(id);
-		if (entries.get(id) != null) return;
-		if (entries.size() >= MAX_ENTRIES) {
-			String completed = null;
-			for (Map.Entry<String, State> entry : entries.entrySet()) {
-				if (entry.getValue() == State.COMPLETED) { completed = entry.getKey(); break; }
-			}
-			if (completed == null) throw new IOException("HTTP inbound delivery fence is full");
-			remove(completed);
-		}
-		reserve(id);
+		if (entries.get(id) == State.COMPLETED) return;
+		if (entries.containsKey(id) || entries.size() >= MAX_ENTRIES)
+			throw new IOException("HTTP acknowledgement confirmation fence is full");
+		requireRoot();
+		Path target = file(id, State.COMPLETED);
+		Path temporary = Files.createTempFile(root, ".pending-", ".tmp");
+		try {
+			ownerOnlyFile(temporary);
+			Files.writeString(temporary, id, StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
+			DurableFiles.forceFile(temporary);
+			move(temporary, target);
+			ownerOnlyFile(target);
+			DurableFiles.forceDirectory(root);
+			entries.put(id, State.COMPLETED);
+		} finally { Files.deleteIfExists(temporary); }
 	}
 
 	synchronized void markRunning(String id) throws IOException { transition(id, State.RESERVED, State.RUNNING); }

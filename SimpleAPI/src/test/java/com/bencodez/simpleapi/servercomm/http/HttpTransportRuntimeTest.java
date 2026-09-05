@@ -33,7 +33,9 @@ class HttpTransportRuntimeTest {
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
 		CountDownLatch proxyReceived = new CountDownLatch(1), backendReceived = new CountDownLatch(1);
 		AtomicReference<HttpProxyTransportServer.ReceivedEnvelope> received = new AtomicReference<>();
+		Path proxyOutgoing = directory.resolve("proxy-outgoing");
 		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0), identity, authority,
+				proxyOutgoing,
 				message -> { received.set(message); proxyReceived.countDown(); })) {
 			server.start();
 			HttpConnectionCode code = authority.createConnectionCode("lobby-1", server.endpoint("localhost"), Duration.ofMinutes(5));
@@ -50,6 +52,11 @@ class HttpTransportRuntimeTest {
 				long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 				while (connector.queuedOutgoing() != 0 && System.nanoTime() < deadline) Thread.sleep(10);
 				assertEquals(0, connector.queuedOutgoing(), "proxy ACK must remove the exact outbound delivery ID");
+				Path proxyInboundFence = directory.resolve("proxy-outgoing-incoming");
+				long confirmationDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+				while (countRegularFiles(proxyInboundFence) != 0L && System.nanoTime() < confirmationDeadline) Thread.sleep(10);
+				assertEquals(0L, countRegularFiles(proxyInboundFence),
+						"the backend must durably confirm receipt of the proxy ACK");
 				assertTrue(server.send("lobby-1", JsonEnvelope.builder("to-backend").build()));
 				assertTrue(backendReceived.await(8, TimeUnit.SECONDS));
 				Path inboundFence = directory.resolve("client").resolve("http-transport-inbound-deliveries");
@@ -127,6 +134,13 @@ class HttpTransportRuntimeTest {
 		HttpProxyTransportServer.Response response = restarted.await("lobby-1",
 				java.util.UUID.randomUUID().toString(), 0);
 		assertEquals(java.util.List.of(deliveryId), response.acks());
+		restarted.confirmIncoming(response.acks());
+		restartedStore.seal();
+		HttpInboundDeliveryStore confirmedStore = HttpInboundDeliveryStore.open(root, "lobby-1");
+		HttpProxyTransportServer.BackendState confirmed = new HttpProxyTransportServer.BackendState(
+				"lobby-1", null, confirmedStore, (server, id) -> { });
+		assertEquals(java.util.List.of(delivery), confirmed.acceptIncoming(java.util.List.of(delivery)),
+				"only an acknowledgement confirmation may retire the durable replay fence");
 	}
 
 	@Test
