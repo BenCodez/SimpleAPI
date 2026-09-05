@@ -26,6 +26,7 @@ import com.bencodez.simpleapi.file.DurableFiles;
  */
 public final class HttpEnrollmentAuthority {
 	private static final Duration MAX_ENROLLMENT_LIFETIME = Duration.ofMinutes(15);
+	private static final int MAX_PENDING_ENROLLMENTS = 128;
 	private final HttpTlsIdentity identity;
 	private final Clock clock;
 	private final Path stateFile;
@@ -34,7 +35,7 @@ public final class HttpEnrollmentAuthority {
 	private final Set<String> revokedCertificatePins = new HashSet<>();
 	private boolean persistenceFailure;
 
-	/** Creates a restart-safe authority. State contains only public certificate pins and revocations. */
+	/** Creates a restart-safe authority. State contains public certificate pins plus bounded hashes of pending tokens. */
 	public HttpEnrollmentAuthority(HttpTlsIdentity identity, Path stateDirectory) throws java.io.IOException {
 		this(identity, Clock.systemUTC(), stateFile(stateDirectory));
 		loadState();
@@ -56,11 +57,18 @@ public final class HttpEnrollmentAuthority {
 		if (lifetime == null || lifetime.isNegative() || lifetime.isZero() || lifetime.compareTo(MAX_ENROLLMENT_LIFETIME) > 0)
 			throw new IllegalArgumentException("Enrollment lifetime must be between one second and fifteen minutes");
 		expireEnrollments();
+		if (enrollments.size() >= MAX_PENDING_ENROLLMENTS)
+			throw new IllegalStateException("Too many pending HTTP enrollments");
 		Instant expiresAt = clock.instant().plus(lifetime);
 		String token = HttpTransportSecrets.randomToken();
 		byte[] tokenHash = HttpTransportSecrets.sha256(token.getBytes(StandardCharsets.US_ASCII));
 		String lookup = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(tokenHash);
 		enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId));
+		try { persistState(); }
+		catch (java.io.IOException failure) {
+			enrollments.remove(lookup);
+			throw new IllegalStateException("Could not persist HTTP enrollment", failure);
+		}
 		return new HttpConnectionCode(serverId, endpoint, identity.serverCertificatePin(), identity.caCertificatePin(), expiresAt, token);
 	}
 
@@ -119,15 +127,15 @@ public final class HttpEnrollmentAuthority {
 		try { serverId = HttpTlsIdentity.canonicalServerId(serverId); }
 		catch (IllegalArgumentException invalid) { return; }
 		final String revokedServer = serverId;
-		enrollments.entrySet().removeIf(entry -> revokedServer.equals(entry.getValue().serverId()));
+		boolean pendingRemoved = enrollments.entrySet().removeIf(entry -> revokedServer.equals(entry.getValue().serverId()));
 		ClientBinding binding = bindings.get(serverId);
 		if (binding != null) {
 			bindings.put(serverId, new ClientBinding(binding.certificatePin(), binding.pendingCertificatePin(), true));
 			revokedCertificatePins.add(binding.certificatePin());
 			if (binding.pendingCertificatePin() != null) revokedCertificatePins.add(binding.pendingCertificatePin());
-			try { persistState(); }
-			catch (java.io.IOException failure) { persistenceFailure = true; throw new IllegalStateException("Could not persist HTTP certificate revocation", failure); }
 		}
+		if (binding != null || pendingRemoved) try { persistState(); }
+		catch (java.io.IOException failure) { persistenceFailure = true; throw new IllegalStateException("Could not persist HTTP certificate revocation", failure); }
 	}
 
 	private synchronized void loadState() throws java.io.IOException {
@@ -136,13 +144,16 @@ public final class HttpEnrollmentAuthority {
 			throw new java.io.IOException("HTTP enrollment state is invalid");
 		Properties properties = new Properties();
 		try (var input = Files.newInputStream(stateFile, LinkOption.NOFOLLOW_LINKS)) { properties.load(input); }
+		String version = properties.getProperty("version");
+		if (!("1".equals(version) || "2".equals(version) || "3".equals(version)))
+			throw new java.io.IOException("HTTP enrollment state is invalid");
 		for (String key : properties.stringPropertyNames()) {
 			if (key.startsWith("binding.")) {
 				String serverId = new String(Base64.getUrlDecoder().decode(key.substring("binding.".length())), StandardCharsets.UTF_8);
 				serverId = HttpTlsIdentity.canonicalServerId(serverId);
 				String[] value = properties.getProperty(key, "").split(":", -1);
-				if (!((value.length == 2 && "1".equals(properties.getProperty("version")))
-						|| (value.length == 3 && "2".equals(properties.getProperty("version"))))
+				if (!((value.length == 2 && "1".equals(version))
+						|| (value.length == 3 && ("2".equals(version) || "3".equals(version))))
 						|| !value[0].matches("[0-9a-f]{64}"))
 					throw new java.io.IOException("HTTP enrollment state is invalid");
 				String pending = value.length == 3 && !"-".equals(value[1]) ? value[1] : null;
@@ -151,24 +162,48 @@ public final class HttpEnrollmentAuthority {
 					throw new java.io.IOException("HTTP enrollment state is invalid");
 				bindings.put(serverId, new ClientBinding(value[0], pending, "1".equals(revoked)));
 				if ("1".equals(revoked)) { revokedCertificatePins.add(value[0]); if (pending != null) revokedCertificatePins.add(pending); }
+			} else if (key.startsWith("enrollment.") && "3".equals(version)) {
+				String lookup = key.substring("enrollment.".length());
+				if (!lookup.matches("[A-Za-z0-9_-]{43}")) throw new java.io.IOException("HTTP enrollment state is invalid");
+				byte[] tokenHash;
+				try { tokenHash = Base64.getUrlDecoder().decode(lookup); }
+				catch (IllegalArgumentException invalid) { throw new java.io.IOException("HTTP enrollment state is invalid", invalid); }
+				if (tokenHash.length != 32) throw new java.io.IOException("HTTP enrollment state is invalid");
+				String[] value = properties.getProperty(key, "").split(":", -1);
+				if (value.length != 2) throw new java.io.IOException("HTTP enrollment state is invalid");
+				Instant expiresAt;
+				String serverId;
+				try {
+					expiresAt = Instant.ofEpochMilli(Long.parseLong(value[0]));
+					serverId = HttpTlsIdentity.canonicalServerId(new String(Base64.getUrlDecoder().decode(value[1]), StandardCharsets.UTF_8));
+				} catch (RuntimeException invalid) { throw new java.io.IOException("HTTP enrollment state is invalid", invalid); }
+				if (expiresAt.isAfter(clock.instant())) {
+					if (enrollments.size() >= MAX_PENDING_ENROLLMENTS)
+						throw new java.io.IOException("HTTP enrollment state exceeds its bound");
+					enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId));
+				}
 			} else if (!"version".equals(key)) throw new java.io.IOException("HTTP enrollment state is invalid");
 		}
-		if (!("1".equals(properties.getProperty("version")) || "2".equals(properties.getProperty("version"))))
-			throw new java.io.IOException("HTTP enrollment state is invalid");
 	}
 
 	private synchronized void persistState() throws java.io.IOException {
 		if (stateFile == null) return;
 		Properties properties = new Properties();
-		properties.setProperty("version", "2");
+		properties.setProperty("version", "3");
 		for (Map.Entry<String, ClientBinding> entry : bindings.entrySet()) {
 			String key = Base64.getUrlEncoder().withoutPadding().encodeToString(entry.getKey().getBytes(StandardCharsets.UTF_8));
 			properties.setProperty("binding." + key, entry.getValue().certificatePin() + ":"
 					+ (entry.getValue().pendingCertificatePin() == null ? "-" : entry.getValue().pendingCertificatePin())
 					+ ":" + (entry.getValue().revoked() ? "1" : "0"));
 		}
+		for (Map.Entry<String, Enrollment> entry : enrollments.entrySet()) {
+			String server = Base64.getUrlEncoder().withoutPadding().encodeToString(
+					entry.getValue().serverId().getBytes(StandardCharsets.UTF_8));
+			properties.setProperty("enrollment." + entry.getKey(),
+					entry.getValue().expiresAt().toEpochMilli() + ":" + server);
+		}
 		java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-		properties.store(bytes, "VotingPlugin HTTP certificate bindings");
+		properties.store(bytes, "VotingPlugin HTTP transport authority state");
 		Path temporary = Files.createTempFile(stateFile.getParent(), stateFile.getFileName().toString(), ".tmp");
 		try {
 			setOwnerOnly(temporary);

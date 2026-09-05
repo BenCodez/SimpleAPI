@@ -240,6 +240,29 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void pendingEnrollmentSurvivesRestartAndRevocationRemainsDurable() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pending-restart-proxy"), "localhost");
+		Path state = directory.resolve("pending-restart-state");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
+		HttpConnectionCode code = authority.createConnectionCode("lobby-1",
+				URI.create("https://localhost:8443/"), Duration.ofMinutes(5));
+		assertFalse(Files.readString(state.resolve("http-transport-clients.properties"))
+				.contains(code.enrollmentToken()), "raw enrollment tokens must never be persisted");
+
+		HttpEnrollmentAuthority restarted = new HttpEnrollmentAuthority(identity, state);
+		HttpTlsIdentity.IssuedClientCertificate issued = restarted.enroll("lobby-1", code.enrollmentToken());
+		assertTrue(restarted.authenticate("lobby-1", issued.certificate()));
+
+		restarted.revoke("lobby-1");
+		HttpConnectionCode revokedPending = restarted.createConnectionCode("lobby-1",
+				URI.create("https://localhost:8443/"), Duration.ofMinutes(5));
+		restarted.revoke("lobby-1");
+		HttpEnrollmentAuthority afterRevocation = new HttpEnrollmentAuthority(identity, state);
+		assertThrows(IllegalArgumentException.class,
+				() -> afterRevocation.enroll("lobby-1", revokedPending.enrollmentToken()));
+	}
+
+	@Test
 	void renewalKeepsOldCredentialUntilReplacementAuthenticates() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("state"));

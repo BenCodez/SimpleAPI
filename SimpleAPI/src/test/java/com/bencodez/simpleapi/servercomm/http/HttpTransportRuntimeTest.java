@@ -104,6 +104,32 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void proxyInboundCompletionSurvivesRestartBeforeAcknowledgement() throws Exception {
+		Path root = directory.resolve("proxy-incoming");
+		Files.createDirectory(root);
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId,
+				JsonEnvelope.builder("backend-event").build());
+		HttpInboundDeliveryStore firstStore = HttpInboundDeliveryStore.open(root, "lobby-1");
+		HttpProxyTransportServer.BackendState first = new HttpProxyTransportServer.BackendState(
+				"lobby-1", null, firstStore, (server, id) -> { });
+		assertEquals(java.util.List.of(delivery), first.acceptIncoming(java.util.List.of(delivery)));
+		first.beginIncoming(deliveryId);
+		first.completeIncomingDurably(deliveryId);
+		first.completeIncoming(deliveryId, true);
+		firstStore.seal();
+
+		HttpInboundDeliveryStore restartedStore = HttpInboundDeliveryStore.open(root, "lobby-1");
+		HttpProxyTransportServer.BackendState restarted = new HttpProxyTransportServer.BackendState(
+				"lobby-1", null, restartedStore, (server, id) -> { });
+		assertTrue(restarted.acceptIncoming(java.util.List.of(delivery)).isEmpty(),
+				"a completed callback must not run again after a lost response and proxy restart");
+		HttpProxyTransportServer.Response response = restarted.await("lobby-1",
+				java.util.UUID.randomUUID().toString(), 0);
+		assertEquals(java.util.List.of(deliveryId), response.acks());
+	}
+
+	@Test
 	void failedAcknowledgementCallbackRetainsProxyDelivery() throws Exception {
 		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState("lobby-1", null,
 				(server, deliveryId) -> { throw new java.io.IOException("cache save failed"); });

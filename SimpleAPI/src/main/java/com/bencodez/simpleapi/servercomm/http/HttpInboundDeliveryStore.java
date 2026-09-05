@@ -24,11 +24,21 @@ final class HttpInboundDeliveryStore {
 	private boolean sealed;
 
 	HttpInboundDeliveryStore(Path credentialDirectory) throws IOException {
-		Path credentials = credentialDirectory.toAbsolutePath().normalize();
+		this(credentialDirectory, DIRECTORY);
+	}
+
+	static HttpInboundDeliveryStore open(Path parent, String directoryName) throws IOException {
+		return new HttpInboundDeliveryStore(parent, directoryName);
+	}
+
+	private HttpInboundDeliveryStore(Path parent, String directoryName) throws IOException {
+		Path credentials = parent.toAbsolutePath().normalize();
 		if (Files.isSymbolicLink(credentials) || !Files.isDirectory(credentials, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP credential directory is unsafe");
+		if (directoryName == null || !directoryName.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+			throw new IOException("HTTP inbound delivery directory name is invalid");
 		ownerOnlyDirectory(credentials);
-		root = credentials.resolve(DIRECTORY).normalize();
+		root = credentials.resolve(directoryName).normalize();
 		if (!root.getParent().equals(credentials)) throw new IOException("HTTP inbound delivery directory is invalid");
 		boolean created = false;
 		try { Files.createDirectory(root); created = true; }
@@ -65,6 +75,21 @@ final class HttpInboundDeliveryStore {
 			DurableFiles.forceDirectory(root);
 			entries.put(id, State.RESERVED);
 		} finally { Files.deleteIfExists(temporary); }
+	}
+
+	/** Admits a new proxy-side fence by retiring one completed bounded-window entry when necessary. */
+	synchronized void reserveReplacingCompleted(String id) throws IOException {
+		id = canonical(id);
+		if (entries.get(id) != null) return;
+		if (entries.size() >= MAX_ENTRIES) {
+			String completed = null;
+			for (Map.Entry<String, State> entry : entries.entrySet()) {
+				if (entry.getValue() == State.COMPLETED) { completed = entry.getKey(); break; }
+			}
+			if (completed == null) throw new IOException("HTTP inbound delivery fence is full");
+			remove(completed);
+		}
+		reserve(id);
 	}
 
 	synchronized void markRunning(String id) throws IOException { transition(id, State.RESERVED, State.RUNNING); }
