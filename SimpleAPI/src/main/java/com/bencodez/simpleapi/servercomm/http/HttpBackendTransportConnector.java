@@ -51,7 +51,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private volatile HttpClientCredentialStore.ClientCredential credential;
 	private final Path credentialDirectory;
 	private final HttpInboundDeliveryStore inboundDeliveries;
-	private final HttpInboundDeliveryStore acknowledgementConfirmations;
+	private final HttpInboundDeliveryStore acknowledgementConfirmationStore;
 	private final URI transportEndpoint;
 	private final ThreadPoolExecutor callbackExecutor;
 	private final AtomicBoolean running = new AtomicBoolean();
@@ -61,6 +61,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private final LinkedHashMap<String, HttpTransportProtocol.Delivery> outgoing = new LinkedHashMap<>();
 	private final Set<String> received = new LinkedHashSet<>(), processing = new LinkedHashSet<>();
 	private final ArrayDeque<String> acknowledgements = new ArrayDeque<>();
+	private final ArrayDeque<String> acknowledgementConfirmations = new ArrayDeque<>();
 	private final String session = UUID.randomUUID().toString();
 	private volatile Thread poller;
 	private long sequence;
@@ -96,7 +97,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		this.credential = credential;
 		this.credentialDirectory = credentialDirectory;
 		inboundDeliveries = credentialDirectory == null ? null : new HttpInboundDeliveryStore(credentialDirectory);
-		acknowledgementConfirmations = credentialDirectory == null ? null
+		acknowledgementConfirmationStore = credentialDirectory == null ? null
 				: HttpInboundDeliveryStore.open(credentialDirectory, "http-transport-ack-confirmations");
 		if (inboundDeliveries != null) for (var entry : inboundDeliveries.snapshot().entrySet()) {
 			if (entry.getValue() == HttpInboundDeliveryStore.State.COMPLETED) {
@@ -104,10 +105,10 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				queueAck(entry.getKey());
 			}
 		}
-		if (acknowledgementConfirmations != null) for (var entry : acknowledgementConfirmations.snapshot().entrySet()) {
+		if (acknowledgementConfirmationStore != null) for (var entry : acknowledgementConfirmationStore.snapshot().entrySet()) {
 			if (entry.getValue() != HttpInboundDeliveryStore.State.COMPLETED)
 				throw new IOException("HTTP acknowledgement confirmation state is invalid");
-			queueAck(entry.getKey());
+			queueAcknowledgementConfirmation(entry.getKey());
 		}
 		client = client(profile, credential);
 		transportEndpoint = profile.endpoint().resolve("v1/transport");
@@ -174,30 +175,44 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	}
 	private boolean pollOnce(Duration timeout, boolean requireRunning, boolean acceptIncoming) {
 		if (requireRunning && !running.get()) return false;
-		List<String> acks = List.of(); boolean acknowledgementsConfirmed = false;
+		List<String> acks = List.of(), ackConfirmations = List.of();
+		boolean acknowledgementsConfirmed = false, confirmationsConfirmed = false;
 		try {
 			if (requireRunning) maybeRenewCredential();
 			List<HttpTransportProtocol.Delivery> messages; long requestSequence;
 			synchronized (state) {
-				acks = first(acknowledgements); requestSequence = sequence++;
-				messages = HttpTransportProtocol.fittingMessages(serverId, session, requestSequence, acks, outgoing.values());
+				acks = first(acknowledgements);
+				ackConfirmations = first(acknowledgementConfirmations);
+				requestSequence = sequence++;
+				messages = HttpTransportProtocol.fittingMessages(serverId, session, requestSequence, acks,
+						ackConfirmations, outgoing.values());
 				for (int index = 0; index < acks.size(); index++) acknowledgements.removeFirst();
+				for (int index = 0; index < ackConfirmations.size(); index++) acknowledgementConfirmations.removeFirst();
 			}
 			HttpRequest request = HttpRequest.newBuilder(transportEndpoint).timeout(timeout).header("Content-Type", "application/json")
-				.header("Cache-Control", "no-store").POST(HttpRequest.BodyPublishers.ofByteArray(HttpTransportProtocol.request(serverId, session, requestSequence, acks, messages))).build();
+				.header("Cache-Control", "no-store").POST(HttpRequest.BodyPublishers.ofByteArray(HttpTransportProtocol.request(
+						serverId, session, requestSequence, acks, ackConfirmations, messages))).build();
 			LimitedResponse response = sendLimited(client, request);
 			if (response.statusCode() != 200) return false;
 			HttpTransportProtocol.Packet packet = HttpTransportProtocol.parsePacket(response.body());
 			if (!serverId.equals(packet.server()) || !session.equals(packet.session()) || packet.sequence() != requestSequence) return false;
-			confirmAcknowledgements(acks);
+			if (!acks.equals(packet.ackConfirmations())) return false;
+			confirmAcknowledgements(packet.ackConfirmations());
 			acknowledgementsConfirmed = true;
+			if (!confirmSentAcknowledgementConfirmations(ackConfirmations)) return false;
+			confirmationsConfirmed = true;
 			if (!recordAcknowledgementConfirmations(packet.acks())) return false;
-			synchronized (state) { for (String ack : packet.acks()) { outgoing.remove(ack); queueAck(ack); } }
+			synchronized (state) { for (String ack : packet.acks()) {
+				outgoing.remove(ack); queueAcknowledgementConfirmation(ack);
+			} }
 			if (acceptIncoming) for (HttpTransportProtocol.Delivery delivery : accept(packet.messages())) dispatch(delivery);
 			firstResponse.countDown();
 			return true;
 		} catch (Exception failure) { return false;
-		} finally { if (!acknowledgementsConfirmed) requeueAcknowledgements(acks); }
+		} finally {
+			if (!acknowledgementsConfirmed) requeue(acknowledgements, acks);
+			if (!confirmationsConfirmed) requeue(acknowledgementConfirmations, ackConfirmations);
+		}
 	}
 	/** Stops normal polling and gives already-queued outbound messages a bounded final delivery attempt. */
 	public boolean flushOutgoing(long deadlineNanos) {
@@ -230,7 +245,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		// In-flight transitions serialize with seal(): either COMPLETED is already
 		// durable, or the delivery remains durably RUNNING and fail-closed.
 		if (inboundDeliveries != null) inboundDeliveries.seal();
-		if (acknowledgementConfirmations != null) acknowledgementConfirmations.seal();
+		if (acknowledgementConfirmationStore != null) acknowledgementConfirmationStore.seal();
 		Thread current = poller; if (current != null) current.interrupt();
 		callbackExecutor.shutdown(); try { if (!callbackExecutor.awaitTermination(5, TimeUnit.SECONDS)) callbackExecutor.shutdownNow(); }
 		catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); callbackExecutor.shutdownNow(); }
@@ -312,13 +327,17 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		processing.remove(id);
 		if (success) { received.add(id); while (received.size() > HttpTransportProtocol.MAX_QUEUE) received.remove(received.iterator().next()); queueAck(id); }
 	} }
-	private void queueAck(String id) { if (acknowledgements.size() < HttpTransportProtocol.MAX_QUEUE * 2 && !acknowledgements.contains(id)) acknowledgements.add(id); }
-	private void requeueAcknowledgements(List<String> ids) { synchronized (state) {
+	private void queueAck(String id) { if (acknowledgements.size() < HttpTransportProtocol.MAX_QUEUE && !acknowledgements.contains(id)) acknowledgements.add(id); }
+	private void queueAcknowledgementConfirmation(String id) {
+		if (acknowledgementConfirmations.size() < HttpTransportProtocol.MAX_QUEUE
+				&& !acknowledgementConfirmations.contains(id)) acknowledgementConfirmations.add(id);
+	}
+	private void requeue(ArrayDeque<String> queue, List<String> ids) { synchronized (state) {
 		for (int index = ids.size() - 1; index >= 0; index--) {
 			String id = ids.get(index);
-			if (!acknowledgements.contains(id)) {
-				while (acknowledgements.size() >= HttpTransportProtocol.MAX_QUEUE * 2) acknowledgements.removeLast();
-				acknowledgements.addFirst(id);
+			if (!queue.contains(id)) {
+				while (queue.size() >= HttpTransportProtocol.MAX_QUEUE) queue.removeLast();
+				queue.addFirst(id);
 			}
 		}
 	} }
@@ -327,8 +346,6 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			boolean removed = true;
 			if (inboundDeliveries != null) try { inboundDeliveries.remove(id); }
 			catch (IOException cleanupFailure) { removed = false; }
-			if (acknowledgementConfirmations != null) try { acknowledgementConfirmations.remove(id); }
-			catch (IOException cleanupFailure) { removed = false; }
 			synchronized (state) {
 				if (removed) received.remove(id);
 				else queueAck(id);
@@ -336,12 +353,17 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		}
 	}
 	private boolean recordAcknowledgementConfirmations(Collection<String> ids) {
-		if (acknowledgementConfirmations == null) return true;
-		try { for (String id : ids) acknowledgementConfirmations.recordCompleted(id); return true; }
+		if (acknowledgementConfirmationStore == null) return true;
+		try { for (String id : ids) acknowledgementConfirmationStore.recordCompleted(id); return true; }
 		catch (IOException persistenceFailure) { return false; }
 	}
+	private boolean confirmSentAcknowledgementConfirmations(Collection<String> ids) {
+		if (acknowledgementConfirmationStore == null) return true;
+		try { for (String id : ids) acknowledgementConfirmationStore.remove(id); return true; }
+		catch (IOException cleanupFailure) { return false; }
+	}
 	int queuedOutgoing() { synchronized (state) { return outgoing.size(); } }
-	int queuedAcknowledgements() { synchronized (state) { return acknowledgements.size(); } }
+	int queuedAcknowledgements() { synchronized (state) { return acknowledgements.size() + acknowledgementConfirmations.size(); } }
 	List<String> drainAcknowledgements() { synchronized (state) { return drain(acknowledgements); } }
 	private static <T> List<T> first(Collection<T> values) { List<T> output = new java.util.ArrayList<>(); for (T value : values) { output.add(value); if (output.size() == HttpTransportProtocol.MAX_BATCH) break; } return output; }
 	private static List<String> drain(ArrayDeque<String> values) { List<String> output = new java.util.ArrayList<>(); while (!values.isEmpty() && output.size() < HttpTransportProtocol.MAX_BATCH) output.add(values.remove()); return output; }

@@ -30,9 +30,10 @@ final class HttpTransportProtocol {
 	}
 
 	static byte[] request(String server, String session, long sequence, Collection<String> acks,
-			Collection<Delivery> messages) {
+			Collection<String> ackConfirmations, Collection<Delivery> messages) {
 		JsonObject root = base(server, session, sequence);
 		root.add("acks", ids(acks));
+		root.add("ackConfirmations", ids(ackConfirmations));
 		root.add("messages", messages(messages));
 		byte[] encoded = root.toString().getBytes(StandardCharsets.UTF_8);
 		if (encoded.length > MAX_BODY_BYTES) throw bad();
@@ -40,12 +41,12 @@ final class HttpTransportProtocol {
 	}
 
 	static List<Delivery> fittingMessages(String server, String session, long sequence, Collection<String> acks,
-			Collection<Delivery> candidates) {
+			Collection<String> ackConfirmations, Collection<Delivery> candidates) {
 		List<Delivery> output = new ArrayList<>();
 		for (Delivery candidate : candidates) {
 			if (output.size() == MAX_BATCH) break;
 			output.add(candidate);
-			try { request(server, session, sequence, acks, output); }
+			try { request(server, session, sequence, acks, ackConfirmations, output); }
 			catch (IllegalArgumentException tooLarge) { output.remove(output.size() - 1); break; }
 		}
 		return output;
@@ -76,8 +77,8 @@ final class HttpTransportProtocol {
 	}
 
 	static byte[] response(String server, String session, long sequence, Collection<String> acks,
-			Collection<Delivery> messages) {
-		return request(server, session, sequence, acks, messages);
+			Collection<String> ackConfirmations, Collection<Delivery> messages) {
+		return request(server, session, sequence, acks, ackConfirmations, messages);
 	}
 
 	static Packet parsePacket(byte[] body) {
@@ -86,7 +87,7 @@ final class HttpTransportProtocol {
 			JsonElement parsed = JsonParser.parseString(new String(body, StandardCharsets.UTF_8));
 			if (!parsed.isJsonObject()) throw bad();
 			JsonObject root = parsed.getAsJsonObject();
-			requireOnly(root, "v", "server", "session", "sequence", "timestamp", "acks", "messages");
+			requireOnly(root, "v", "server", "session", "sequence", "timestamp", "acks", "ackConfirmations", "messages");
 			if (integer(root, "v") != VERSION) throw bad();
 			String server = HttpTlsIdentity.canonicalServerId(string(root, "server", 64));
 			String session = uuid(root, "session");
@@ -95,8 +96,9 @@ final class HttpTransportProtocol {
 			long now = Instant.now().toEpochMilli();
 			if (timestamp < now - MAX_CLOCK_SKEW_MILLIS || timestamp > now + MAX_CLOCK_SKEW_MILLIS) throw bad();
 			List<String> acks = parseIds(root.get("acks"));
+			List<String> ackConfirmations = parseIds(root.get("ackConfirmations"));
 			List<Delivery> messages = parseMessages(root.get("messages"));
-			return new Packet(server, session, sequence, acks, messages);
+			return new Packet(server, session, sequence, acks, ackConfirmations, messages);
 		} catch (RuntimeException invalid) { throw bad(); }
 	}
 
@@ -226,6 +228,7 @@ final class HttpTransportProtocol {
 	private static IllegalArgumentException bad() { return new IllegalArgumentException("Invalid HTTP transport message"); }
 
 	record Delivery(String id, JsonEnvelope envelope) { }
-	record Packet(String server, String session, long sequence, List<String> acks, List<Delivery> messages) { }
+	record Packet(String server, String session, long sequence, List<String> acks,
+			List<String> ackConfirmations, List<Delivery> messages) { }
 	record Enrollment(String server, String token) { }
 }

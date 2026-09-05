@@ -200,8 +200,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (!backend.beginPoll(packet.session())) { reply(exchange, 409, new byte[0]); return; }
 			try {
 				handlePacket(packet, backend);
-				Response response = backend.await(packet.server(), packet.session(), packet.sequence());
-				reply(exchange, 200, HttpTransportProtocol.response(packet.server(), packet.session(), packet.sequence(), response.acks(), response.messages()));
+				Response response = backend.await(packet.server(), packet.session(), packet.sequence(), packet.acks());
+				reply(exchange, 200, HttpTransportProtocol.response(packet.server(), packet.session(), packet.sequence(),
+						response.acks(), packet.acks(), response.messages()));
 			} finally { backend.endPoll(); }
 		} catch (IllegalArgumentException rejected) { reply(exchange, 400, new byte[0]);
 		} catch (Exception failure) { reply(exchange, 503, new byte[0]);
@@ -214,7 +215,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (!backend.allowRequest()) throw new IllegalArgumentException("transport rate limited");
 			if (!backend.acceptSession(packet.session(), packet.sequence())) throw new IllegalArgumentException("stale session request");
 		}
-		backend.confirmIncoming(packet.acks());
+		backend.confirmIncoming(packet.ackConfirmations());
 		backend.acknowledge(packet.acks());
 		synchronized (backend) { accepted = backend.acceptIncoming(packet.messages()); }
 		for (HttpTransportProtocol.Delivery delivery : accepted) dispatch(packet.server(), backend, delivery);
@@ -412,6 +413,10 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private void seal() { if (durableIncoming != null) durableIncoming.seal(); }
 		private void queueAck(String id) { if (acknowledgements.size() < HttpTransportProtocol.MAX_QUEUE && !acknowledgements.contains(id)) acknowledgements.add(id); }
 		synchronized Response await(String serverId, String requestedSession, long requestedSequence) {
+			return await(serverId, requestedSession, requestedSequence, List.of());
+		}
+		synchronized Response await(String serverId, String requestedSession, long requestedSequence,
+				Collection<String> ackConfirmations) {
 			long deadline = System.nanoTime() + LONG_POLL.toNanos();
 			while (acknowledgements.isEmpty() && !hasUndelivered()) {
 				long retryRemaining = nanosUntilRedelivery(nanoTime.getAsLong());
@@ -428,7 +433,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				if (candidates.size() == HttpTransportProtocol.MAX_BATCH) break;
 			}
 			List<HttpTransportProtocol.Delivery> messages = HttpTransportProtocol.fittingMessages(serverId, requestedSession,
-					requestedSequence, acks, candidates);
+					requestedSequence, acks, ackConfirmations, candidates);
 			long deliveredAt = nanoTime.getAsLong();
 			for (HttpTransportProtocol.Delivery delivery : messages) deliveredAtNanos.put(delivery.id(), deliveredAt);
 			return new Response(acks, messages);
@@ -554,10 +559,27 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 
 		private synchronized void remove(String serverId, String id) throws IOException {
 			Map<String, Path> serverFiles = files.get(serverId);
-			Path file = serverFiles == null ? null : serverFiles.get(id);
-			if (file == null) throw new IOException("HTTP outgoing queue acknowledgement is unknown");
-			DurableFiles.deleteIfExists(file);
-			serverFiles.remove(id);
+			if (serverFiles == null) throw new IOException("HTTP outgoing queue acknowledgement is unknown");
+			Path file = serverFiles.get(id);
+			if (file != null) {
+				Files.deleteIfExists(file);
+				// Also makes a retried deletion durable if an earlier directory force failed after unlinking the file.
+				DurableFiles.forceDirectory(file.getParent());
+				serverFiles.remove(id);
+			}
+			if (serverFiles.isEmpty()) {
+				Path directory = root.resolve(serverId).normalize();
+				if (!directory.getParent().equals(root) || Files.isSymbolicLink(directory))
+					throw new IOException("HTTP outgoing queue server directory is invalid");
+				try {
+					Files.deleteIfExists(directory);
+					DurableFiles.forceDirectory(root);
+					files.remove(serverId);
+				} catch (java.nio.file.DirectoryNotEmptyException unexpectedEntry) {
+					// The acknowledged delivery is already durably removed; unrelated/tampered entries
+					// must not make its acknowledgement permanently unprocessable.
+				}
+			}
 		}
 
 		private static void ownerOnlyFile(Path path) throws IOException {

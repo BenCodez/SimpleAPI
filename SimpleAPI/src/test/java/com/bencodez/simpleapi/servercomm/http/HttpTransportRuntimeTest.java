@@ -73,6 +73,11 @@ class HttpTransportRuntimeTest {
 						"the backend must durably confirm receipt of the proxy ACK");
 				assertTrue(server.send("lobby-1", JsonEnvelope.builder("to-backend").build()));
 				assertTrue(backendReceived.await(8, TimeUnit.SECONDS));
+				long outgoingCleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+				while (Files.exists(proxyOutgoing.resolve("lobby-1")) && System.nanoTime() < outgoingCleanupDeadline)
+					Thread.sleep(10);
+				assertFalse(Files.exists(proxyOutgoing.resolve("lobby-1")),
+						"acknowledging the final delivery must remove its empty backend directory");
 				Path inboundFence = directory.resolve("client").resolve("http-transport-inbound-deliveries");
 				long fenceDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
 				while (countRegularFiles(inboundFence) != 0L && System.nanoTime() < fenceDeadline) Thread.sleep(20);
@@ -170,6 +175,33 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void oppositeDirectionIdsUseSeparateAcknowledgementNamespaces() throws Exception {
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		Path incomingRoot = directory.resolve("separate-ack-incoming");
+		Files.createDirectory(incomingRoot);
+		HttpInboundDeliveryStore incoming = HttpInboundDeliveryStore.open(incomingRoot, "lobby-1");
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+				"lobby-1", null, incoming, (server, id) -> { });
+		assertTrue(state.enqueue(new HttpTransportProtocol.Delivery(deliveryId,
+				JsonEnvelope.builder("proxy-reply").build())));
+		HttpTransportProtocol.Delivery backendMessage = new HttpTransportProtocol.Delivery(deliveryId,
+				JsonEnvelope.builder("backend-request").build());
+		assertEquals(java.util.List.of(backendMessage), state.acceptIncoming(java.util.List.of(backendMessage)));
+		state.beginIncoming(deliveryId);
+		state.completeIncomingDurably(deliveryId);
+		state.completeIncoming(deliveryId, true);
+
+		byte[] request = HttpTransportProtocol.request("lobby-1", java.util.UUID.randomUUID().toString(), 0,
+				java.util.List.of(), java.util.List.of(deliveryId), java.util.List.of());
+		HttpTransportProtocol.Packet packet = HttpTransportProtocol.parsePacket(request);
+		state.confirmIncoming(packet.ackConfirmations());
+		state.acknowledge(packet.acks());
+		assertEquals(deliveryId, state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0)
+				.messages().iterator().next().id(),
+				"confirming the backend-origin acknowledgement must not acknowledge a same-ID proxy reply");
+	}
+
+	@Test
 	void closeWaitsForTheCredentialOwningPollerToStop() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("close-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("close-authority"));
@@ -227,7 +259,8 @@ class HttpTransportRuntimeTest {
 			server.start();
 			HttpConnectionCode code = authority.createConnectionCode("lobby-1", server.endpoint("localhost"), Duration.ofMinutes(5));
 			HttpClient client = HttpClient.newBuilder().sslContext(HttpPinnedTls.clientContext(code)).build();
-			byte[] body = HttpTransportProtocol.request("lobby-1", java.util.UUID.randomUUID().toString(), 0, java.util.List.of(), java.util.List.of());
+			byte[] body = HttpTransportProtocol.request("lobby-1", java.util.UUID.randomUUID().toString(), 0,
+					java.util.List.of(), java.util.List.of(), java.util.List.of());
 			HttpResponse<byte[]> response = client.send(HttpRequest.newBuilder(code.endpoint().resolve("v1/transport"))
 				.timeout(Duration.ofSeconds(5)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofByteArray());
 			assertEquals(401, response.statusCode());
@@ -338,16 +371,16 @@ class HttpTransportRuntimeTest {
 				java.util.UUID.randomUUID().toString(), JsonEnvelope.builder("large").put("value", "x".repeat(40_000)).build()));
 		String session = java.util.UUID.randomUUID().toString();
 		java.util.List<HttpTransportProtocol.Delivery> fitted = HttpTransportProtocol.fittingMessages(
-				"lobby-1", session, 0, java.util.List.of(), candidates);
+				"lobby-1", session, 0, java.util.List.of(), java.util.List.of(), candidates);
 		assertTrue(fitted.size() > 0 && fitted.size() < candidates.size());
-		assertTrue(HttpTransportProtocol.request("lobby-1", session, 0, java.util.List.of(), fitted).length
+		assertTrue(HttpTransportProtocol.request("lobby-1", session, 0, java.util.List.of(), java.util.List.of(), fitted).length
 				<= HttpTransportProtocol.MAX_BODY_BYTES);
 	}
 
 	@Test
 	void packetNumbersMustUseCanonicalJsonIntegerTokens() {
 		com.google.gson.JsonObject packet = com.google.gson.JsonParser.parseString(new String(HttpTransportProtocol.request(
-				"lobby-1", java.util.UUID.randomUUID().toString(), 0, java.util.List.of(), java.util.List.of()),
+				"lobby-1", java.util.UUID.randomUUID().toString(), 0, java.util.List.of(), java.util.List.of(), java.util.List.of()),
 				java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
 		assertDoesNotThrow(() -> HttpTransportProtocol.parsePacket(packet.toString()
 				.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
@@ -369,6 +402,7 @@ class HttpTransportRuntimeTest {
 		String deliveryId = java.util.UUID.randomUUID().toString();
 		com.google.gson.JsonObject packet = com.google.gson.JsonParser.parseString(new String(HttpTransportProtocol.request(
 				"lobby-1", java.util.UUID.randomUUID().toString(), 0, java.util.List.of(deliveryId),
+				java.util.List.of(deliveryId),
 				java.util.List.of(new HttpTransportProtocol.Delivery(deliveryId, JsonEnvelope.builder("payload").build()))),
 				java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
 		String abbreviated = "1-1-1-1-1";
@@ -382,6 +416,10 @@ class HttpTransportRuntimeTest {
 		invalidAck.getAsJsonArray("acks").set(0, new com.google.gson.JsonPrimitive(abbreviated));
 		assertThrows(IllegalArgumentException.class, () -> HttpTransportProtocol.parsePacket(
 				invalidAck.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+		com.google.gson.JsonObject invalidConfirmation = packet.deepCopy();
+		invalidConfirmation.getAsJsonArray("ackConfirmations").set(0, new com.google.gson.JsonPrimitive(abbreviated));
+		assertThrows(IllegalArgumentException.class, () -> HttpTransportProtocol.parsePacket(
+				invalidConfirmation.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
 
 		com.google.gson.JsonObject invalidMessage = packet.deepCopy();
 		invalidMessage.getAsJsonArray("messages").get(0).getAsJsonObject().addProperty("id", abbreviated);
