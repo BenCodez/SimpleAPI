@@ -72,10 +72,17 @@ public final class HttpClientCredentialStore {
 		Path passwordFile = safe(directory.resolve(PASSWORD_FILE));
 		if (!Files.isRegularFile(bundle, LinkOption.NOFOLLOW_LINKS) || !Files.isRegularFile(passwordFile, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP client certificate has not been enrolled");
-		byte[] passwordBytes = Files.readAllBytes(passwordFile);
-		if (passwordBytes.length < 40 || passwordBytes.length > 128) throw new IOException("HTTP client password is invalid");
-		char[] password = new String(passwordBytes, StandardCharsets.US_ASCII).toCharArray();
-		java.util.Arrays.fill(passwordBytes, (byte) 0);
+		long passwordSize = Files.size(passwordFile);
+		if (passwordSize < 40L || passwordSize > 128L) throw new IOException("HTTP client password is invalid");
+		byte[] passwordBytes;
+		try (var input = Files.newInputStream(passwordFile, LinkOption.NOFOLLOW_LINKS)) {
+			passwordBytes = input.readNBytes(129);
+		}
+		char[] password;
+		try {
+			if (passwordBytes.length < 40 || passwordBytes.length > 128) throw new IOException("HTTP client password is invalid");
+			password = new String(passwordBytes, StandardCharsets.US_ASCII).toCharArray();
+		} finally { java.util.Arrays.fill(passwordBytes, (byte) 0); }
 		try {
 			KeyStore store = KeyStore.getInstance("PKCS12");
 			try (var input = Files.newInputStream(bundle, LinkOption.NOFOLLOW_LINKS)) { store.load(input, password); }

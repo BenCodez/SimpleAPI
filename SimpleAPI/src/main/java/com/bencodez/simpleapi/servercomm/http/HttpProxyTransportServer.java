@@ -132,7 +132,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		if (!"/v1/renew".equals(exchange.getRequestURI().getPath()) || exchange.getRequestURI().getRawQuery() != null) { reply(exchange, 404, new byte[0]); return; }
 		if (!"POST".equals(exchange.getRequestMethod())) { reply(exchange, 405, new byte[0]); return; }
 		if (!json(exchange)) { reply(exchange, 415, new byte[0]); return; }
-		if (!boundedFixedBody(exchange, 1024) || !admission.tryAcquire()) { reply(exchange, 429, new byte[0]); return; }
+		int bodyError = fixedBodyErrorStatus(exchange.getRequestHeaders(), 1024);
+		if (bodyError != 0) { reply(exchange, bodyError, new byte[0]); return; }
+		if (!admission.tryAcquire()) { reply(exchange, 429, new byte[0]); return; }
 		try {
 			String serverId = HttpTransportProtocol.parseRenewal(read(exchange.getRequestBody(), 1024));
 			X509Certificate certificate = peerCertificate(exchange);
@@ -188,12 +190,15 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		if (!"/v1/enroll".equals(exchange.getRequestURI().getPath()) || exchange.getRequestURI().getRawQuery() != null) { reply(exchange, 404, new byte[0]); return; }
 		if (!"POST".equals(exchange.getRequestMethod())) { reply(exchange, 405, new byte[0]); return; }
 		if (!json(exchange)) { reply(exchange, 415, new byte[0]); return; }
-		if (!boundedFixedBody(exchange, 8192) || !admission.tryAcquire()) { reply(exchange, 429, new byte[0]); return; }
+		int bodyError = fixedBodyErrorStatus(exchange.getRequestHeaders(), 8192);
+		if (bodyError != 0) { reply(exchange, bodyError, new byte[0]); return; }
+		if (!admission.tryAcquire()) { reply(exchange, 429, new byte[0]); return; }
 		try {
 			HttpTransportProtocol.Enrollment request = HttpTransportProtocol.parseEnrollment(read(exchange.getRequestBody(), 8192));
 			HttpTlsIdentity.IssuedClientCertificate issued = authority.enroll(request.server(), request.token());
 			reply(exchange, 201, HttpTransportProtocol.enrollmentResponse(issued));
-		} catch (Exception rejected) { reply(exchange, 403, new byte[0]); }
+		} catch (IllegalArgumentException rejected) { reply(exchange, 403, new byte[0]);
+		} catch (Exception failure) { reply(exchange, 503, new byte[0]); }
 		finally { admission.release(); }
 	}
 
@@ -201,7 +206,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		if (!"/v1/transport".equals(exchange.getRequestURI().getPath()) || exchange.getRequestURI().getRawQuery() != null) { reply(exchange, 404, new byte[0]); return; }
 		if (!"POST".equals(exchange.getRequestMethod())) { reply(exchange, 405, new byte[0]); return; }
 		if (!json(exchange)) { reply(exchange, 415, new byte[0]); return; }
-		if (!boundedFixedBody(exchange, HttpTransportProtocol.MAX_BODY_BYTES) || !admission.tryAcquire()) { reply(exchange, 429, new byte[0]); return; }
+		int bodyError = fixedBodyErrorStatus(exchange.getRequestHeaders(), HttpTransportProtocol.MAX_BODY_BYTES);
+		if (bodyError != 0) { reply(exchange, bodyError, new byte[0]); return; }
+		if (!admission.tryAcquire()) { reply(exchange, 429, new byte[0]); return; }
 		try {
 			HttpTransportProtocol.Packet packet = HttpTransportProtocol.parsePacket(read(exchange.getRequestBody(), HttpTransportProtocol.MAX_BODY_BYTES));
 			X509Certificate certificate = peerCertificate(exchange);
@@ -307,18 +314,37 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
 		return contentType != null && contentType.toLowerCase(java.util.Locale.ROOT).matches("application/json(?:\\s*;.*)?");
 	}
-	private static boolean boundedFixedBody(HttpsExchange exchange, int maximum) {
-		if (exchange.getRequestHeaders().getFirst("Transfer-Encoding") != null) return false;
-		String value = exchange.getRequestHeaders().getFirst("Content-Length");
-		try { long length = Long.parseLong(value); return length > 0L && length <= maximum; }
-		catch (RuntimeException invalid) { return false; }
+	static int fixedBodyErrorStatus(Headers headers, int maximum) {
+		if (headers.getFirst("Transfer-Encoding") != null) return 400;
+		String value = headers.getFirst("Content-Length");
+		if (value == null) return 411;
+		try {
+			long length = Long.parseLong(value);
+			if (length <= 0L) return 400;
+			return length <= maximum ? 0 : 413;
+		} catch (NumberFormatException invalid) { return 400; }
 	}
 	private static ThreadPoolExecutor executor(String name, int threads, int queue) {
 		ThreadFactory factory = task -> { Thread thread = new Thread(task, name); thread.setDaemon(true); return thread; };
 		return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(queue), factory, new ThreadPoolExecutor.AbortPolicy());
 	}
 	private static void setDefault(String name, String value) { if (System.getProperty(name) == null) System.setProperty(name, value); }
-	private static void shutdown(ExecutorService executor) { executor.shutdown(); try { if (!executor.awaitTermination(5, TimeUnit.SECONDS)) executor.shutdownNow(); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); executor.shutdownNow(); } }
+	static void shutdown(ExecutorService executor) {
+		executor.shutdown();
+		boolean interrupted = false;
+		try {
+			if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+				executor.shutdownNow();
+				executor.awaitTermination(1, TimeUnit.SECONDS);
+			}
+		} catch (InterruptedException stopRequested) {
+			interrupted = true;
+			executor.shutdownNow();
+			try { executor.awaitTermination(1, TimeUnit.SECONDS); }
+			catch (InterruptedException repeated) { interrupted = true; }
+		}
+		if (interrupted) Thread.currentThread().interrupt();
+	}
 
 	public record ReceivedEnvelope(String serverId, String messageId, JsonEnvelope envelope) { }
 

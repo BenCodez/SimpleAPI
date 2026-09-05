@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
+import com.sun.net.httpserver.Headers;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -249,6 +250,90 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void closeDrainsRunningCallbacksBeforeSealingTheirJournal() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("close-callback-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300), "A".repeat(43));
+		Path clientDirectory = directory.resolve("close-callback-client");
+		HttpClientCredentialStore.saveEnrolled(clientDirectory, code, issued);
+		CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
+		HttpBackendTransportConnector connector = new HttpBackendTransportConnector(clientDirectory, ignored -> {
+			started.countDown();
+			try { release.await(); }
+			catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+		});
+		String id = java.util.UUID.randomUUID().toString();
+		connector.dispatch(new HttpTransportProtocol.Delivery(id, JsonEnvelope.builder("close-callback").build()));
+		assertTrue(started.await(2, TimeUnit.SECONDS));
+		Thread closer = new Thread(connector::close, "close-callback-test");
+		closer.start();
+		try {
+			Thread.sleep(100);
+			assertTrue(closer.isAlive(), "close must wait for a running callback to finish its journal transition");
+		} finally { release.countDown(); }
+		closer.join(3000);
+		assertFalse(closer.isAlive());
+		assertEquals(HttpInboundDeliveryStore.State.COMPLETED,
+				new HttpInboundDeliveryStore(clientDirectory).state(id));
+	}
+
+	@Test
+	void interruptedCloseRemainsBoundedWhenACallbackIgnoresInterruption() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("bounded-close-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300), "A".repeat(43));
+		Path clientDirectory = directory.resolve("bounded-close-client");
+		HttpClientCredentialStore.saveEnrolled(clientDirectory, code, issued);
+		CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1), stopped = new CountDownLatch(1);
+		HttpBackendTransportConnector connector = new HttpBackendTransportConnector(clientDirectory, ignored -> {
+			started.countDown();
+			while (release.getCount() != 0L) try { release.await(); }
+			catch (InterruptedException ignoredInterrupt) { }
+			stopped.countDown();
+		});
+		String id = java.util.UUID.randomUUID().toString();
+		connector.dispatch(new HttpTransportProtocol.Delivery(id, JsonEnvelope.builder("bounded-close").build()));
+		assertTrue(started.await(2, TimeUnit.SECONDS));
+		Thread closer = new Thread(connector::close, "bounded-close-test");
+		closer.start();
+		closer.interrupt();
+		closer.join(2500);
+		assertFalse(closer.isAlive(), "a non-cooperative application callback must not hang connector shutdown");
+		try {
+			release.countDown();
+			assertTrue(stopped.await(2, TimeUnit.SECONDS));
+		} finally { release.countDown(); }
+		assertEquals(HttpInboundDeliveryStore.State.RUNNING,
+				new HttpInboundDeliveryStore(clientDirectory).state(id),
+				"an ambiguous callback must remain fail-closed after bounded shutdown");
+	}
+
+	@Test
+	void proxyShutdownGivesInterruptedCallbacksTimeToFinish() throws Exception {
+		java.util.concurrent.ThreadPoolExecutor executor = new java.util.concurrent.ThreadPoolExecutor(1, 1, 0L,
+				TimeUnit.MILLISECONDS, new java.util.concurrent.ArrayBlockingQueue<>(1));
+		CountDownLatch started = new CountDownLatch(1), finished = new CountDownLatch(1);
+		executor.execute(() -> {
+			started.countDown();
+			try { new CountDownLatch(1).await(); }
+			catch (InterruptedException stopRequested) {
+				try { Thread.sleep(100); }
+				catch (InterruptedException repeated) { Thread.currentThread().interrupt(); }
+			} finally { finished.countDown(); }
+		});
+		assertTrue(started.await(2, TimeUnit.SECONDS));
+		Thread closer = new Thread(() -> HttpProxyTransportServer.shutdown(executor), "proxy-shutdown-test");
+		closer.start();
+		closer.interrupt();
+		closer.join(2500);
+		assertFalse(closer.isAlive());
+		assertEquals(0L, finished.getCount(),
+				"forced shutdown must give a cooperative callback time to finish before journals are sealed");
+	}
+
+	@Test
 	void finalFlushDeliversMessagesQueuedBehindAnActiveLongPoll() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("flush-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("flush-authority"));
@@ -290,6 +375,45 @@ class HttpTransportRuntimeTest {
 			HttpResponse<byte[]> response = client.send(HttpRequest.newBuilder(code.endpoint().resolve("v1/transport"))
 				.timeout(Duration.ofSeconds(5)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofByteArray());
 			assertEquals(401, response.statusCode());
+		}
+	}
+
+	@Test
+	void fixedRequestBodiesReportProtocolErrorsBeforeAdmissionErrors() {
+		Headers headers = new Headers();
+		assertEquals(411, HttpProxyTransportServer.fixedBodyErrorStatus(headers, 128));
+		headers.set("Content-Length", "invalid");
+		assertEquals(400, HttpProxyTransportServer.fixedBodyErrorStatus(headers, 128));
+		headers.set("Content-Length", "0");
+		assertEquals(400, HttpProxyTransportServer.fixedBodyErrorStatus(headers, 128));
+		headers.set("Content-Length", "129");
+		assertEquals(413, HttpProxyTransportServer.fixedBodyErrorStatus(headers, 128));
+		headers.set("Content-Length", "128");
+		assertEquals(0, HttpProxyTransportServer.fixedBodyErrorStatus(headers, 128));
+		headers.set("Transfer-Encoding", "chunked");
+		assertEquals(400, HttpProxyTransportServer.fixedBodyErrorStatus(headers, 128));
+	}
+
+	@Test
+	void enrollmentPersistenceFailuresReturnServiceUnavailable() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("failed-enroll-proxy"), "localhost");
+		Path authorityDirectory = directory.resolve("failed-enroll-authority");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, authorityDirectory);
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, ignored -> { })) {
+			server.start();
+			HttpConnectionCode code = authority.createConnectionCode("lobby-1", server.endpoint("localhost"),
+					Duration.ofMinutes(5));
+			Path state = authorityDirectory.resolve("http-transport-clients.properties");
+			Files.delete(state);
+			Files.createDirectory(state);
+			byte[] body = ("{\"server\":\"lobby-1\",\"token\":\"" + code.enrollmentToken() + "\"}")
+					.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			HttpClient client = HttpClient.newBuilder().sslContext(HttpPinnedTls.clientContext(code)).build();
+			HttpResponse<byte[]> response = client.send(HttpRequest.newBuilder(code.endpoint().resolve("v1/enroll"))
+					.timeout(Duration.ofSeconds(5)).header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofByteArray());
+			assertEquals(503, response.statusCode());
 		}
 	}
 

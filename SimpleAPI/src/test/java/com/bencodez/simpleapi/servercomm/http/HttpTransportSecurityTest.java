@@ -152,6 +152,19 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void oversizedTlsAndClientPasswordFilesFailClosed() throws Exception {
+		Path identityDirectory = directory.resolve("oversized-password-proxy");
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(identityDirectory, "localhost");
+		Files.writeString(identityDirectory.resolve("http-transport-password"), "x".repeat(129));
+		assertThrows(java.io.IOException.class, () -> HttpTlsIdentity.loadOrCreate(identityDirectory, "localhost"));
+
+		Path clientDirectory = directory.resolve("oversized-password-client");
+		HttpClientCredentialStore.save(clientDirectory, identity.issueClientCertificate("lobby-1"));
+		Files.writeString(clientDirectory.resolve("http-transport-client-password"), "x".repeat(129));
+		assertThrows(java.io.IOException.class, () -> HttpClientCredentialStore.load(clientDirectory));
+	}
+
+	@Test
 	void privateCredentialRootsRejectSymbolicLinks() throws Exception {
 		Path identityTarget = directory.resolve("identity-target");
 		Path identityLink = directory.resolve("identity-link");
@@ -452,6 +465,28 @@ class HttpTransportSecurityTest {
 		assertFalse(authority.authenticate("lobby-1", original.certificate()), "promotion revokes the superseded credential");
 		assertTrue(new HttpEnrollmentAuthority(identity, directory.resolve("state"))
 				.authenticate("lobby-1", replacement.certificate()), "promoted renewal must survive restart");
+	}
+
+	@Test
+	void failedRenewalPersistenceRestoresTheActiveBindingAndCanRetry() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("retry-renewal-proxy"), "localhost");
+		Path stateDirectory = directory.resolve("retry-renewal-state");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, stateDirectory);
+		HttpConnectionCode code = authority.createConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				Duration.ofMinutes(5));
+		HttpTlsIdentity.IssuedClientCertificate original = authority.enroll("lobby-1", code.enrollmentToken());
+		assertTrue(authority.authenticate("lobby-1", original.certificate()));
+		Path stateFile = stateDirectory.resolve("http-transport-clients.properties");
+		Files.delete(stateFile);
+		Files.createDirectory(stateFile);
+
+		assertThrows(java.io.IOException.class, () -> authority.renew("lobby-1", original.certificate()));
+		assertTrue(authority.authenticate("lobby-1", original.certificate()),
+				"a pre-publication renewal failure must leave the active credential usable");
+		Files.delete(stateFile);
+		HttpTlsIdentity.IssuedClientCertificate retried = authority.renew("lobby-1", original.certificate());
+		assertTrue(authority.authenticate("lobby-1", retried.certificate()),
+				"renewal must remain retryable after persistence recovers");
 	}
 
 	@Test

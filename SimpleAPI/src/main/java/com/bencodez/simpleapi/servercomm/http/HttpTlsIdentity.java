@@ -391,9 +391,18 @@ public final class HttpTlsIdentity {
 	}
 
 	private static char[] readPassword(Path path) throws IOException {
-		byte[] bytes = Files.readAllBytes(path);
-		if (bytes.length < 40 || bytes.length > 128) throw new IOException("HTTP TLS password file is invalid");
-		try { return new String(bytes, java.nio.charset.StandardCharsets.US_ASCII).toCharArray(); }
+		if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP TLS password file is invalid");
+		long size = Files.size(path);
+		if (size < 40L || size > 128L) throw new IOException("HTTP TLS password file is invalid");
+		byte[] bytes;
+		try (var input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
+			bytes = input.readNBytes(129);
+		}
+		try {
+			if (bytes.length < 40 || bytes.length > 128) throw new IOException("HTTP TLS password file is invalid");
+			return new String(bytes, java.nio.charset.StandardCharsets.US_ASCII).toCharArray();
+		}
 		finally { Arrays.fill(bytes, (byte) 0); }
 	}
 

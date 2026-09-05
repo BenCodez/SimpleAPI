@@ -111,7 +111,12 @@ public final class HttpEnrollmentAuthority {
 			if (!samePin(binding.pendingCertificatePin(), pin)) return false;
 			bindings.put(serverId, new ClientBinding(pin, null, false));
 			try { persistState(); return true; }
-			catch (java.io.IOException failure) { persistenceFailure = true; return false; }
+			catch (DurableFiles.PublishedException published) {
+				// The replacement is visible. If publication is lost on a crash, the
+				// previous durable pending binding can promote this certificate again.
+				return true;
+			}
+			catch (java.io.IOException failure) { bindings.put(serverId, binding); return false; }
 		}
 		Map.Entry<String, Enrollment> pending = pendingCertificate(serverId, pin);
 		if (pending == null || bindings.size() >= MAX_BINDINGS) return false;
@@ -141,7 +146,12 @@ public final class HttpEnrollmentAuthority {
 		bindings.put(serverId, new ClientBinding(binding.certificatePin(),
 				HttpTransportSecrets.certificatePin(issued.certificate()), false));
 		try { persistState(); }
-		catch (java.io.IOException failure) { persistenceFailure = true; throw failure; }
+		catch (DurableFiles.PublishedException published) {
+			// The old certificate remains active in both the old and newly visible state,
+			// so a lost response can safely retry and republish the complete state.
+			throw published;
+		}
+		catch (java.io.IOException failure) { bindings.put(serverId, binding); throw failure; }
 		return issued;
 	}
 

@@ -244,18 +244,32 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	@Override public void close() {
 		running.getAndSet(false);
 		firstResponse.countDown();
-		// Revoke this connector's journal writer before a replacement snapshots it.
-		// In-flight transitions serialize with seal(): either COMPLETED is already
-		// durable, or the delivery remains durably RUNNING and fail-closed.
-		if (inboundDeliveries != null) inboundDeliveries.seal();
-		if (acknowledgementConfirmationStore != null) acknowledgementConfirmationStore.seal();
 		Thread current = poller; if (current != null) current.interrupt();
-		callbackExecutor.shutdown(); try { if (!callbackExecutor.awaitTermination(5, TimeUnit.SECONDS)) callbackExecutor.shutdownNow(); }
-		catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); callbackExecutor.shutdownNow(); }
 		// The owning transport may release the credential-directory semaphore as soon
 		// as close returns. Wait for the interrupted poller so an in-flight renewal
 		// cannot activate an old credential generation after that ownership handoff.
 		joinPoller(current);
+		shutdownCallbacks();
+		// No poller can enqueue more callbacks and every running journal transition has
+		// finished, so ownership can now be revoked without stranding completed work.
+		if (inboundDeliveries != null) inboundDeliveries.seal();
+		if (acknowledgementConfirmationStore != null) acknowledgementConfirmationStore.seal();
+	}
+	private void shutdownCallbacks() {
+		callbackExecutor.shutdown();
+		boolean interrupted = false;
+		try {
+			if (!callbackExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+				callbackExecutor.shutdownNow();
+				callbackExecutor.awaitTermination(1, TimeUnit.SECONDS);
+			}
+		} catch (InterruptedException stopRequested) {
+			interrupted = true;
+			callbackExecutor.shutdownNow();
+			try { callbackExecutor.awaitTermination(1, TimeUnit.SECONDS); }
+			catch (InterruptedException repeated) { interrupted = true; }
+		}
+		if (interrupted) Thread.currentThread().interrupt();
 	}
 	boolean pollerAlive() { Thread current = poller; return current != null && current.isAlive(); }
 	private static boolean joinPoller(Thread poller, long deadlineNanos) {
