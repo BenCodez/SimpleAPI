@@ -130,6 +130,30 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void publishedOutgoingDeliveryRemainsTrackedUntilDurabilityCanBeConfirmed() throws Exception {
+		AtomicLong forceCalls = new AtomicLong();
+		Path queueRoot = directory.resolve("uncertain-outgoing");
+		HttpProxyTransportServer.DurableOutgoingQueue queue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, ignored -> {
+					if (forceCalls.incrementAndGet() == 3L) throw new java.io.IOException("injected directory force failure");
+				});
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+				"lobby-1", queue, (server, id) -> { });
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId,
+				JsonEnvelope.builder("durable").build());
+
+		assertFalse(state.enqueue(delivery), "post-publication failure must not confirm durable acceptance");
+		assertEquals(java.util.List.of(delivery),
+				state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages());
+		assertEquals(1L, countRegularFiles(queueRoot));
+		assertTrue(state.enqueue(delivery), "same-ID retry must confirm the existing published file");
+		assertEquals(1L, countRegularFiles(queueRoot), "durability retry must not create a duplicate file");
+		state.acknowledge(java.util.List.of(deliveryId));
+		assertEquals(0L, countRegularFiles(queueRoot), "the tracked published file must be removable by ACK");
+	}
+
+	@Test
 	void proxyInboundCompletionSurvivesRestartBeforeAcknowledgement() throws Exception {
 		Path root = directory.resolve("proxy-incoming");
 		Files.createDirectory(root);

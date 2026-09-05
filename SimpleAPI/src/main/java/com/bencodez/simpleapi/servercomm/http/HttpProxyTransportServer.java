@@ -387,10 +387,20 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		synchronized boolean enqueue(HttpTransportProtocol.Delivery delivery) {
 			if (retired) return false;
 			HttpTransportProtocol.Delivery existing = outgoing.get(delivery.id());
-			if (existing != null) return Arrays.equals(HttpTransportProtocol.storedDelivery(existing),
-					HttpTransportProtocol.storedDelivery(delivery));
+			if (existing != null) {
+				if (!Arrays.equals(HttpTransportProtocol.storedDelivery(existing),
+						HttpTransportProtocol.storedDelivery(delivery))) return false;
+				if (durableOutgoing != null) try { durableOutgoing.confirm(serverId, delivery.id()); }
+				catch (IOException failure) { return false; }
+				return true;
+			}
 			if (outgoing.size() >= HttpTransportProtocol.MAX_QUEUE) return false;
 			if (durableOutgoing != null) try { durableOutgoing.persist(serverId, delivery); }
+			catch (DurableFiles.PublishedException uncertain) {
+				// Keep the published entry reachable for delivery, acknowledgement, and a
+				// same-ID durability retry even though acceptance cannot yet be confirmed.
+				outgoing.put(delivery.id(), delivery); touch(); signal(); return false;
+			}
 			catch (IOException failure) { return false; }
 			outgoing.put(delivery.id(), delivery); touch(); signal(); return true;
 		}
@@ -498,13 +508,23 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized void signal() { notifyAll(); }
 	}
 
-	private static final class DurableOutgoingQueue {
+	static final class DurableOutgoingQueue {
+		@FunctionalInterface
+		interface DirectoryForcer { void force(Path directory) throws IOException; }
 		private static final String FILE_PATTERN = "[0-9]{20}-[0-9a-f-]{36}\\.json";
 		private final Path root;
+		private final DirectoryForcer directoryForcer;
 		private final Map<String, Map<String, Path>> files = new HashMap<>();
 		private long sequence;
 
 		private DurableOutgoingQueue(Path root) throws IOException {
+			this(root, DurableFiles::forceDirectory);
+		}
+
+		DurableOutgoingQueue(Path root, DirectoryForcer directoryForcer) throws IOException {
+			if (root == null || directoryForcer == null)
+				throw new IllegalArgumentException("HTTP outgoing queue configuration is required");
+			this.directoryForcer = directoryForcer;
 			this.root = root.toAbsolutePath().normalize();
 			boolean created = false;
 			try { Files.createDirectory(this.root); created = true; }
@@ -514,7 +534,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					throw new IOException("HTTP outgoing queue directory is invalid");
 				ownerOnlyDirectory(this.root);
 			} finally {
-				if (created) DurableFiles.forceDirectory(this.root.getParent());
+				if (created) directoryForcer.force(this.root.getParent());
 			}
 		}
 
@@ -577,7 +597,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			} finally {
 				// The child fsync below cannot make this newly published name durable in
 				// its parent. Persist the root entry before accepting the first message.
-				if (created) DurableFiles.forceDirectory(root);
+				if (created) directoryForcer.force(root);
 			}
 			if (sequence == Long.MAX_VALUE) throw new IOException("HTTP outgoing queue sequence is exhausted");
 			String name = String.format(java.util.Locale.ROOT, "%020d-%s.json", ++sequence, delivery.id());
@@ -589,9 +609,21 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				DurableFiles.forceFile(temporary);
 				try { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE); }
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, target); }
-				ownerOnlyFile(target); DurableFiles.forceDirectory(directory);
 				files.computeIfAbsent(serverId, ignored -> new HashMap<>()).put(delivery.id(), target);
+				try { ownerOnlyFile(target); directoryForcer.force(directory); }
+				catch (IOException postPublicationFailure) {
+					throw new DurableFiles.PublishedException(postPublicationFailure);
+				}
 			} finally { Files.deleteIfExists(temporary); }
+		}
+
+		private synchronized void confirm(String serverId, String id) throws IOException {
+			Map<String, Path> serverFiles = files.get(serverId);
+			Path file = serverFiles == null ? null : serverFiles.get(id);
+			if (file == null || Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
+				throw new IOException("HTTP outgoing queue delivery is unavailable");
+			ownerOnlyFile(file);
+			directoryForcer.force(file.getParent());
 		}
 
 		private synchronized void remove(String serverId, String id) throws IOException {
@@ -610,7 +642,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					throw new IOException("HTTP outgoing queue server directory is invalid");
 				try {
 					Files.deleteIfExists(directory);
-					DurableFiles.forceDirectory(root);
+					directoryForcer.force(root);
 					files.remove(serverId);
 				} catch (java.nio.file.DirectoryNotEmptyException unexpectedEntry) {
 					// The acknowledged delivery is already durably removed; unrelated/tampered entries
