@@ -294,6 +294,28 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void proxyReclaimsOnlyQuiescentBackendStateAfterReplayWindow() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("reclaim-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity,
+				directory.resolve("reclaim-authority"));
+		AtomicLong nanoTime = new AtomicLong();
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, null, ignored -> { }, (serverId, deliveryId) -> { }, nanoTime::get)) {
+			for (int index = 0; index < 128; index++) {
+				HttpProxyTransportServer.BackendState state = server.backendStateForTest("server-" + index);
+				assertTrue(state.beginPollForTest());
+				state.endPollForTest();
+			}
+			assertFalse(server.send("replacement", JsonEnvelope.builder("x").build()),
+					"fresh state must retain its replay fence");
+			nanoTime.addAndGet(TimeUnit.MILLISECONDS.toNanos(HttpTransportProtocol.MAX_CLOCK_SKEW_MILLIS) + 1L);
+			assertTrue(server.send("replacement", JsonEnvelope.builder("x").build()),
+					"a quiescent state must be reclaimable after captured requests expire");
+			assertEquals(128, server.backendCountForTest());
+		}
+	}
+
+	@Test
 	void proxyOutgoingQueueSurvivesRestartUntilBackendAcknowledges() throws Exception {
 		Path proxyDirectory = directory.resolve("proxy");
 		Path authorityDirectory = directory.resolve("authority");

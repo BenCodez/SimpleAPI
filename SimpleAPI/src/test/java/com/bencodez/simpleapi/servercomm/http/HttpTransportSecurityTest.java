@@ -22,6 +22,16 @@ import org.junit.jupiter.api.io.TempDir;
 
 class HttpTransportSecurityTest {
 	@Test
+	void failedRenewalRetriesBeforeActiveCertificateExpires() {
+		assertEquals(Duration.ofMinutes(5),
+				HttpBackendTransportConnector.renewalRetryDelay(Duration.ofHours(6)));
+		assertEquals(Duration.ofMinutes(1),
+				HttpBackendTransportConnector.renewalRetryDelay(Duration.ofMinutes(4)));
+		assertTrue(HttpBackendTransportConnector.renewalRetryDelay(Duration.ofSeconds(3))
+				.compareTo(Duration.ofSeconds(3)) < 0);
+	}
+
+	@Test
 	void connectionCodeRejectsExplicitZeroPort() {
 		assertThrows(IllegalArgumentException.class,
 				() -> new HttpConnectionCode("lobby", URI.create("https://proxy.example.test:0/"), pin('a'),

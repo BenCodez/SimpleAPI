@@ -25,6 +25,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -48,6 +49,8 @@ import javax.net.ssl.SSLPeerUnverifiedException;
  */
 public final class HttpProxyTransportServer implements AutoCloseable {
 	private static final int MAX_BACKENDS = 128;
+	private static final long BACKEND_REPLAY_RETENTION_NANOS =
+			TimeUnit.MILLISECONDS.toNanos(HttpTransportProtocol.MAX_CLOCK_SKEW_MILLIS) + 1L;
 	static {
 		// JDK HttpServer reads these once when its internal server configuration is initialized.
 		// Set conservative process-wide bounds before this transport creates its listener.
@@ -71,6 +74,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	private final Path durableIncomingRoot;
 	private final Consumer<ReceivedEnvelope> onEnvelope;
 	private final DeliveryAcknowledgement onAcknowledged;
+	private final LongSupplier nanoTime;
 	private volatile boolean closed;
 
 	/** In-memory constructor for tests; production callers must supply a durable state directory. */
@@ -87,10 +91,17 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	public HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
 			Path outgoingDirectory, Consumer<ReceivedEnvelope> onEnvelope,
 			DeliveryAcknowledgement onAcknowledged) throws Exception {
+		this(bind, identity, authority, outgoingDirectory, onEnvelope, onAcknowledged, System::nanoTime);
+	}
+
+	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
+			Path outgoingDirectory, Consumer<ReceivedEnvelope> onEnvelope,
+			DeliveryAcknowledgement onAcknowledged, LongSupplier nanoTime) throws Exception {
 		if (bind == null || identity == null || authority == null || onEnvelope == null || onAcknowledged == null)
 			throw new IllegalArgumentException("HTTP transport configuration is required");
+		if (nanoTime == null) throw new IllegalArgumentException("HTTP transport clock is required");
 		this.identity = identity; this.authority = authority; this.onEnvelope = onEnvelope;
-		this.onAcknowledged = onAcknowledged;
+		this.onAcknowledged = onAcknowledged; this.nanoTime = nanoTime;
 		durableOutgoing = outgoingDirectory == null ? null : new DurableOutgoingQueue(outgoingDirectory);
 		durableIncomingRoot = outgoingDirectory == null ? null : incomingRoot(outgoingDirectory);
 		if (durableOutgoing != null) for (Map.Entry<String, List<HttpTransportProtocol.Delivery>> pending
@@ -240,14 +251,26 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		synchronized (backends) {
 			BackendState existing = backends.get(serverId);
 			if (existing != null) return existing;
+			if (backends.size() >= MAX_BACKENDS) reclaimInactiveBackend();
 			if (backends.size() >= MAX_BACKENDS) throw new IOException("HTTP backend state exceeds its bound");
 			HttpInboundDeliveryStore inbound = durableIncomingRoot == null ? null
 					: HttpInboundDeliveryStore.open(durableIncomingRoot, serverId);
-			BackendState created = new BackendState(serverId, durableOutgoing, inbound, onAcknowledged);
+			BackendState created = new BackendState(serverId, durableOutgoing, inbound, onAcknowledged, nanoTime);
 			backends.put(serverId, created);
 			return created;
 		}
 	}
+	private void reclaimInactiveBackend() throws IOException {
+		long now = nanoTime.getAsLong();
+		for (Iterator<Map.Entry<String, BackendState>> iterator = backends.entrySet().iterator(); iterator.hasNext();) {
+			BackendState state = iterator.next().getValue();
+			if (!state.retireIfQuiescent(now, BACKEND_REPLAY_RETENTION_NANOS)) continue;
+			iterator.remove();
+			return;
+		}
+	}
+	BackendState backendStateForTest(String serverId) throws IOException { return backendState(serverId); }
+	int backendCountForTest() { synchronized (backends) { return backends.size(); } }
 	private static Path incomingRoot(Path outgoingDirectory) throws IOException {
 		Path outgoing = outgoingDirectory.toAbsolutePath().normalize();
 		Path parent = outgoing.getParent();
@@ -316,8 +339,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private final ArrayDeque<String> acknowledgements = new ArrayDeque<>();
 		private final Map<String, Long> deliveredAtNanos = new HashMap<>();
 		private double requestTokens = 24.0d;
-		private long lastTokenNanos = System.nanoTime();
-		private boolean activePoll;
+		private long lastTokenNanos;
+		private long lastActivityNanos;
+		private boolean activePoll, retired;
 		BackendState() { this(null, null, null, (serverId, deliveryId) -> { }, System::nanoTime); }
 		BackendState(LongSupplier nanoTime) { this(null, null, null, (serverId, deliveryId) -> { }, nanoTime); }
 		private BackendState(String serverId, DurableOutgoingQueue durableOutgoing) {
@@ -335,6 +359,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				HttpInboundDeliveryStore durableIncoming, DeliveryAcknowledgement onAcknowledged, LongSupplier nanoTime) {
 			this.serverId = serverId; this.durableOutgoing = durableOutgoing;
 			this.durableIncoming = durableIncoming; this.onAcknowledged = onAcknowledged; this.nanoTime = nanoTime;
+			lastTokenNanos = lastActivityNanos = nanoTime.getAsLong();
 			if (durableIncoming != null) for (Map.Entry<String, HttpInboundDeliveryStore.State> entry
 					: durableIncoming.snapshot().entrySet()) {
 				if (entry.getValue() == HttpInboundDeliveryStore.State.COMPLETED) {
@@ -345,11 +370,13 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized void restore(Collection<HttpTransportProtocol.Delivery> deliveries) {
 			for (HttpTransportProtocol.Delivery delivery : deliveries) outgoing.put(delivery.id(), delivery);
 		}
-		private boolean beginPoll(String requestedSession) { synchronized (this) { if (activePoll) return false; activePoll = true; return true; } }
-		private void endPoll() { synchronized (this) { activePoll = false; notifyAll(); } }
+		private boolean beginPoll(String requestedSession) { synchronized (this) { if (retired || activePoll) return false; activePoll = true; touch(); return true; } }
+		private void endPoll() { synchronized (this) { activePoll = false; touch(); notifyAll(); } }
+		boolean beginPollForTest() { return beginPoll("test"); }
+		void endPollForTest() { endPoll(); }
 		private boolean allowRequest() {
-			long now = System.nanoTime(); requestTokens = Math.min(24.0d, requestTokens + ((now - lastTokenNanos) / 1_000_000_000.0d) * 2.0d);
-			lastTokenNanos = now; if (requestTokens < 1.0d) return false; requestTokens -= 1.0d; return true;
+			long now = nanoTime.getAsLong(); requestTokens = Math.min(24.0d, requestTokens + ((now - lastTokenNanos) / 1_000_000_000.0d) * 2.0d);
+			lastTokenNanos = now; touch(); if (requestTokens < 1.0d) return false; requestTokens -= 1.0d; return true;
 		}
 		boolean acceptSession(String requested, long requestedSequence) {
 			if (!requested.equals(session)) { session = requested; sequence = -1L; deliveredAtNanos.clear(); }
@@ -358,13 +385,14 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (requestedSequence <= sequence) return false; sequence = requestedSequence; return true;
 		}
 		synchronized boolean enqueue(HttpTransportProtocol.Delivery delivery) {
+			if (retired) return false;
 			HttpTransportProtocol.Delivery existing = outgoing.get(delivery.id());
 			if (existing != null) return Arrays.equals(HttpTransportProtocol.storedDelivery(existing),
 					HttpTransportProtocol.storedDelivery(delivery));
 			if (outgoing.size() >= HttpTransportProtocol.MAX_QUEUE) return false;
 			if (durableOutgoing != null) try { durableOutgoing.persist(serverId, delivery); }
 			catch (IOException failure) { return false; }
-			outgoing.put(delivery.id(), delivery); signal(); return true;
+			outgoing.put(delivery.id(), delivery); touch(); signal(); return true;
 		}
 		void acknowledge(Collection<String> acks) throws IOException {
 			for (String id : acks) {
@@ -411,6 +439,15 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			}
 		}
 		private void seal() { if (durableIncoming != null) durableIncoming.seal(); }
+		private synchronized boolean retireIfQuiescent(long now, long retentionNanos) throws IOException {
+			if (retired || activePoll || !outgoing.isEmpty() || !deliveredAtNanos.isEmpty() || !seen.isEmpty()
+					|| !processing.isEmpty() || !acknowledgements.isEmpty() || now - lastActivityNanos < retentionNanos
+					|| durableIncoming != null && !durableIncoming.snapshot().isEmpty()) return false;
+			if (durableIncoming != null) durableIncoming.sealAndDeleteIfEmpty();
+			retired = true;
+			return true;
+		}
+		private void touch() { lastActivityNanos = nanoTime.getAsLong(); }
 		private void queueAck(String id) { if (acknowledgements.size() < HttpTransportProtocol.MAX_QUEUE && !acknowledgements.contains(id)) acknowledgements.add(id); }
 		synchronized Response await(String serverId, String requestedSession, long requestedSequence) {
 			return await(serverId, requestedSession, requestedSequence, List.of());

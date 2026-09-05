@@ -101,6 +101,17 @@ final class HttpInboundDeliveryStore {
 	synchronized void markRunning(String id) throws IOException { transition(id, State.RESERVED, State.RUNNING); }
 	synchronized void markCompleted(String id) throws IOException { transition(id, State.RUNNING, State.COMPLETED); }
 	synchronized void seal() { sealed = true; }
+	synchronized void sealAndDeleteIfEmpty() throws IOException {
+		if (!entries.isEmpty()) throw new IOException("HTTP inbound delivery store is not empty");
+		requireRoot();
+		try (DirectoryStream<Path> files = Files.newDirectoryStream(root)) {
+			if (files.iterator().hasNext()) throw new IOException("HTTP inbound delivery directory is not empty");
+		}
+		sealed = true;
+		Path parent = root.getParent();
+		Files.delete(root);
+		DurableFiles.forceDirectory(parent);
+	}
 
 	synchronized void remove(String id) throws IOException {
 		requireWritable();

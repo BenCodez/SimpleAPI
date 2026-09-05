@@ -16,6 +16,7 @@ import java.security.KeyStore;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -43,6 +44,8 @@ import javax.net.ssl.SSLContext;
 /** Backend-side, persistent HTTP/1.1 long-poll connector. */
 public final class HttpBackendTransportConnector implements AutoCloseable {
 	public static final Duration CLIENT_TIMEOUT = Duration.ofSeconds(35);
+	private static final Duration RENEWAL_SUCCESS_CHECK = Duration.ofHours(6);
+	private static final Duration RENEWAL_FAILURE_RETRY = Duration.ofMinutes(5);
 	static final int CALLBACK_QUEUE_CAPACITY = 128;
 	private volatile HttpClientCredentialStore.HttpClientProfile profile;
 	private final String serverId;
@@ -403,14 +406,18 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (directory == null || !HttpTlsIdentity.needsRenewal(credential.certificate(), Clock.systemUTC())) return;
 			long now = System.nanoTime();
 			if (nextRenewalCheckNanos != 0L && now - nextRenewalCheckNanos < 0L) return;
-			nextRenewalCheckNanos = now + Duration.ofHours(6).toNanos();
+			Duration retry = renewalRetryDelay(Duration.between(Instant.now(),
+					credential.certificate().getNotAfter().toInstant()));
 			try {
 				byte[] body = HttpTransportProtocol.renewalRequest(serverId);
 				HttpRequest request = HttpRequest.newBuilder(profile.endpoint().resolve("v1/renew")).timeout(CLIENT_TIMEOUT)
 						.header("Content-Type", "application/json").header("Cache-Control", "no-store")
 						.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
 				LimitedResponse response = sendLimited(client, request);
-				if (response.statusCode() != 201) return;
+				if (response.statusCode() != 201) {
+					nextRenewalCheckNanos = renewalDeadline(now, retry);
+					return;
+				}
 				HttpTlsIdentity.IssuedClientCertificate issued = HttpTransportProtocol.parseEnrollmentResponse(serverId, response.body());
 				HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(directory, issued);
 				HttpClientCredentialStore.ClientCredential replacement = staged.credential();
@@ -421,8 +428,25 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				profile = replacementProfile;
 				client = replacementClient;
 				credential = replacement;
-			} catch (Exception ignored) { /* The active generation is unchanged; retry on the bounded schedule. */ }
+				nextRenewalCheckNanos = renewalDeadline(now, RENEWAL_SUCCESS_CHECK);
+			} catch (Exception ignored) {
+				// Keep the active generation and retry well before its remaining validity is consumed.
+				nextRenewalCheckNanos = renewalDeadline(now, retry);
+			}
 		}
+	}
+	static Duration renewalRetryDelay(Duration remainingValidity) {
+		if (remainingValidity == null || remainingValidity.isNegative() || remainingValidity.isZero())
+			return Duration.ofSeconds(1);
+		Duration beforeExpiry = remainingValidity.dividedBy(4L);
+		if (beforeExpiry.isZero()) beforeExpiry = Duration.ofNanos(1L);
+		return beforeExpiry.compareTo(RENEWAL_FAILURE_RETRY) < 0 ? beforeExpiry : RENEWAL_FAILURE_RETRY;
+	}
+	private static long renewalDeadline(long now, Duration delay) {
+		long nanos;
+		try { nanos = delay.toNanos(); }
+		catch (ArithmeticException overflow) { nanos = Long.MAX_VALUE; }
+		return nanos > Long.MAX_VALUE - now ? Long.MAX_VALUE : now + nanos;
 	}
 	private static HttpClient client(HttpClientCredentialStore.HttpClientProfile profile,
 			HttpClientCredentialStore.ClientCredential credential) throws Exception {
