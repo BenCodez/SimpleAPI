@@ -117,6 +117,23 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		ThreadPoolExecutor createdListener = null, createdHandler = null;
 		try {
 			durableIncomingRoot = outgoingDirectory == null ? null : incomingRoot(outgoingDirectory);
+			if (durableIncomingRoot != null) for (String serverId : HttpInboundDeliveryStore.discover(durableIncomingRoot)) {
+				String canonical;
+				try { canonical = HttpTlsIdentity.canonicalServerId(serverId); }
+				catch (IllegalArgumentException invalid) { throw new IOException("HTTP inbound backend id is invalid", invalid); }
+				if (!canonical.equals(serverId)) throw new IOException("HTTP inbound backend id is not canonical");
+				HttpInboundDeliveryStore inbound = HttpInboundDeliveryStore.open(durableIncomingRoot, serverId);
+				if (inbound.snapshot().isEmpty()) {
+					try { inbound.sealAndDeleteIfEmpty(); }
+					catch (IOException cleanupFailure) { inbound.seal(); throw cleanupFailure; }
+					continue;
+				}
+				if (backends.size() >= MAX_BACKENDS) {
+					inbound.seal();
+					throw new IOException("HTTP backend state exceeds its bound");
+				}
+				backends.put(serverId, new BackendState(serverId, durableOutgoing, inbound, onAcknowledged, nanoTime));
+			}
 			if (durableOutgoing != null) for (Map.Entry<String, List<HttpTransportProtocol.Delivery>> pending
 					: durableOutgoing.load().entrySet()) {
 				BackendState state = backendState(pending.getKey());

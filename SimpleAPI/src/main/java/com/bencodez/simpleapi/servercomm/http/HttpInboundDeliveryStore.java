@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /** Crash-durable state for proxy deliveries around a non-transactional application callback. */
@@ -56,6 +57,35 @@ final class HttpInboundDeliveryStore {
 
 	static HttpInboundDeliveryStore inspect(Path credentialDirectory) throws IOException {
 		return new HttpInboundDeliveryStore(credentialDirectory, DIRECTORY, true);
+	}
+
+	/** Returns validated journal directory names while tolerating their persistent ownership sidecars. */
+	static Set<String> discover(Path parent) throws IOException {
+		Path root = parent.toAbsolutePath().normalize();
+		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP inbound delivery parent is unsafe");
+		PrivateFilePermissions.ownerOnlyDirectory(root);
+		Set<String> directories = new TreeSet<>();
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(root)) {
+			for (Path entry : entries) {
+				String name = entry.getFileName().toString();
+				if (!Files.isSymbolicLink(entry) && Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+					if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+						throw new IOException("HTTP inbound delivery directory name is invalid");
+					PrivateFilePermissions.ownerOnlyDirectory(entry);
+					directories.add(name);
+					continue;
+				}
+				if (!name.startsWith(OWNER_LOCK_PREFIX) || !name.endsWith(OWNER_LOCK_SUFFIX)
+						|| Files.isSymbolicLink(entry) || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS))
+					throw new IOException("HTTP inbound delivery parent contains an invalid entry");
+				String journal = name.substring(OWNER_LOCK_PREFIX.length(), name.length() - OWNER_LOCK_SUFFIX.length());
+				if (!journal.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+					throw new IOException("HTTP inbound delivery ownership lock name is invalid");
+				PrivateFilePermissions.ownerOnlyFile(entry);
+			}
+		}
+		return directories;
 	}
 
 	private HttpInboundDeliveryStore(Path parent, String directoryName, boolean readOnly) throws IOException {
