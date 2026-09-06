@@ -72,6 +72,10 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private volatile Thread poller;
 	// Set by the executor's worker wrapper. Thread names are not an ownership boundary.
 	private volatile Thread callbackWorker;
+	// Guarded by lifecycle. A flush drains the accepted queue but must not admit a new send.
+	private boolean flushingOutgoing;
+	// Guarded by state. Keep admission and queue insertion in the same critical section.
+	private boolean sendAdmissionOpen;
 	private long sequence;
 	private volatile long nextRenewalCheckNanos;
 	// Guarded by renewal: do not supersede a visibly published credential until
@@ -177,10 +181,15 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 
 	public void start() {
 		synchronized (lifecycle) {
-			if (closing.get() || !running.compareAndSet(false, true)) return;
+			if (closing.get() || flushingOutgoing || !running.compareAndSet(false, true)) return;
 			poller = new Thread(this::pollLoop, "SimpleAPI-HTTP-poll");
 			poller.setDaemon(true);
 			poller.start();
+		}
+		// Do not nest lifecycle and state: close/flush transition running before taking
+		// state, while send observes both values under state before enqueuing.
+		synchronized (state) {
+			if (running.get() && !closing.get()) sendAdmissionOpen = true;
 		}
 	}
 	/** Waits for one authenticated, protocol-valid transport response. */
@@ -193,10 +202,11 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	 * callers needing restart durability must retain the application operation independently.
 	 */
 	public boolean send(JsonEnvelope envelope) {
-		if (envelope == null || !running.get()) return false;
+		if (envelope == null) return false;
 		try { HttpTransportProtocol.validateEnvelope(envelope); }
 		catch (IllegalArgumentException invalid) { return false; }
 		synchronized (state) {
+			if (!sendAdmissionOpen || !running.get()) return false;
 			if (outgoing.size() >= HttpTransportProtocol.MAX_QUEUE) return false;
 			String id = UUID.randomUUID().toString(); outgoing.put(id, new HttpTransportProtocol.Delivery(id, envelope)); return true;
 		}
@@ -248,27 +258,35 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	}
 	/** Stops normal polling and gives already-queued outbound messages a bounded final delivery attempt. */
 	public boolean flushOutgoing(long deadlineNanos) {
-		running.set(false);
-		firstResponse.countDown();
-		Thread current = poller;
-		if (current != null) current.interrupt();
-		if (!joinPoller(current, deadlineNanos)) return false;
-		while (queuedOutgoing() != 0 || queuedAcknowledgements() != 0) {
-			long remaining = deadlineNanos - System.nanoTime();
-			if (remaining <= 0L) return false;
-			Duration timeout = Duration.ofNanos(Math.min(CLIENT_TIMEOUT.toNanos(), remaining));
-			synchronized (this) {
-				if (pollOnce(timeout, false, false)) continue;
-			}
-			// The proxy may retain its one-active-poll guard briefly after the old
-			// client request is interrupted. Retry that transient 409 without busy
-			// spinning, but never extend the caller's shutdown deadline.
-			remaining = deadlineNanos - System.nanoTime();
-			if (remaining <= 0L) return false;
-			try { TimeUnit.NANOSECONDS.sleep(Math.min(TimeUnit.MILLISECONDS.toNanos(50), remaining)); }
-			catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return false; }
+		Thread current;
+		synchronized (lifecycle) {
+			if (closing.get() || flushingOutgoing) return false;
+			flushingOutgoing = true;
+			running.set(false);
+			firstResponse.countDown();
+			current = poller;
+			if (current != null) current.interrupt();
 		}
-		return true;
+		synchronized (state) { sendAdmissionOpen = false; }
+		try {
+			if (!joinPoller(current, deadlineNanos)) return false;
+			while (queuedOutgoing() != 0 || queuedAcknowledgements() != 0) {
+				long remaining = deadlineNanos - System.nanoTime();
+				if (remaining <= 0L) return false;
+				Duration timeout = Duration.ofNanos(Math.min(CLIENT_TIMEOUT.toNanos(), remaining));
+				synchronized (this) {
+					if (pollOnce(timeout, false, false)) continue;
+				}
+				// The proxy may retain its one-active-poll guard briefly after the old
+				// client request is interrupted. Retry that transient 409 without busy
+				// spinning, but never extend the caller's shutdown deadline.
+				remaining = deadlineNanos - System.nanoTime();
+				if (remaining <= 0L) return false;
+				try { TimeUnit.NANOSECONDS.sleep(Math.min(TimeUnit.MILLISECONDS.toNanos(50), remaining)); }
+				catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return false; }
+			}
+			return true;
+		} finally { synchronized (lifecycle) { flushingOutgoing = false; } }
 	}
 	/**
 	 * Stops polling and drains callbacks before sealing their journals. When called by the
@@ -289,6 +307,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				if (current != null) current.interrupt();
 			}
 		}
+		if (!alreadyClosing) synchronized (state) { sendAdmissionOpen = false; }
 		if (alreadyClosing) {
 			if (!calledByCallbackWorker) awaitClosed();
 			return;

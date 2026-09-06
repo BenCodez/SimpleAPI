@@ -127,7 +127,8 @@ public final class HttpEnrollmentAuthority {
 			catch (java.io.IOException failure) { bindings.put(serverId, binding); return false; }
 		}
 		Map.Entry<String, Enrollment> pending = pendingCertificate(serverId, pin);
-		if (pending == null || bindings.size() >= MAX_BINDINGS) return false;
+		if (pending == null || !pending.getValue().expiresAt().isAfter(clock.instant())
+				|| bindings.size() >= MAX_BINDINGS) return false;
 		enrollments.remove(pending.getKey());
 		bindings.put(serverId, new ClientBinding(pin, null, false));
 		try { persistState(); return true; }
