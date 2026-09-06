@@ -94,6 +94,13 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void legacyConnectionCodesSupportDottedServerIds() {
+		HttpConnectionCode original = new HttpConnectionCode("lobby.eu", URI.create("https://proxy.example.test:8443/"),
+				pin('a'), pin('b'), Instant.parse("2030-01-01T00:00:00Z"), HttpTransportSecrets.randomToken());
+		assertEquals(original, HttpConnectionCode.parse(original.encodeLegacy()));
+	}
+
+	@Test
 	void expiredCodesAreNotActive() {
 		HttpConnectionCode code = new HttpConnectionCode("lobby", URI.create("https://proxy.example.test/"), pin('a'), pin('b'),
 				Instant.parse("2029-12-31T23:59:59Z"), HttpTransportSecrets.randomToken());

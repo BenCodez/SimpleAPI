@@ -60,8 +60,19 @@ public record HttpConnectionCode(String serverId, URI endpoint, String serverCer
 		if (code == null || code.length() > MAX_CODE_LENGTH || code.indexOf('\n') >= 0 || code.indexOf('\r') >= 0)
 			throw new IllegalArgumentException("Connection code is invalid");
 		String[] parts = code.split("\\.", -1);
-		if (parts.length != 8 || (!VERSION.equals(parts[0]) && !LEGACY_VERSION.equals(parts[0])))
+		if (parts.length < 8 || (!VERSION.equals(parts[0]) && !LEGACY_VERSION.equals(parts[0])))
 			throw new IllegalArgumentException("Connection code is invalid");
+		if (LEGACY_VERSION.equals(parts[0]) && parts.length > 8) {
+			int endpointIndex = parts.length - 6;
+			StringBuilder serverId = new StringBuilder(parts[1]);
+			for (int index = 2; index < endpointIndex; index++) serverId.append('.').append(parts[index]);
+			String[] normalized = new String[8];
+			normalized[0] = parts[0];
+			normalized[1] = serverId.toString();
+			System.arraycopy(parts, endpointIndex, normalized, 2, 6);
+			parts = normalized;
+		}
+		if (parts.length != 8) throw new IllegalArgumentException("Connection code is invalid");
 		try {
 			String serverId = LEGACY_VERSION.equals(parts[0]) ? parts[1]
 					: new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);

@@ -860,6 +860,42 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void proxyDoesNotReclaimAQuarantineOnlyBackendAfterReplayWindow() throws Exception {
+		Path queueRoot = directory.resolve("quarantine-reclamation-outgoing");
+		AtomicLong forceCalls = new AtomicLong();
+		String serverId = "quarantined";
+		HttpTransportProtocol.Delivery retry = new HttpTransportProtocol.Delivery(
+				java.util.UUID.randomUUID().toString(), JsonEnvelope.builder("retry").build());
+		try (HttpProxyTransportServer.DurableOutgoingQueue queue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, ignored -> {
+					if (forceCalls.incrementAndGet() == 3L) throw new java.io.IOException("injected directory force failure");
+				})) {
+			HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+					serverId, queue, (server, id) -> { });
+			assertFalse(state.enqueue(retry));
+		}
+
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("quarantine-reclamation-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity,
+				directory.resolve("quarantine-reclamation-authority"));
+		AtomicLong nanoTime = new AtomicLong();
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, queueRoot, ignored -> { }, (backend, delivery) -> { }, nanoTime::get)) {
+			for (int index = 0; index < 127; index++) {
+				HttpProxyTransportServer.BackendState state = server.backendStateForTest("idle-" + index);
+				assertTrue(state.beginPollForTest());
+				state.endPollForTest();
+			}
+			nanoTime.addAndGet(TimeUnit.MILLISECONDS.toNanos(HttpTransportProtocol.MAX_CLOCK_SKEW_MILLIS) + 1L);
+			for (int index = 0; index < 127; index++)
+				assertTrue(server.send("replacement-" + index, JsonEnvelope.builder("replacement").build()));
+			assertFalse(server.send("overflow", JsonEnvelope.builder("overflow").build()));
+			assertTrue(server.backendStateForTest(serverId).enqueue(retry),
+					"the identical retry must still reach and promote its quarantined delivery at capacity");
+		}
+	}
+
+	@Test
 	void proxyOutgoingQueueSurvivesRestartUntilBackendAcknowledges() throws Exception {
 		Path proxyDirectory = directory.resolve("proxy");
 		Path authorityDirectory = directory.resolve("authority");

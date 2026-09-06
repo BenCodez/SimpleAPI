@@ -1,6 +1,9 @@
 package com.bencodez.simpleapi.servercomm.http;
 
 import java.net.URI;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -23,6 +26,8 @@ import com.bencodez.simpleapi.file.PrivateFilePermissions;
  * retained; only SHA-256 hashes are kept until expiry. This type is thread-safe.
  */
 public final class HttpEnrollmentAuthority {
+	private static final Object PROCESS_STATE_LOCK = new Object();
+	private static final String STATE_LOCK_FILE = ".http-transport-authority.lock";
 	private static final Duration MAX_ENROLLMENT_LIFETIME = Duration.ofMinutes(15);
 	private static final Duration MIN_RENEWAL_INTERVAL = Duration.ofMinutes(1);
 	private static final int MAX_PENDING_ENROLLMENTS = 128;
@@ -35,13 +40,14 @@ public final class HttpEnrollmentAuthority {
 	private final Map<String, ClientBinding> bindings = new HashMap<>();
 	private final Map<String, Instant> renewalNotBefore = new HashMap<>();
 	private boolean persistenceFailure;
+	private boolean rollbackStateAvailable;
 	private boolean revocationRetryRequired;
 	private String revocationRetryServerId;
 
 	/** Creates a restart-safe authority. State contains public certificate pins plus bounded hashes of pending tokens. */
 	public HttpEnrollmentAuthority(HttpTlsIdentity identity, Path stateDirectory) throws java.io.IOException {
 		this(identity, Clock.systemUTC(), stateFile(stateDirectory));
-		loadState();
+		withStateLock(() -> null);
 	}
 
 	HttpEnrollmentAuthority(HttpTlsIdentity identity, Clock clock) {
@@ -56,6 +62,11 @@ public final class HttpEnrollmentAuthority {
 	}
 
 	public synchronized HttpConnectionCode createConnectionCode(String serverId, URI endpoint, Duration lifetime) {
+		try { return withMutationLock(() -> createConnectionCodeLocked(serverId, endpoint, lifetime)); }
+		catch (java.io.IOException failure) { throw new IllegalStateException("Could not read HTTP enrollment state", failure); }
+	}
+
+	private HttpConnectionCode createConnectionCodeLocked(String serverId, URI endpoint, Duration lifetime) {
 		if (revocationRetryRequired)
 			throw new IllegalStateException("HTTP certificate revocation durability must be retried");
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
@@ -72,15 +83,20 @@ public final class HttpEnrollmentAuthority {
 		byte[] tokenHash = HttpTransportSecrets.sha256(token.getBytes(StandardCharsets.US_ASCII));
 		String lookup = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(tokenHash);
 		enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, null));
-		try { persistState(); persistenceFailure = false; }
+		try { persistState(); persistenceFailure = false; rollbackStateAvailable = false; }
 		catch (java.io.IOException failure) {
 			enrollments.remove(lookup);
+			rollbackStateAvailable = !(failure instanceof DurableFiles.PublishedException);
 			throw new IllegalStateException("Could not persist HTTP enrollment", failure);
 		}
 		return code;
 	}
 
 	public synchronized HttpTlsIdentity.IssuedClientCertificate enroll(String serverId, String enrollmentToken) throws Exception {
+		return withMutationLock(() -> enrollLocked(serverId, enrollmentToken));
+	}
+
+	private HttpTlsIdentity.IssuedClientCertificate enrollLocked(String serverId, String enrollmentToken) throws Exception {
 		// A failed revoke may have restored a still-valid pending token in memory.
 		// Do not let enrollment persist that stale state before the revoke is retried.
 		if (revocationRetryRequired)
@@ -101,16 +117,24 @@ public final class HttpEnrollmentAuthority {
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate(serverId);
 		enrollments.put(lookup, new Enrollment(enrollment.tokenHash(), enrollment.expiresAt(), serverId,
 				HttpTransportSecrets.certificatePin(issued.certificate())));
-		try { persistState(); persistenceFailure = false; }
+		try { persistState(); persistenceFailure = false; rollbackStateAvailable = false; }
 		catch (java.io.IOException failure) {
-			if (!(failure instanceof DurableFiles.PublishedException)) enrollments.put(lookup, enrollment);
-			else persistenceFailure = true;
+			if (!(failure instanceof DurableFiles.PublishedException)) {
+				enrollments.put(lookup, enrollment);
+				rollbackStateAvailable = true;
+			}
+			else { persistenceFailure = true; rollbackStateAvailable = false; }
 			throw failure;
 		}
 		return issued;
 	}
 
 	public synchronized boolean authenticate(String serverId, java.security.cert.X509Certificate certificate) {
+		try { return withStateLock(() -> authenticateLocked(serverId, certificate), rollbackStateAvailable); }
+		catch (java.io.IOException failure) { return false; }
+	}
+
+	private boolean authenticateLocked(String serverId, java.security.cert.X509Certificate certificate) {
 		if (persistenceFailure || serverId == null || certificate == null) return false;
 		try { serverId = HttpTlsIdentity.canonicalServerId(serverId); }
 		catch (IllegalArgumentException invalid) { return false; }
@@ -121,21 +145,23 @@ public final class HttpEnrollmentAuthority {
 			if (samePin(binding.certificatePin(), pin)) return true;
 			if (!samePin(binding.pendingCertificatePin(), pin)) return false;
 			bindings.put(serverId, new ClientBinding(pin, null, false));
-			try { persistState(); return true; }
+			try { persistState(); rollbackStateAvailable = false; return true; }
 			catch (DurableFiles.PublishedException published) {
+				rollbackStateAvailable = false;
 				// The replacement is visible. If publication is lost on a crash, the
 				// previous durable pending binding can promote this certificate again.
 				return true;
 			}
-			catch (java.io.IOException failure) { bindings.put(serverId, binding); return false; }
+			catch (java.io.IOException failure) { bindings.put(serverId, binding); rollbackStateAvailable = true; return false; }
 		}
 		Map.Entry<String, Enrollment> pending = pendingCertificate(serverId, pin);
 		if (pending == null || !pending.getValue().expiresAt().isAfter(clock.instant())
 				|| bindings.size() >= MAX_BINDINGS) return false;
 		enrollments.remove(pending.getKey());
 		bindings.put(serverId, new ClientBinding(pin, null, false));
-		try { persistState(); return true; }
+		try { persistState(); rollbackStateAvailable = false; return true; }
 		catch (DurableFiles.PublishedException published) {
+			rollbackStateAvailable = false;
 			// The visible state is active. If its directory entry is lost on a crash, the
 			// prior pending state can promote this same certificate again after restart.
 			return true;
@@ -143,6 +169,7 @@ public final class HttpEnrollmentAuthority {
 		catch (java.io.IOException failure) {
 			bindings.remove(serverId);
 			enrollments.put(pending.getKey(), pending.getValue());
+			rollbackStateAvailable = true;
 			return false;
 		}
 	}
@@ -151,11 +178,16 @@ public final class HttpEnrollmentAuthority {
 	 * until the replacement successfully authenticates, making a lost renewal response safe to retry. */
 	public synchronized HttpTlsIdentity.IssuedClientCertificate renew(String serverId,
 			java.security.cert.X509Certificate currentCertificate) throws Exception {
+		return withMutationLock(() -> renewLocked(serverId, currentCertificate));
+	}
+
+	private HttpTlsIdentity.IssuedClientCertificate renewLocked(String serverId,
+			java.security.cert.X509Certificate currentCertificate) throws Exception {
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
 		Instant now = clock.instant();
 		Instant nextAllowed = renewalNotBefore.get(serverId);
 		if (nextAllowed != null && now.isBefore(nextAllowed)) throw new RenewalRateLimitException();
-		if (!authenticate(serverId, currentCertificate)) throw new IllegalArgumentException("Certificate renewal was rejected");
+		if (!authenticateLocked(serverId, currentCertificate)) throw new IllegalArgumentException("Certificate renewal was rejected");
 		// Bound the limiter by active bindings; failed issuance still consumes the window.
 		renewalNotBefore.keySet().retainAll(bindings.keySet());
 		renewalNotBefore.put(serverId, now.plus(MIN_RENEWAL_INTERVAL));
@@ -163,13 +195,14 @@ public final class HttpEnrollmentAuthority {
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate(serverId);
 		bindings.put(serverId, new ClientBinding(binding.certificatePin(),
 				HttpTransportSecrets.certificatePin(issued.certificate()), false));
-		try { persistState(); }
+		try { persistState(); rollbackStateAvailable = false; }
 		catch (DurableFiles.PublishedException published) {
+			rollbackStateAvailable = false;
 			// The old certificate remains active in both the old and newly visible state,
 			// so a lost response can safely retry and republish the complete state.
 			throw published;
 		}
-		catch (java.io.IOException failure) { bindings.put(serverId, binding); throw failure; }
+		catch (java.io.IOException failure) { bindings.put(serverId, binding); rollbackStateAvailable = true; throw failure; }
 		return issued;
 	}
 
@@ -179,6 +212,11 @@ public final class HttpEnrollmentAuthority {
 	}
 
 	public synchronized void revoke(String serverId) {
+		try { withMutationLock(() -> { revokeLocked(serverId); return null; }); }
+		catch (java.io.IOException failure) { throw new IllegalStateException("Could not read HTTP enrollment state", failure); }
+	}
+
+	private void revokeLocked(String serverId) {
 		try { serverId = HttpTlsIdentity.canonicalServerId(serverId); }
 		catch (IllegalArgumentException invalid) { return; }
 		if (revocationRetryRequired && !serverId.equals(revocationRetryServerId))
@@ -195,6 +233,7 @@ public final class HttpEnrollmentAuthority {
 		if (removedBinding != null || !removedEnrollments.isEmpty() || revocationRetryRequired) try {
 			persistState();
 			persistenceFailure = false;
+			rollbackStateAvailable = false;
 			revocationRetryRequired = false;
 			revocationRetryServerId = null;
 		}
@@ -204,11 +243,73 @@ public final class HttpEnrollmentAuthority {
 			if (!(failure instanceof DurableFiles.PublishedException)) {
 				if (removedBinding != null) bindings.put(serverId, removedBinding);
 				enrollments.putAll(removedEnrollments);
+				rollbackStateAvailable = true;
 			}
 			persistenceFailure = true;
+			if (failure instanceof DurableFiles.PublishedException) rollbackStateAvailable = false;
 			revocationRetryRequired = true;
 			revocationRetryServerId = serverId;
 			throw new IllegalStateException("Could not persist HTTP certificate revocation", failure);
+		}
+	}
+
+	@FunctionalInterface
+	private interface StateOperation<T, E extends Exception> { T run() throws E; }
+
+	private <T, E extends Exception> T withMutationLock(StateOperation<T, E> operation) throws java.io.IOException, E {
+		return withStateLock(operation, true);
+	}
+
+	/** Serializes every durable-state operation across both authority instances and processes, then
+	 * adopts the latest complete file before making a decision or rewriting it. */
+	private <T, E extends Exception> T withStateLock(StateOperation<T, E> operation) throws java.io.IOException, E {
+		return withStateLock(operation, false);
+	}
+
+	private <T, E extends Exception> T withStateLock(StateOperation<T, E> operation,
+			boolean allowDirectoryFailure) throws java.io.IOException, E {
+		if (stateFile == null) return operation.run();
+		synchronized (PROCESS_STATE_LOCK) {
+			Path sidecar = stateFile.resolveSibling(STATE_LOCK_FILE);
+			if (Files.isSymbolicLink(sidecar) || Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+					&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
+				throw new java.io.IOException("HTTP enrollment state lock is unsafe");
+			try (FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.CREATE,
+					StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+				PrivateFilePermissions.ownerOnlyFile(sidecar);
+				try (FileLock ignored = lock(channel)) {
+					refreshState(allowDirectoryFailure);
+					return operation.run();
+				}
+			}
+		}
+	}
+
+	private static FileLock lock(FileChannel channel) throws java.io.IOException {
+		try { return channel.lock(); }
+		catch (OverlappingFileLockException alreadyOwned) {
+			throw new java.io.IOException("HTTP enrollment state is already being updated", alreadyOwned);
+		}
+	}
+
+	private void refreshState(boolean allowDirectoryFailure) throws java.io.IOException {
+		// A pre-publication failure may temporarily leave no state file while this instance
+		// retains the exact rollback state needed for a retry. Any successful peer mutation
+		// recreates the file under this same lock and will therefore be adopted here.
+		if (!Files.exists(stateFile, LinkOption.NOFOLLOW_LINKS)) return;
+		// Tests and recovery callers may expose a failed replacement as a directory at
+		// the target path. Mutations must reach persistState() so its existing rollback
+		// and fail-closed retry semantics run; reads still reject the invalid state.
+		if (allowDirectoryFailure && Files.isDirectory(stateFile, LinkOption.NOFOLLOW_LINKS)) return;
+		Map<String, Enrollment> previousEnrollments = new HashMap<>(enrollments);
+		Map<String, ClientBinding> previousBindings = new HashMap<>(bindings);
+		enrollments.clear();
+		bindings.clear();
+		try { loadState(); }
+		catch (java.io.IOException failure) {
+			enrollments.putAll(previousEnrollments);
+			bindings.putAll(previousBindings);
+			throw failure;
 		}
 	}
 

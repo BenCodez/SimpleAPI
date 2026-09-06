@@ -60,7 +60,8 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private final AtomicBoolean running = new AtomicBoolean();
 	private final AtomicBoolean closing = new AtomicBoolean();
 	private final CountDownLatch closed = new CountDownLatch(1);
-	private final CountDownLatch firstResponse = new CountDownLatch(1);
+	// Replaced for each start. A response from a stopped run must not satisfy a later run.
+	private volatile ResponseState responseState = new ResponseState();
 	private final Object lifecycle = new Object();
 	private final Object state = new Object();
 	private final Object renewal = new Object();
@@ -183,6 +184,8 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	public void start() {
 		synchronized (lifecycle) {
 			if (closing.get() || flushingOutgoing || !running.compareAndSet(false, true)) return;
+			responseState.cancel();
+			responseState = new ResponseState();
 			poller = new Thread(this::pollLoop, "SimpleAPI-HTTP-poll");
 			poller.setDaemon(true);
 			poller.start();
@@ -195,9 +198,13 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	}
 	/** Waits for one authenticated, protocol-valid transport response. */
 	public boolean awaitFirstResponse(long deadlineNanos) throws InterruptedException {
+		ResponseState expected = responseState;
 		long remaining = deadlineNanos - System.nanoTime();
-		return remaining > 0L && firstResponse.await(remaining, TimeUnit.NANOSECONDS) && running.get();
+		return remaining > 0L && expected.await(remaining) && responseStateIsActive(expected);
 	}
+	private boolean responseStateIsActive(ResponseState expected) { synchronized (lifecycle) {
+		return responseState == expected && running.get();
+	} }
 	/**
 	 * Inserts an in-memory at-least-once delivery. It survives retry/lost responses while this process remains alive;
 	 * callers needing restart durability must retain the application operation independently.
@@ -217,7 +224,11 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		return pollOnce(CLIENT_TIMEOUT, true, true);
 	}
 	private boolean pollOnce(Duration timeout, boolean requireRunning, boolean acceptIncoming) {
-		if (requireRunning && !running.get()) return false;
+		ResponseState runResponse;
+		synchronized (lifecycle) {
+			if (requireRunning && !running.get()) return false;
+			runResponse = responseState;
+		}
 		List<String> acks = List.of(), ackConfirmations = List.of();
 		boolean acknowledgementsConfirmed = false, confirmationsConfirmed = false;
 		try {
@@ -249,7 +260,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				outgoing.remove(ack); queueAcknowledgementConfirmation(ack);
 			} }
 			if (acceptIncoming) for (HttpTransportProtocol.Delivery delivery : accept(packet.messages())) dispatch(delivery);
-			firstResponse.countDown();
+			if (requireRunning) runResponse.received();
 			return true;
 		} catch (Exception failure) { return false;
 		} finally {
@@ -264,7 +275,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (closing.get() || flushingOutgoing) return false;
 			flushingOutgoing = true;
 			running.set(false);
-			firstResponse.countDown();
+			responseState.cancel();
 			current = poller;
 			if (current != null) current.interrupt();
 		}
@@ -303,7 +314,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (alreadyClosing) current = null;
 			else {
 				running.set(false);
-				firstResponse.countDown();
+				responseState.cancel();
 				current = poller;
 				if (current != null) current.interrupt();
 			}
@@ -381,6 +392,15 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		while (poller.isAlive()) try { poller.join(); }
 		catch (InterruptedException stopRequested) { interrupted = true; poller.interrupt(); }
 		if (interrupted) Thread.currentThread().interrupt();
+	}
+	private static final class ResponseState {
+		private final CountDownLatch complete = new CountDownLatch(1);
+		private final AtomicBoolean received = new AtomicBoolean();
+		void received() { received.set(true); complete.countDown(); }
+		void cancel() { complete.countDown(); }
+		boolean await(long timeoutNanos) throws InterruptedException {
+			return complete.await(timeoutNanos, TimeUnit.NANOSECONDS) && received.get();
+		}
 	}
 
 	private void pollLoop() {

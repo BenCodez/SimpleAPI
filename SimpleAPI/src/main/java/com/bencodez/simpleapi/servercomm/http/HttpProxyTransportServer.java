@@ -635,7 +635,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized boolean retireIfQuiescent(long now, long retentionNanos) throws IOException {
 			if (retired || activePoll || !outgoing.isEmpty() || !deliveredAtNanos.isEmpty() || !seen.isEmpty()
 					|| !processing.isEmpty() || !acknowledgements.isEmpty() || now - lastActivityNanos < retentionNanos
-					|| durableIncoming != null && !durableIncoming.snapshot().isEmpty()) return false;
+					|| durableIncoming != null && !durableIncoming.snapshot().isEmpty()
+					|| durableOutgoing != null && durableOutgoing.hasQuarantined(serverId)) return false;
 			if (durableIncoming != null) durableIncoming.sealAndDeleteIfEmpty();
 			retired = true;
 			return true;
@@ -912,6 +913,12 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			Map<String, Path> serverFiles = files.get(serverId);
 			Map<String, Path> quarantined = quarantinedFiles.get(serverId);
 			return (serverFiles == null || serverFiles.isEmpty()) && (quarantined == null || quarantined.isEmpty());
+		}
+
+		private synchronized boolean hasQuarantined(String serverId) throws IOException {
+			requireOwnership();
+			Map<String, Path> quarantined = quarantinedFiles.get(serverId);
+			return quarantined != null && !quarantined.isEmpty();
 		}
 
 		/** Deletes only a validated, observed-empty backend directory and makes its removal durable. */

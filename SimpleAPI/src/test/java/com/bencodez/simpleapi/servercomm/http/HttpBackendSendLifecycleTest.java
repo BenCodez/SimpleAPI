@@ -51,6 +51,29 @@ class HttpBackendSendLifecycleTest {
 		}
 	}
 
+	@Test
+	void restartedConnectorRequiresAResponseFromItsNewRun() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("restart-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("restart-authority"));
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0), identity,
+				authority, ignored -> { })) {
+			server.start();
+			HttpConnectionCode code = authority.createConnectionCode("lobby-1", server.endpoint("localhost"), Duration.ofMinutes(5));
+			Path clientDirectory = directory.resolve("restart-client");
+			HttpBackendTransportConnector.enroll(code, "lobby-1", clientDirectory);
+			try (HttpBackendTransportConnector connector = new HttpBackendTransportConnector(clientDirectory, ignored -> { })) {
+				connector.start();
+				assertTrue(connector.awaitFirstResponse(System.nanoTime() + TimeUnit.SECONDS.toNanos(8)));
+				assertTrue(connector.flushOutgoing(System.nanoTime() + TimeUnit.SECONDS.toNanos(5)));
+				server.close();
+
+				connector.start();
+				assertFalse(connector.awaitFirstResponse(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(250)),
+						"a completed flush must not satisfy the restarted run's first-response wait");
+			}
+		}
+	}
+
 	private static void assertPausedSendIsRejectedByClose(HttpBackendTransportConnector connector) throws Exception {
 		Object state = field("state").get(connector);
 		AtomicBoolean closing = (AtomicBoolean) field("closing").get(connector);
