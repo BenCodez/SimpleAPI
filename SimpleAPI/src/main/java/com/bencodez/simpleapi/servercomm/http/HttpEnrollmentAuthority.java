@@ -58,11 +58,14 @@ public final class HttpEnrollmentAuthority {
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
 		if (lifetime == null || lifetime.isNegative() || lifetime.isZero() || lifetime.compareTo(MAX_ENROLLMENT_LIFETIME) > 0)
 			throw new IllegalArgumentException("Enrollment lifetime must be between one second and fifteen minutes");
+		Instant expiresAt = clock.instant().plus(lifetime);
+		String token = HttpTransportSecrets.randomToken();
+		// Validate the complete code before reserving or persisting a pending slot.
+		HttpConnectionCode code = new HttpConnectionCode(serverId, endpoint, identity.serverCertificatePin(),
+				identity.caCertificatePin(), expiresAt, token);
 		expireEnrollments();
 		if (enrollments.size() >= MAX_PENDING_ENROLLMENTS)
 			throw new IllegalStateException("Too many pending HTTP enrollments");
-		Instant expiresAt = clock.instant().plus(lifetime);
-		String token = HttpTransportSecrets.randomToken();
 		byte[] tokenHash = HttpTransportSecrets.sha256(token.getBytes(StandardCharsets.US_ASCII));
 		String lookup = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(tokenHash);
 		enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, null));
@@ -71,7 +74,7 @@ public final class HttpEnrollmentAuthority {
 			enrollments.remove(lookup);
 			throw new IllegalStateException("Could not persist HTTP enrollment", failure);
 		}
-		return new HttpConnectionCode(serverId, endpoint, identity.serverCertificatePin(), identity.caCertificatePin(), expiresAt, token);
+		return code;
 	}
 
 	public synchronized HttpTlsIdentity.IssuedClientCertificate enroll(String serverId, String enrollmentToken) throws Exception {
