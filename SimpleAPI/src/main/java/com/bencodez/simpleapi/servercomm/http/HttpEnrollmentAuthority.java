@@ -36,6 +36,7 @@ public final class HttpEnrollmentAuthority {
 	private final Map<String, Instant> renewalNotBefore = new HashMap<>();
 	private boolean persistenceFailure;
 	private boolean revocationRetryRequired;
+	private String revocationRetryServerId;
 
 	/** Creates a restart-safe authority. State contains public certificate pins plus bounded hashes of pending tokens. */
 	public HttpEnrollmentAuthority(HttpTlsIdentity identity, Path stateDirectory) throws java.io.IOException {
@@ -180,6 +181,8 @@ public final class HttpEnrollmentAuthority {
 	public synchronized void revoke(String serverId) {
 		try { serverId = HttpTlsIdentity.canonicalServerId(serverId); }
 		catch (IllegalArgumentException invalid) { return; }
+		if (revocationRetryRequired && !serverId.equals(revocationRetryServerId))
+			throw new IllegalStateException("A different HTTP certificate revocation must be retried first");
 		final String revokedServer = serverId;
 		Map<String, Enrollment> removedEnrollments = new HashMap<>();
 		enrollments.entrySet().removeIf(entry -> {
@@ -193,6 +196,7 @@ public final class HttpEnrollmentAuthority {
 			persistState();
 			persistenceFailure = false;
 			revocationRetryRequired = false;
+			revocationRetryServerId = null;
 		}
 		catch (java.io.IOException failure) {
 			// Before publication, restore the exact disk-backed state so a retry still has work to persist.
@@ -203,6 +207,7 @@ public final class HttpEnrollmentAuthority {
 			}
 			persistenceFailure = true;
 			revocationRetryRequired = true;
+			revocationRetryServerId = serverId;
 			throw new IllegalStateException("Could not persist HTTP certificate revocation", failure);
 		}
 	}
