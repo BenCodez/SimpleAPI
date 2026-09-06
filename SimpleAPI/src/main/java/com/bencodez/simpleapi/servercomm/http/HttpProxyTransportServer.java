@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -80,7 +81,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	/** In-memory constructor for tests; production callers must supply a durable state directory. */
 	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
 			Consumer<ReceivedEnvelope> onEnvelope) throws Exception {
-		this(bind, identity, authority, null, onEnvelope, (serverId, deliveryId) -> { });
+		this(bind, identity, authority, null, onEnvelope, (serverId, deliveryId) -> { }, System::nanoTime);
 	}
 
 	public HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
@@ -91,7 +92,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	public HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
 			Path outgoingDirectory, Consumer<ReceivedEnvelope> onEnvelope,
 			DeliveryAcknowledgement onAcknowledged) throws Exception {
-		this(bind, identity, authority, outgoingDirectory, onEnvelope, onAcknowledged, System::nanoTime);
+		this(bind, identity, authority, Objects.requireNonNull(outgoingDirectory, "outgoingDirectory is required"),
+				onEnvelope, onAcknowledged, System::nanoTime);
 	}
 
 	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
@@ -485,6 +487,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			List<HttpTransportProtocol.Delivery> accepted = new java.util.ArrayList<>();
 			for (HttpTransportProtocol.Delivery delivery : received) {
 				HttpInboundDeliveryStore.State persisted = durableIncoming == null ? null : durableIncoming.state(delivery.id());
+				if (persisted == HttpInboundDeliveryStore.State.RUNNING) try {
+					if (durableIncoming.recoverKnownNotStartedRunning(delivery.id())) persisted = durableIncoming.state(delivery.id());
+				} catch (IOException rollbackUnconfirmed) { continue; }
 				if (persisted == HttpInboundDeliveryStore.State.COMPLETED) {
 					try { durableIncoming.confirmCompleted(delivery.id()); }
 					catch (IOException unconfirmed) { continue; }
@@ -672,6 +677,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized void persist(String serverId, HttpTransportProtocol.Delivery delivery) throws IOException {
 			Path directory = root.resolve(serverId).normalize();
 			if (!directory.getParent().equals(root)) throw new IOException("HTTP outgoing queue server is invalid");
+			if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS) && serverDirectoryCount() >= MAX_BACKENDS)
+				throw new IOException("HTTP outgoing queue exceeds its backend bound");
 			try { Files.createDirectory(directory); }
 			catch (java.nio.file.FileAlreadyExistsException existing) { }
 			if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
@@ -730,6 +737,24 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				}
 				serverFiles.put(delivery.id(), target);
 			} finally { Files.deleteIfExists(temporary); }
+		}
+
+		/** Counts durable backend directories, including quarantine-only queues omitted from load's deliverable map. */
+		private int serverDirectoryCount() throws IOException {
+			int count = 0;
+			try (DirectoryStream<Path> directories = Files.newDirectoryStream(root)) {
+				for (Path directory : directories) {
+					if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
+						throw new IOException("HTTP outgoing queue contains an invalid entry");
+					String serverId;
+					try { serverId = HttpTlsIdentity.canonicalServerId(directory.getFileName().toString()); }
+					catch (IllegalArgumentException invalid) { throw new IOException("HTTP outgoing queue server is invalid", invalid); }
+					if (!serverId.equals(directory.getFileName().toString()))
+						throw new IOException("HTTP outgoing queue server is not canonical");
+					if (++count > MAX_BACKENDS) throw new IOException("HTTP outgoing queue exceeds its backend bound");
+				}
+			}
+			return count;
 		}
 
 		private void quarantinePublished(Path directory, Path target, Path pending, Map<String, Path> serverFiles,

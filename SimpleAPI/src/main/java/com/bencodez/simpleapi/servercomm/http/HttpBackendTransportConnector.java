@@ -309,6 +309,9 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			List<HttpTransportProtocol.Delivery> accepted = new java.util.ArrayList<>();
 			for (HttpTransportProtocol.Delivery delivery : deliveries) {
 				HttpInboundDeliveryStore.State persisted = inboundDeliveries == null ? null : inboundDeliveries.state(delivery.id());
+				if (persisted == HttpInboundDeliveryStore.State.RUNNING) try {
+					if (inboundDeliveries.recoverKnownNotStartedRunning(delivery.id())) persisted = inboundDeliveries.state(delivery.id());
+				} catch (IOException rollbackUnconfirmed) { continue; }
 				if (persisted == HttpInboundDeliveryStore.State.COMPLETED) {
 					try { inboundDeliveries.confirmCompleted(delivery.id()); }
 					catch (IOException unconfirmed) { continue; }

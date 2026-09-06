@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,17 @@ import org.junit.jupiter.api.io.TempDir;
 
 class HttpTransportRuntimeTest {
 	@TempDir Path directory;
+
+	@Test
+	void publicConstructorsRequireDurableOutgoingDirectory() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("guard-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("guard-authority"));
+		InetSocketAddress bind = new InetSocketAddress("localhost", 0);
+		assertThrows(NullPointerException.class, () -> new HttpProxyTransportServer(bind, identity, authority,
+				null, ignored -> { }));
+		assertThrows(NullPointerException.class, () -> new HttpProxyTransportServer(bind, identity, authority,
+				null, ignored -> { }, (serverId, deliveryId) -> { }));
+	}
 
 	@Test
 	void endpointHelperSupportsIpv6Literals() throws Exception {
@@ -419,6 +431,110 @@ class HttpTransportRuntimeTest {
 		state.completeIncoming(deliveryId, true);
 		assertEquals(java.util.List.of(deliveryId), state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).acks());
 		assertEquals(1, callbacks.get());
+	}
+
+	@Test
+	void runningPublicationRollbackLeavesAReservationSafeAfterRestart() throws Exception {
+		Path root = directory.resolve("running-rollback-restart");
+		Files.createDirectory(root);
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		Path inboundDirectory = root.resolve("lobby-1");
+		Path running = inboundDirectory.resolve(deliveryId + ".running");
+		HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(root, "lobby-1");
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			java.util.concurrent.atomic.AtomicBoolean failed = new java.util.concurrent.atomic.AtomicBoolean();
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(inboundDirectory))
+					.thenAnswer(call -> {
+						if (Files.exists(running) && !failed.getAndSet(true))
+							throw new java.io.IOException("injected running fsync failure");
+						return call.callRealMethod();
+					});
+			store.reserve(deliveryId);
+			assertThrows(com.bencodez.simpleapi.file.DurableFiles.PublishedException.class,
+					() -> store.markRunning(deliveryId));
+			assertEquals(HttpInboundDeliveryStore.State.RESERVED, store.state(deliveryId));
+		}
+		store.seal();
+		assertEquals(HttpInboundDeliveryStore.State.RESERVED,
+				HttpInboundDeliveryStore.open(root, "lobby-1").state(deliveryId),
+				"a callback never exposed must be recoverable after a one-shot RUNNING force failure");
+	}
+
+	@Test
+	void proxyRetriesKnownNotStartedRunningRollbackBeforeDispatch() throws Exception {
+		Path root = directory.resolve("running-rollback-proxy");
+		Files.createDirectory(root);
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		Path inboundDirectory = root.resolve("lobby-1");
+		Path running = inboundDirectory.resolve(deliveryId + ".running");
+		AtomicInteger failures = new AtomicInteger(2), callbacks = new AtomicInteger();
+		java.util.concurrent.atomic.AtomicBoolean rollbackStarted = new java.util.concurrent.atomic.AtomicBoolean();
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId, JsonEnvelope.builder("vote").build());
+		HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(root, "lobby-1");
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+				"lobby-1", null, store, (server, id) -> { });
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(inboundDirectory))
+					.thenAnswer(call -> {
+						if (Files.exists(running)) rollbackStarted.set(true);
+						if (rollbackStarted.get() && failures.getAndDecrement() > 0)
+							throw new java.io.IOException("injected running or rollback fsync failure");
+						return call.callRealMethod();
+					});
+			assertEquals(java.util.List.of(delivery), state.acceptIncoming(java.util.List.of(delivery)));
+			assertThrows(com.bencodez.simpleapi.file.DurableFiles.PublishedException.class,
+					() -> state.beginIncoming(deliveryId));
+			state.completeIncoming(deliveryId, false);
+			assertEquals(java.util.List.of(delivery), state.acceptIncoming(java.util.List.of(delivery)),
+					"the in-process known-not-started RUNNING state must recover once its rollback force succeeds");
+			state.beginIncoming(deliveryId);
+			callbacks.incrementAndGet();
+			state.completeIncomingDurably(deliveryId);
+			state.completeIncoming(deliveryId, true);
+		}
+		assertEquals(1, callbacks.get(), "the callback becomes eligible exactly once after RUNNING is durable");
+	}
+
+	@Test
+	void backendRetriesKnownNotStartedRunningRollbackBeforeDispatch() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("running-backend-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", java.net.URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300), "D".repeat(43));
+		Path clientDirectory = directory.resolve("running-backend-client");
+		HttpClientCredentialStore.saveEnrolled(clientDirectory, code, issued);
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		Path inboundDirectory = clientDirectory.resolve("http-transport-inbound-deliveries");
+		Path running = inboundDirectory.resolve(deliveryId + ".running");
+		AtomicInteger failures = new AtomicInteger(2), callbacks = new AtomicInteger();
+		java.util.concurrent.atomic.AtomicBoolean rollbackStarted = new java.util.concurrent.atomic.AtomicBoolean();
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId, JsonEnvelope.builder("vote").build());
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS);
+				HttpBackendTransportConnector connector = new HttpBackendTransportConnector(clientDirectory,
+						ignored -> callbacks.incrementAndGet())) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(inboundDirectory))
+					.thenAnswer(call -> {
+						if (Files.exists(running)) rollbackStarted.set(true);
+						if (rollbackStarted.get() && failures.getAndDecrement() > 0)
+							throw new java.io.IOException("injected running or rollback fsync failure");
+						return call.callRealMethod();
+					});
+			var inboundField = HttpBackendTransportConnector.class.getDeclaredField("inboundDeliveries");
+			inboundField.setAccessible(true);
+			HttpInboundDeliveryStore store = (HttpInboundDeliveryStore) inboundField.get(connector);
+			store.reserve(deliveryId);
+			assertThrows(com.bencodez.simpleapi.file.DurableFiles.PublishedException.class,
+					() -> store.markRunning(deliveryId));
+			java.util.List<HttpTransportProtocol.Delivery> retried = connector.accept(java.util.List.of(delivery));
+			assertEquals(java.util.List.of(delivery), retried);
+			connector.dispatch(retried.get(0));
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+			while (callbacks.get() == 0 && System.nanoTime() < deadline) Thread.sleep(5);
+			assertEquals(1, callbacks.get());
+		}
 	}
 
 	@Test

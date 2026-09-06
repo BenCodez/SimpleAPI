@@ -26,6 +26,9 @@ final class HttpInboundDeliveryStore {
 	// A rename completed, but its directory entry still needs a successful fsync.
 	private final Set<String> unconfirmedReservations = new HashSet<>();
 	private final Set<String> unconfirmedCompletions = new HashSet<>();
+	// RUNNING was published before the callback, but restoring RESERVED was not yet confirmed.
+	// This is process-local evidence only: a RUNNING entry loaded after a restart remains ambiguous.
+	private final Set<String> pendingRunningRollbacks = new HashSet<>();
 	private boolean sealed;
 
 	HttpInboundDeliveryStore(Path credentialDirectory) throws IOException {
@@ -119,7 +122,12 @@ final class HttpInboundDeliveryStore {
 		} finally { Files.deleteIfExists(temporary); }
 	}
 
-	synchronized void markRunning(String id) throws IOException { transition(id, State.RESERVED, State.RUNNING); }
+	synchronized void markRunning(String id) throws IOException {
+		id = canonical(id);
+		if (entries.get(id) == State.RUNNING && pendingRunningRollbacks.contains(id))
+			recoverKnownNotStartedRunning(id);
+		transition(id, State.RESERVED, State.RUNNING);
+	}
 	synchronized void markCompleted(String id) throws IOException { transition(id, State.RUNNING, State.COMPLETED); }
 	synchronized void seal() { sealed = true; }
 	synchronized void sealAndDeleteIfEmpty() throws IOException {
@@ -144,6 +152,7 @@ final class HttpInboundDeliveryStore {
 		entries.remove(id);
 		unconfirmedReservations.remove(id);
 		unconfirmedCompletions.remove(id);
+		pendingRunningRollbacks.remove(id);
 	}
 
 	synchronized Map<String, State> snapshot() { return Map.copyOf(entries); }
@@ -165,11 +174,45 @@ final class HttpInboundDeliveryStore {
 		move(source, target);
 		try { DurableFiles.forceDirectory(root); }
 		catch (IOException postPublicationFailure) {
+			if (replacement == State.RUNNING) {
+				// The callback has not been exposed yet.  Restore the durable reservation
+				// when possible, so a later redelivery can safely try the transition again.
+				entries.put(id, State.RUNNING);
+				pendingRunningRollbacks.add(id);
+				try { recoverKnownNotStartedRunning(id); }
+				catch (IOException rollbackFailure) { postPublicationFailure.addSuppressed(rollbackFailure); }
+				throw new DurableFiles.PublishedException(postPublicationFailure);
+			}
 			entries.put(id, replacement);
 			if (replacement == State.COMPLETED) unconfirmedCompletions.add(id);
 			throw new DurableFiles.PublishedException(postPublicationFailure);
 		}
 		entries.put(id, replacement);
+	}
+
+	/**
+	 * Retries a rollback known to have happened before this process could enter the callback.
+	 * Entries loaded from disk are deliberately absent from this set: their callback is ambiguous.
+	 */
+	synchronized boolean recoverKnownNotStartedRunning(String id) throws IOException {
+		id = canonical(id);
+		if (!pendingRunningRollbacks.contains(id)) return false;
+		requireWritable();
+		if (entries.get(id) != State.RUNNING) throw new IOException("HTTP inbound delivery fence state is invalid");
+		requireRoot();
+		Path reserved = file(id, State.RESERVED), running = file(id, State.RUNNING);
+		boolean hasReserved = Files.exists(reserved, LinkOption.NOFOLLOW_LINKS);
+		boolean hasRunning = Files.exists(running, LinkOption.NOFOLLOW_LINKS);
+		if (hasReserved == hasRunning) throw new IOException("HTTP inbound delivery fence rollback is unsafe");
+		if (hasRunning) {
+			verifyStateFile(running, id);
+			move(running, reserved);
+			ownerOnlyFile(reserved);
+		} else verifyStateFile(reserved, id);
+		DurableFiles.forceDirectory(root);
+		entries.put(id, State.RESERVED);
+		pendingRunningRollbacks.remove(id);
+		return true;
 	}
 
 	/** Retries the directory fsync required before exposing a reservation to a callback. */
@@ -241,6 +284,11 @@ final class HttpInboundDeliveryStore {
 	}
 
 	private Path file(String id, State state) { return root.resolve(id + state.suffix); }
+	private void verifyStateFile(Path file, String id) throws IOException {
+		if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
+				|| Files.size(file) > 64L || !Files.readString(file, StandardCharsets.US_ASCII).equals(id))
+			throw new IOException("HTTP inbound delivery fence state is unsafe");
+	}
 	private void requireWritable() throws IOException {
 		if (sealed) throw new IOException("HTTP inbound delivery store ownership has ended");
 	}
