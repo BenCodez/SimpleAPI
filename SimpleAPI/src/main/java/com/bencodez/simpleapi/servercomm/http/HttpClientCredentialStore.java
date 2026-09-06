@@ -44,7 +44,7 @@ public final class HttpClientCredentialStore {
 		HttpClientProfile profile = new HttpClientProfile(HttpTlsIdentity.canonicalServerId(issued.serverId()), code.endpoint(),
 				code.serverCertificatePin(), code.caCertificatePin());
 		try {
-			StagedCredential staged = stage(directory, issued, profile, connectionCodeDigest(code), false);
+			StagedCredential staged = stage(directory, issued, profile, connectionCodeDigest(code), null);
 			activateReplacement(directory, staged);
 		} catch (IOException failure) { throw failure;
 		} catch (Exception failure) { throw new IOException("Could not persist HTTP client credential", failure); }
@@ -99,11 +99,13 @@ public final class HttpClientCredentialStore {
 	/** Writes and validates a replacement generation without touching the active credential. */
 	static StagedCredential stageReplacement(Path directory, HttpTlsIdentity.IssuedClientCertificate issued) throws Exception {
 		Path active = activeDirectory(directory);
-		return stage(directory, issued, loadProfileFile(active), readConnectionCodeDigest(active), true);
+		EnrolledClient enrolled = loadEnrolledDirectory(active);
+		return stage(directory, issued, enrolled.profile(), readConnectionCodeDigest(active),
+				enrolled.credential().caCertificate().getPublicKey());
 	}
 
 	private static StagedCredential stage(Path directory, HttpTlsIdentity.IssuedClientCertificate issued,
-			HttpClientProfile profile, String connectionCodeDigest, boolean allowCaRotation) throws Exception {
+			HttpClientProfile profile, String connectionCodeDigest, java.security.PublicKey trustedCaKey) throws Exception {
 		if (directory == null || issued == null) throw new IllegalArgumentException("Credential replacement is required");
 		Path credentialDirectory = credentialRoot(directory, true);
 		Path generations = credentialDirectory.resolve(GENERATIONS_DIRECTORY);
@@ -122,10 +124,15 @@ public final class HttpClientCredentialStore {
 		try {
 			save(generation, issued);
 			ClientCredential replacement = loadCredential(generation);
-			// Initial enrollment must retain the connection code's trust anchor. Only
-			// renewal over an already authenticated connection may introduce a new CA.
-			if (allowCaRotation) profile = new HttpClientProfile(profile.serverId(), profile.endpoint(),
-					profile.serverCertificatePin(), HttpTransportSecrets.certificatePin(replacement.caCertificate()));
+			// Initial enrollment retains the code's CA pin. Renewal may refresh the CA
+			// certificate, but must preserve the previously trusted CA public key.
+			if (trustedCaKey != null) {
+				if (!java.security.MessageDigest.isEqual(trustedCaKey.getEncoded(),
+						replacement.caCertificate().getPublicKey().getEncoded()))
+					throw new IOException("Renewed HTTP credential changes the trusted CA key");
+				profile = new HttpClientProfile(profile.serverId(), profile.endpoint(),
+						profile.serverCertificatePin(), HttpTransportSecrets.certificatePin(replacement.caCertificate()));
+			}
 			writeProfile(generation, profile);
 			if (connectionCodeDigest != null) writePrivate(safe(generation.resolve(CONNECTION_CODE_DIGEST_FILE)),
 					connectionCodeDigest.getBytes(StandardCharsets.US_ASCII));

@@ -57,25 +57,46 @@ class HttpEnrollmentPinTest {
 	}
 
 	@Test
-	void stageReplacementCanRotateCaAndActivatesValidatedCredential() throws Exception {
+	void stageReplacementRejectsForeignCaAndPreservesActiveEnrollment() throws Exception {
 		HttpTlsIdentity proxy = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpTlsIdentity foreign = HttpTlsIdentity.loadOrCreate(directory.resolve("foreign"), "localhost");
 		Path client = directory.resolve("client");
 		HttpConnectionCode code = code(proxy, "lobby-1");
-		HttpClientCredentialStore.saveEnrolled(client, code, proxy.issueClientCertificate("lobby-1"));
-		String originalCaPin = HttpClientCredentialStore.loadProfile(client).caCertificatePin();
+		HttpTlsIdentity.IssuedClientCertificate originalCredential = proxy.issueClientCertificate("lobby-1");
+		HttpClientCredentialStore.saveEnrolled(client, code, originalCredential);
+		HttpClientCredentialStore.EnrolledClient before = HttpClientCredentialStore.loadEnrolled(client);
+
+		assertThrows(java.io.IOException.class, () -> HttpClientCredentialStore.stageReplacement(
+				client, foreign.issueClientCertificate("lobby-1")));
+		HttpClientCredentialStore.EnrolledClient after = HttpClientCredentialStore.loadEnrolled(client);
+		assertEquals(before.profile(), after.profile());
+		assertArrayEquals(before.credential().certificate().getEncoded(), after.credential().certificate().getEncoded());
+	}
+
+	@Test
+	void stageReplacementAcceptsCaRenewalWithSameAuthorityKey() throws Exception {
+		Instant now = Instant.now();
+		java.time.Clock originalClock = java.time.Clock.fixed(
+				now.minus(Duration.ofDays(9 * 365L + 30L)), java.time.ZoneOffset.UTC);
+		Path proxyDirectory = directory.resolve("proxy");
+		HttpTlsIdentity original = HttpTlsIdentity.loadOrCreate(proxyDirectory, "localhost", originalClock);
+		HttpTlsIdentity.IssuedClientCertificate originalCredential = original.issueClientCertificate("lobby-1", now);
+		Path client = directory.resolve("client");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				HttpTransportSecrets.certificatePin(original.serverCertificate()),
+				HttpTransportSecrets.certificatePin(original.caCertificate()), now.plusSeconds(60), "A".repeat(43));
+		HttpClientCredentialStore.saveEnrolled(client, code, originalCredential);
+
+		HttpTlsIdentity renewed = HttpTlsIdentity.loadOrCreate(proxyDirectory, "localhost",
+				java.time.Clock.fixed(now, java.time.ZoneOffset.UTC));
+		assertNotEquals(original.caCertificatePin(), renewed.caCertificatePin());
+		assertEquals(original.caCertificate().getPublicKey(), renewed.caCertificate().getPublicKey());
 
 		HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(
-				client, foreign.issueClientCertificate("lobby-1"));
-		String replacementCaPin = foreign.caCertificatePin();
-		assertNotEquals(originalCaPin, replacementCaPin);
-		assertEquals(replacementCaPin, staged.profile().caCertificatePin());
-		assertEquals(replacementCaPin, HttpTransportSecrets.certificatePin(staged.credential().caCertificate()));
-
+				client, renewed.issueClientCertificate("lobby-1", now));
+		assertEquals(renewed.caCertificatePin(), staged.profile().caCertificatePin());
 		HttpClientCredentialStore.activateReplacement(client, staged);
-		HttpClientCredentialStore.EnrolledClient active = HttpClientCredentialStore.loadEnrolled(client);
-		assertEquals(replacementCaPin, active.profile().caCertificatePin());
-		assertEquals(replacementCaPin, HttpTransportSecrets.certificatePin(active.credential().caCertificate()));
+		assertEquals(renewed.caCertificatePin(), HttpClientCredentialStore.loadProfile(client).caCertificatePin());
 	}
 
 	@Test
