@@ -1,10 +1,15 @@
 package com.bencodez.simpleapi.servercomm.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.Duration;
+import java.time.ZoneOffset;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,6 +43,24 @@ class HttpTlsIdentityOwnershipTest {
 			workers.shutdownNow();
 			workers.awaitTermination(2, TimeUnit.SECONDS);
 		}
+	}
+
+	@Test
+	void staleInstanceAdoptsAnotherInstancesRenewedServerCertificate() throws Exception {
+		Instant now = Instant.now();
+		Path identityDirectory = directory.resolve("stale-renewal");
+		Clock creationClock = Clock.fixed(now.minus(Duration.ofDays(340)), ZoneOffset.UTC);
+		HttpTlsIdentity first = HttpTlsIdentity.loadOrCreate(identityDirectory, "localhost", creationClock);
+		HttpTlsIdentity second = HttpTlsIdentity.loadOrCreate(identityDirectory, "localhost", creationClock);
+		String originalPin = HttpTransportSecrets.certificatePin(first.serverCertificate());
+
+		String renewedByFirst = first.serverCertificatePin();
+		assertNotEquals(originalPin, renewedByFirst);
+		String adoptedBySecond = second.serverCertificatePin();
+		assertEquals(renewedByFirst, adoptedBySecond,
+				"a stale instance must reload the persisted renewal instead of generating another server key");
+		HttpTlsIdentity reloaded = HttpTlsIdentity.loadOrCreate(identityDirectory, "localhost");
+		assertEquals(renewedByFirst, reloaded.serverCertificatePin());
 	}
 
 	private static HttpTlsIdentity openTogether(Path directory, CountDownLatch ready, CountDownLatch start) throws Exception {

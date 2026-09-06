@@ -240,6 +240,26 @@ public final class HttpTlsIdentity {
 		if (!renewCa && !needsRenewal(serverCertificate, clock)) return;
 		synchronized (IDENTITY_LOCK_MONITOR) {
 		try (IdentityLock ignored = claimIdentityLock(caFile.getParent())) {
+		// Another process or long-lived instance may have renewed while this object
+		// waited for the identity lock. Adopt the durable state before deciding whether
+		// another renewal is still necessary.
+		KeyStore persistedCaStore = load(caFile, password);
+		KeyStore persistedServerStore = load(serverFile, password);
+		PrivateKey persistedCaKey = (PrivateKey) persistedCaStore.getKey("ca", password);
+		X509Certificate persistedCa = (X509Certificate) persistedCaStore.getCertificate("ca");
+		PrivateKey persistedServerKey = (PrivateKey) persistedServerStore.getKey("server", password);
+		X509Certificate persistedServer = (X509Certificate) persistedServerStore.getCertificate("server");
+		if (persistedCaKey == null || persistedCa == null || persistedServerKey == null || persistedServer == null
+				|| !java.security.MessageDigest.isEqual(caKey.getEncoded(), persistedCaKey.getEncoded()))
+			throw new IOException("HTTP TLS identity files are invalid");
+		persistedServer.verify(persistedCa.getPublicKey());
+		if (!hasServerName(persistedServer, advertisedHost))
+			throw new IOException("HTTP TLS server identity does not match its advertised host");
+		caCertificate = persistedCa;
+		serverKey = persistedServerKey;
+		serverCertificate = persistedServer;
+		renewCa = needsCaRenewal(caCertificate, clock);
+		if (!renewCa && !needsRenewal(serverCertificate, clock)) return;
 		ensureBouncyCastle();
 		X509Certificate replacementCa = caCertificate;
 		if (renewCa) {

@@ -121,6 +121,8 @@ class HttpEnrollmentPinTest {
 		Path proxyDirectory = directory.resolve("proxy");
 		HttpTlsIdentity original = HttpTlsIdentity.loadOrCreate(proxyDirectory, "localhost", originalClock);
 		HttpTlsIdentity.IssuedClientCertificate originalCredential = original.issueClientCertificate("lobby-1", now);
+		String originalCaPin = HttpTransportSecrets.certificatePin(original.caCertificate());
+		java.security.PublicKey originalCaKey = original.caCertificate().getPublicKey();
 		Path client = directory.resolve("client");
 		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
 				HttpTransportSecrets.certificatePin(original.serverCertificate()),
@@ -129,8 +131,8 @@ class HttpEnrollmentPinTest {
 
 		HttpTlsIdentity renewed = HttpTlsIdentity.loadOrCreate(proxyDirectory, "localhost",
 				java.time.Clock.fixed(now, java.time.ZoneOffset.UTC));
-		assertNotEquals(original.caCertificatePin(), renewed.caCertificatePin());
-		assertEquals(original.caCertificate().getPublicKey(), renewed.caCertificate().getPublicKey());
+		assertNotEquals(originalCaPin, renewed.caCertificatePin());
+		assertEquals(originalCaKey, renewed.caCertificate().getPublicKey());
 
 		HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(
 				client, renewed.issueClientCertificate("lobby-1", now));
