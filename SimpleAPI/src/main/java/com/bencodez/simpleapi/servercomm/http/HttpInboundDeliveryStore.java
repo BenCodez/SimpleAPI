@@ -1,6 +1,7 @@
 package com.bencodez.simpleapi.servercomm.http;
 
 import com.bencodez.simpleapi.file.DurableFiles;
+import com.bencodez.simpleapi.file.PrivateFilePermissions;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
@@ -9,8 +10,6 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermission;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -45,13 +44,13 @@ final class HttpInboundDeliveryStore {
 			throw new IOException("HTTP credential directory is unsafe");
 		if (directoryName == null || !directoryName.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
 			throw new IOException("HTTP inbound delivery directory name is invalid");
-		ownerOnlyDirectory(credentials);
+		PrivateFilePermissions.ownerOnlyDirectory(credentials);
 		root = credentials.resolve(directoryName).normalize();
 		if (!root.getParent().equals(credentials)) throw new IOException("HTTP inbound delivery directory is invalid");
 		try { Files.createDirectory(root); }
 		catch (java.nio.file.FileAlreadyExistsException existing) { }
 		requireRoot();
-		ownerOnlyDirectory(root);
+		PrivateFilePermissions.ownerOnlyDirectory(root);
 		// Retry a parent fsync that may have failed after creating this root.
 		DurableFiles.forceDirectory(credentials);
 		load();
@@ -75,12 +74,12 @@ final class HttpInboundDeliveryStore {
 			throw new IOException("HTTP inbound delivery fence is inconsistent");
 		Path temporary = Files.createTempFile(root, ".pending-", ".tmp");
 		try {
-			ownerOnlyFile(temporary);
+			PrivateFilePermissions.ownerOnlyFile(temporary);
 			Files.writeString(temporary, id, StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
 			DurableFiles.forceFile(temporary);
 			move(temporary, target);
 			try {
-				ownerOnlyFile(target);
+				PrivateFilePermissions.ownerOnlyFile(target);
 				DurableFiles.forceDirectory(root);
 			} catch (IOException postPublicationFailure) {
 				entries.put(id, State.RESERVED);
@@ -105,12 +104,12 @@ final class HttpInboundDeliveryStore {
 		Path target = file(id, State.COMPLETED);
 		Path temporary = Files.createTempFile(root, ".pending-", ".tmp");
 		try {
-			ownerOnlyFile(temporary);
+			PrivateFilePermissions.ownerOnlyFile(temporary);
 			Files.writeString(temporary, id, StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
 			DurableFiles.forceFile(temporary);
 			move(temporary, target);
 			try {
-				ownerOnlyFile(target);
+				PrivateFilePermissions.ownerOnlyFile(target);
 				DurableFiles.forceDirectory(root);
 			}
 			catch (IOException postPublicationFailure) {
@@ -207,7 +206,7 @@ final class HttpInboundDeliveryStore {
 		if (hasRunning) {
 			verifyStateFile(running, id);
 			move(running, reserved);
-			ownerOnlyFile(reserved);
+			PrivateFilePermissions.ownerOnlyFile(reserved);
 		} else verifyStateFile(reserved, id);
 		DurableFiles.forceDirectory(root);
 		entries.put(id, State.RESERVED);
@@ -258,6 +257,7 @@ final class HttpInboundDeliveryStore {
 				if (state == null || Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
 						|| Files.size(file) > 64L)
 					throw new IOException("HTTP inbound delivery fence contains an invalid entry");
+				PrivateFilePermissions.ownerOnlyFile(file);
 				String id;
 				try { id = canonical(name.substring(0, name.length() - state.suffix.length())); }
 				catch (IllegalArgumentException invalid) {
@@ -306,16 +306,6 @@ final class HttpInboundDeliveryStore {
 		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP inbound delivery directory is unsafe");
 	}
-	private static void ownerOnlyFile(Path path) throws IOException {
-		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)); }
-		catch (UnsupportedOperationException ignored) { }
-	}
-	private static void ownerOnlyDirectory(Path path) throws IOException {
-		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ,
-				PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE)); }
-		catch (UnsupportedOperationException ignored) { }
-	}
-
 	enum State {
 		RESERVED(".reserved"), RUNNING(".running"), COMPLETED(".completed");
 		private final String suffix;

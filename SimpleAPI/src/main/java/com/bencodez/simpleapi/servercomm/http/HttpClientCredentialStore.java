@@ -7,15 +7,14 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermission;
 import java.net.URI;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
-import java.util.EnumSet;
 import java.util.Properties;
 import com.bencodez.simpleapi.file.DurableFiles;
+import com.bencodez.simpleapi.file.PrivateFilePermissions;
 
 /** Owner-only persistence for the client certificate bundle returned by enrollment. */
 public final class HttpClientCredentialStore {
@@ -72,6 +71,8 @@ public final class HttpClientCredentialStore {
 		Path passwordFile = safe(directory.resolve(PASSWORD_FILE));
 		if (!Files.isRegularFile(bundle, LinkOption.NOFOLLOW_LINKS) || !Files.isRegularFile(passwordFile, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP client certificate has not been enrolled");
+		PrivateFilePermissions.ownerOnlyFile(bundle);
+		PrivateFilePermissions.ownerOnlyFile(passwordFile);
 		long passwordSize = Files.size(passwordFile);
 		if (passwordSize < 40L || passwordSize > 128L) throw new IOException("HTTP client password is invalid");
 		byte[] passwordBytes;
@@ -110,14 +111,14 @@ public final class HttpClientCredentialStore {
 		Files.createDirectories(generations);
 		if (Files.isSymbolicLink(generations) || !Files.isDirectory(generations, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP credential generation directory is unsafe");
-		setOwnerOnlyDirectory(generations);
+		PrivateFilePermissions.ownerOnlyDirectory(generations);
 		// Retry publication durability if an earlier staging attempt left this
 		// directory behind after its parent fsync failed.
 		DurableFiles.forceDirectory(credentialDirectory);
 		String name = java.util.UUID.randomUUID().toString();
 		Path generation = generations.resolve(name);
 		Files.createDirectory(generation);
-		setOwnerOnlyDirectory(generation);
+		PrivateFilePermissions.ownerOnlyDirectory(generation);
 		try {
 			save(generation, issued);
 			ClientCredential replacement = loadCredential(generation);
@@ -329,6 +330,7 @@ public final class HttpClientCredentialStore {
 		Path generation = generations.resolve(name).normalize();
 		if (!generation.getParent().equals(generations) || Files.isSymbolicLink(generation) || !Files.isDirectory(generation, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP client credential generation is invalid");
+		PrivateFilePermissions.ownerOnlyDirectory(generation);
 		return generation;
 	}
 
@@ -349,8 +351,8 @@ public final class HttpClientCredentialStore {
 		if (create) Files.createDirectories(root);
 		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP credential directory is unsafe");
+		PrivateFilePermissions.ownerOnlyDirectory(root);
 		if (create) {
-			setOwnerOnlyDirectory(root);
 			// Existing can mean create succeeded but publishing it durably did not.
 			DurableFiles.forceDirectory(root.getParent());
 		}
@@ -378,29 +380,18 @@ public final class HttpClientCredentialStore {
 	private static void writePrivate(Path file, byte[] contents) throws IOException {
 		Path temporary = Files.createTempFile(file.getParent(), file.getFileName().toString(), ".tmp");
 		try {
-			setOwnerOnly(temporary);
+			PrivateFilePermissions.ownerOnlyFile(temporary);
 			Files.write(temporary, contents, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
 			DurableFiles.forceFile(temporary);
 			try { Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
 			catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING); }
 			try {
-				setOwnerOnly(file);
+				PrivateFilePermissions.ownerOnlyFile(file);
 				DurableFiles.forceDirectory(file.getParent());
 			} catch (IOException postPublicationFailure) {
 				throw new DurableFiles.PublishedException(postPublicationFailure);
 			}
 		} finally { Files.deleteIfExists(temporary); }
-	}
-
-	private static void setOwnerOnly(Path path) throws IOException {
-		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)); }
-		catch (UnsupportedOperationException ignored) { }
-	}
-
-	private static void setOwnerOnlyDirectory(Path path) throws IOException {
-		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ,
-				PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE)); }
-		catch (UnsupportedOperationException ignored) { }
 	}
 
 	private static byte[] asciiBytes(char[] characters) {

@@ -7,7 +7,6 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermission;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -15,8 +14,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Base64;
-import java.util.EnumSet;
 import com.bencodez.simpleapi.file.DurableFiles;
+import com.bencodez.simpleapi.file.PrivateFilePermissions;
 
 /**
  * Single-activation enrollment tokens and client-certificate binding. A token may retry certificate
@@ -195,6 +194,7 @@ public final class HttpEnrollmentAuthority {
 		if (stateFile == null || !Files.exists(stateFile, LinkOption.NOFOLLOW_LINKS)) return;
 		if (!Files.isRegularFile(stateFile, LinkOption.NOFOLLOW_LINKS) || Files.size(stateFile) > MAX_STATE_BYTES)
 			throw new java.io.IOException("HTTP enrollment state is invalid");
+		PrivateFilePermissions.ownerOnlyFile(stateFile);
 		Properties properties = new Properties();
 		try (var input = Files.newInputStream(stateFile, LinkOption.NOFOLLOW_LINKS)) { properties.load(input); }
 		String version = properties.getProperty("version");
@@ -271,13 +271,13 @@ public final class HttpEnrollmentAuthority {
 		if (bytes.size() > MAX_STATE_BYTES) throw new java.io.IOException("HTTP enrollment state exceeds its byte bound");
 		Path temporary = Files.createTempFile(stateFile.getParent(), stateFile.getFileName().toString(), ".tmp");
 		try {
-			setOwnerOnly(temporary);
+			PrivateFilePermissions.ownerOnlyFile(temporary);
 			Files.write(temporary, bytes.toByteArray(), StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
 			DurableFiles.forceFile(temporary);
 			try { Files.move(temporary, stateFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
 			catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, stateFile, StandardCopyOption.REPLACE_EXISTING); }
 			try {
-				setOwnerOnly(stateFile);
+				PrivateFilePermissions.ownerOnlyFile(stateFile);
 				DurableFiles.forceDirectory(stateFile.getParent());
 			} catch (java.io.IOException postPublicationFailure) {
 				throw new DurableFiles.PublishedException(postPublicationFailure);
@@ -291,23 +291,12 @@ public final class HttpEnrollmentAuthority {
 		Files.createDirectories(stateDirectory);
 		if (Files.isSymbolicLink(stateDirectory) || !Files.isDirectory(stateDirectory, LinkOption.NOFOLLOW_LINKS))
 			throw new java.io.IOException("HTTP enrollment state directory is unsafe");
-		setOwnerOnlyDirectory(stateDirectory);
+		PrivateFilePermissions.ownerOnlyDirectory(stateDirectory);
 		// Existing can mean a previous create succeeded but its parent fsync did not.
 		DurableFiles.forceDirectory(stateDirectory.getParent());
 		Path file = stateDirectory.resolve("http-transport-clients.properties");
 		if (Files.isSymbolicLink(file)) throw new java.io.IOException("Refusing unsafe HTTP enrollment state path");
 		return file;
-	}
-
-	private static void setOwnerOnly(Path path) throws java.io.IOException {
-		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)); }
-		catch (UnsupportedOperationException ignored) { }
-	}
-
-	private static void setOwnerOnlyDirectory(Path path) throws java.io.IOException {
-		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ,
-				PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE)); }
-		catch (UnsupportedOperationException ignored) { }
 	}
 
 	private void expireEnrollments() {

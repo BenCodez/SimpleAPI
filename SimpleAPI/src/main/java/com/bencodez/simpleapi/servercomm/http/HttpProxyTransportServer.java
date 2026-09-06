@@ -2,6 +2,7 @@ package com.bencodez.simpleapi.servercomm.http;
 
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 import com.bencodez.simpleapi.file.DurableFiles;
+import com.bencodez.simpleapi.file.PrivateFilePermissions;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpsConfigurator;
 import com.sun.net.httpserver.HttpsExchange;
@@ -318,7 +319,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		catch (java.nio.file.FileAlreadyExistsException existing) { }
 		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP incoming queue directory is invalid");
-		DurableOutgoingQueue.ownerOnlyDirectory(root);
+		PrivateFilePermissions.ownerOnlyDirectory(root);
 		// Retry publication durability even when an earlier attempt created the
 		// directory but failed before its parent could be forced.
 		DurableFiles.forceDirectory(parent);
@@ -605,7 +606,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			catch (java.nio.file.FileAlreadyExistsException existing) { }
 			if (Files.isSymbolicLink(this.root) || !Files.isDirectory(this.root, LinkOption.NOFOLLOW_LINKS))
 				throw new IOException("HTTP outgoing queue directory is invalid");
-			ownerOnlyDirectory(this.root);
+			PrivateFilePermissions.ownerOnlyDirectory(this.root);
 			// A failed parent fsync can leave the directory present but not durable.
 			// Reopening must retry it before the queue can accept work.
 			directoryForcer.force(this.root.getParent());
@@ -619,6 +620,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					if (++serverDirectories > MAX_BACKENDS) throw new IOException("HTTP outgoing queue exceeds its backend bound");
 					if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
 						throw new IOException("HTTP outgoing queue contains an invalid entry");
+					PrivateFilePermissions.ownerOnlyDirectory(directory);
 					String serverId;
 					try { serverId = HttpTlsIdentity.canonicalServerId(directory.getFileName().toString()); }
 					catch (IllegalArgumentException invalid) { throw new IOException("HTTP outgoing queue server is invalid", invalid); }
@@ -644,6 +646,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 							if (Files.isSymbolicLink(message) || !Files.isRegularFile(message, LinkOption.NOFOLLOW_LINKS)
 									|| Files.size(message) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L)
 								throw new IOException("HTTP outgoing queue quarantine is invalid");
+							PrivateFilePermissions.ownerOnlyFile(message);
 							HttpTransportProtocol.Delivery delivery;
 							try { delivery = HttpTransportProtocol.parseStoredDelivery(Files.readAllBytes(message)); }
 							catch (IllegalArgumentException invalid) { throw new IOException("HTTP outgoing queue quarantine is invalid", invalid); }
@@ -657,6 +660,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 						if (Files.isSymbolicLink(message) || !Files.isRegularFile(message, LinkOption.NOFOLLOW_LINKS)
 								|| !name.matches(FILE_PATTERN) || Files.size(message) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L)
 							throw new IOException("HTTP outgoing queue message is invalid");
+						PrivateFilePermissions.ownerOnlyFile(message);
 						HttpTransportProtocol.Delivery delivery;
 						try { delivery = HttpTransportProtocol.parseStoredDelivery(Files.readAllBytes(message)); }
 						catch (IllegalArgumentException invalid) { throw new IOException("HTTP outgoing queue message is invalid", invalid); }
@@ -683,7 +687,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			catch (java.nio.file.FileAlreadyExistsException existing) { }
 			if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
 				throw new IOException("HTTP outgoing queue server directory is invalid");
-			ownerOnlyDirectory(directory);
+			PrivateFilePermissions.ownerOnlyDirectory(directory);
 			// The child fsync below cannot make this published name durable in its
 			// parent. Repeat it so a prior failed attempt is recoverable.
 			directoryForcer.force(root);
@@ -695,7 +699,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 						|| Files.size(existing) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L
 						|| !Arrays.equals(Files.readAllBytes(existing), HttpTransportProtocol.storedDelivery(delivery)))
 					throw new IOException("HTTP outgoing queue delivery id conflicts with persisted data");
-				ownerOnlyFile(existing);
+				PrivateFilePermissions.ownerOnlyFile(existing);
 				directoryForcer.force(directory);
 				return;
 			}
@@ -710,7 +714,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				Path target = directory.resolve(name);
 				try { Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE); }
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(pending, target); }
-				try { ownerOnlyFile(target); directoryForcer.force(directory); }
+				try { PrivateFilePermissions.ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
 					quarantinePublished(directory, target, pending, serverFiles, quarantined, delivery.id(), postPublicationFailure);
 				}
@@ -725,12 +729,12 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			Path target = directory.resolve(name);
 			Path temporary = Files.createTempFile(directory, ".pending-", ".tmp");
 			try {
-				ownerOnlyFile(temporary);
+				PrivateFilePermissions.ownerOnlyFile(temporary);
 				Files.write(temporary, HttpTransportProtocol.storedDelivery(delivery), StandardOpenOption.TRUNCATE_EXISTING);
 				DurableFiles.forceFile(temporary);
 				try { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE); }
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, target); }
-				try { ownerOnlyFile(target); directoryForcer.force(directory); }
+				try { PrivateFilePermissions.ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
 					pending = directory.resolve(".pending-" + delivery.id() + ".json");
 					quarantinePublished(directory, target, pending, serverFiles, quarantined, delivery.id(), postPublicationFailure);
@@ -765,7 +769,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				// Record the observed rename before metadata writeback. If the force is
 				// indeterminate, a same-process retry must still find this quarantine.
 				quarantined.put(id, pending);
-				ownerOnlyFile(pending);
+				PrivateFilePermissions.ownerOnlyFile(pending);
 				directoryForcer.force(directory);
 			} catch (IOException quarantineFailure) {
 				// A failed quarantine rename leaves the original published name in place on
@@ -789,7 +793,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			Path file = serverFiles == null ? null : serverFiles.get(id);
 			if (file == null || Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
 				throw new IOException("HTTP outgoing queue delivery is unavailable");
-			ownerOnlyFile(file);
+			PrivateFilePermissions.ownerOnlyFile(file);
 			directoryForcer.force(file.getParent());
 		}
 
@@ -818,18 +822,5 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			}
 		}
 
-		private static void ownerOnlyFile(Path path) throws IOException {
-			try { Files.setPosixFilePermissions(path, java.util.EnumSet.of(
-					java.nio.file.attribute.PosixFilePermission.OWNER_READ,
-					java.nio.file.attribute.PosixFilePermission.OWNER_WRITE)); }
-			catch (UnsupportedOperationException ignored) { }
-		}
-		private static void ownerOnlyDirectory(Path path) throws IOException {
-			try { Files.setPosixFilePermissions(path, java.util.EnumSet.of(
-					java.nio.file.attribute.PosixFilePermission.OWNER_READ,
-					java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
-					java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE)); }
-			catch (UnsupportedOperationException ignored) { }
-		}
 	}
 }

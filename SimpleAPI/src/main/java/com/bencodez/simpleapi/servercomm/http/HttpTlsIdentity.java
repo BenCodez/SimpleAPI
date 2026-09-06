@@ -8,7 +8,6 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermission;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
@@ -21,7 +20,6 @@ import java.time.Instant;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Date;
-import java.util.EnumSet;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -48,6 +46,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import com.bencodez.simpleapi.file.DurableFiles;
+import com.bencodez.simpleapi.file.PrivateFilePermissions;
 
 /** Durable private CA plus server identity used by the proxy HTTP listener. */
 public final class HttpTlsIdentity {
@@ -95,6 +94,7 @@ public final class HttpTlsIdentity {
 		Files.createDirectories(identityDirectory);
 		if (Files.isSymbolicLink(identityDirectory) || !Files.isDirectory(identityDirectory, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP TLS identity directory is unsafe");
+		PrivateFilePermissions.ownerOnlyDirectory(identityDirectory);
 		// The identity files cannot make the newly created directory entry durable.
 		// Persist its parent before the TLS identity is returned for listener use.
 		DurableFiles.forceDirectory(identityDirectory.getParent());
@@ -123,6 +123,9 @@ public final class HttpTlsIdentity {
 		}
 		if (caExists || serverExists || passwordExists) {
 			if (!completeIdentity) throw new IOException("HTTP TLS identity files are incomplete");
+			PrivateFilePermissions.ownerOnlyFile(caFile);
+			PrivateFilePermissions.ownerOnlyFile(serverFile);
+			PrivateFilePermissions.ownerOnlyFile(passwordFile);
 			char[] password = readPassword(passwordFile);
 			try {
 				KeyStore ca = load(caFile, password);
@@ -416,12 +419,12 @@ public final class HttpTlsIdentity {
 	private static void writePrivate(Path file, byte[] contents) throws IOException {
 		Path temporary = Files.createTempFile(file.getParent(), file.getFileName().toString(), ".tmp");
 		try {
-			setOwnerOnly(temporary);
+			PrivateFilePermissions.ownerOnlyFile(temporary);
 			Files.write(temporary, contents, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
 			DurableFiles.forceFile(temporary);
 			try { Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
 			catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING); }
-			setOwnerOnly(file);
+			PrivateFilePermissions.ownerOnlyFile(file);
 			DurableFiles.forceDirectory(file.getParent());
 		} finally { Files.deleteIfExists(temporary); }
 	}
@@ -445,11 +448,6 @@ public final class HttpTlsIdentity {
 		byte[] output = new byte[characters.length];
 		for (int index = 0; index < characters.length; index++) output[index] = (byte) characters[index];
 		return output;
-	}
-
-	private static void setOwnerOnly(Path path) throws IOException {
-		try { Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)); }
-		catch (UnsupportedOperationException ignored) { /* Windows ACLs are inherited; never make the file world-readable. */ }
 	}
 
 	private final class RotatingServerKeyManager extends X509ExtendedKeyManager {
