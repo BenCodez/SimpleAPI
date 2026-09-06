@@ -56,7 +56,7 @@ public final class HttpEnrollmentAuthority {
 		if (revocationRetryRequired)
 			throw new IllegalStateException("HTTP certificate revocation durability must be retried");
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
-		if (lifetime == null || lifetime.isNegative() || lifetime.isZero() || lifetime.compareTo(MAX_ENROLLMENT_LIFETIME) > 0)
+		if (lifetime == null || lifetime.compareTo(Duration.ofSeconds(1)) < 0 || lifetime.compareTo(MAX_ENROLLMENT_LIFETIME) > 0)
 			throw new IllegalArgumentException("Enrollment lifetime must be between one second and fifteen minutes");
 		Instant expiresAt = clock.instant().plus(lifetime);
 		String token = HttpTransportSecrets.randomToken();

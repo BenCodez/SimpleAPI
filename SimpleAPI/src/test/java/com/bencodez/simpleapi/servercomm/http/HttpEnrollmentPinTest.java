@@ -17,6 +17,22 @@ class HttpEnrollmentPinTest {
 	@TempDir Path directory;
 
 	@Test
+	void enrollmentLifetimeRequiresAtLeastOneSecond() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
+		java.time.Clock clock = java.time.Clock.fixed(Instant.parse("2026-09-05T12:00:00.999Z"),
+				java.time.ZoneOffset.UTC);
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, clock);
+		URI endpoint = URI.create("https://localhost:8443/");
+		for (Duration lifetime : new Duration[] { Duration.ofNanos(1), Duration.ofMillis(999),
+				Duration.ofSeconds(1).minusNanos(1), Duration.ZERO, Duration.ofSeconds(-1) }) {
+			assertThrows(IllegalArgumentException.class,
+					() -> authority.createConnectionCode("lobby-1", endpoint, lifetime));
+		}
+		HttpConnectionCode minimum = authority.createConnectionCode("lobby-1", endpoint, Duration.ofSeconds(1));
+		org.junit.jupiter.api.Assertions.assertTrue(HttpConnectionCode.parse(minimum.encode()).expiresAt().isAfter(clock.instant()));
+	}
+
+	@Test
 	void rejectsDifferentCaBundleDuringInitialEnrollment() throws Exception {
 		HttpTlsIdentity proxy = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpTlsIdentity foreign = HttpTlsIdentity.loadOrCreate(directory.resolve("foreign"), "localhost");
