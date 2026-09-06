@@ -173,6 +173,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (certificate == null || !authority.authenticate(serverId, certificate)) { reply(exchange, 401, new byte[0]); return; }
 			HttpTlsIdentity.IssuedClientCertificate issued = authority.renew(serverId, certificate);
 			reply(exchange, 201, HttpTransportProtocol.enrollmentResponse(issued));
+		} catch (HttpEnrollmentAuthority.RenewalRateLimitException limited) {
+			exchange.getResponseHeaders().set("Retry-After", "60");
+			reply(exchange, 429, new byte[0]);
 		} catch (IllegalArgumentException rejected) { reply(exchange, 403, new byte[0]);
 		} catch (Exception failure) { reply(exchange, 503, new byte[0]);
 		} finally { admission.release(); }

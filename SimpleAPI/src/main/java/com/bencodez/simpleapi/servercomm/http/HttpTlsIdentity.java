@@ -3,6 +3,9 @@ package com.bencodez.simpleapi.servercomm.http;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigInteger;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -54,9 +57,11 @@ public final class HttpTlsIdentity {
 	private static final String SERVER_FILE = "http-transport-server.p12";
 	private static final String PASSWORD_FILE = "http-transport-password";
 	private static final String INITIALIZING_FILE = "http-transport-initializing";
+	private static final String OWNERSHIP_LOCK_FILE = ".http-transport-identity.lock";
 	private static final String ENROLLMENT_STATE_FILE = "http-transport-clients.properties";
 	private static final String OUTGOING_DIRECTORY = "outgoing-v1";
 	private static final char[] EMPTY_PASSWORD = new char[0];
+	private static final Object IDENTITY_LOCK_MONITOR = new Object();
 	static final Duration RENEW_BEFORE = Duration.ofDays(30);
 	static final Duration CA_RENEW_BEFORE = Duration.ofDays(365);
 	private final PrivateKey caKey;
@@ -98,6 +103,8 @@ public final class HttpTlsIdentity {
 		// The identity files cannot make the newly created directory entry durable.
 		// Persist its parent before the TLS identity is returned for listener use.
 		DurableFiles.forceDirectory(identityDirectory.getParent());
+		synchronized (IDENTITY_LOCK_MONITOR) {
+		try (IdentityLock ignored = claimIdentityLock(identityDirectory)) {
 		directory = identityDirectory;
 		Path caFile = safe(directory.resolve(CA_FILE));
 		Path serverFile = safe(directory.resolve(SERVER_FILE));
@@ -189,6 +196,8 @@ public final class HttpTlsIdentity {
 			return new HttpTlsIdentity(caPair.getPrivate(), caCertificate, serverPair.getPrivate(), serverCertificate, password,
 					caFile, serverFile, advertisedHost);
 		} finally { Arrays.fill(password, '\0'); }
+		}
+		}
 	}
 
 	public String serverCertificatePin() {
@@ -229,6 +238,8 @@ public final class HttpTlsIdentity {
 		Clock clock = Clock.systemUTC();
 		boolean renewCa = needsCaRenewal(caCertificate, clock);
 		if (!renewCa && !needsRenewal(serverCertificate, clock)) return;
+		synchronized (IDENTITY_LOCK_MONITOR) {
+		try (IdentityLock ignored = claimIdentityLock(caFile.getParent())) {
 		ensureBouncyCastle();
 		X509Certificate replacementCa = caCertificate;
 		if (renewCa) {
@@ -250,6 +261,8 @@ public final class HttpTlsIdentity {
 		caCertificate = replacementCa;
 		serverKey = pair.getPrivate();
 		serverCertificate = replacement;
+		}
+		}
 	}
 
 	public IssuedClientCertificate issueClientCertificate(String serverId) throws Exception {
@@ -384,6 +397,34 @@ public final class HttpTlsIdentity {
 		Path parent = file.toAbsolutePath().normalize().getParent();
 		if (parent == null || Files.isSymbolicLink(file)) throw new IOException("Refusing unsafe HTTP TLS identity path");
 		return file.toAbsolutePath().normalize();
+	}
+	private static IdentityLock claimIdentityLock(Path directory) throws IOException {
+		Path sidecar = safe(directory.resolve(OWNERSHIP_LOCK_FILE));
+		if (Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+				&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP TLS identity ownership lock is unsafe");
+		FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+				LinkOption.NOFOLLOW_LINKS);
+		try {
+			PrivateFilePermissions.ownerOnlyFile(sidecar);
+			FileLock lock;
+			try { lock = channel.tryLock(); }
+			catch (OverlappingFileLockException alreadyOwned) { throw new IOException("HTTP TLS identity is already initializing", alreadyOwned); }
+			if (lock == null) throw new IOException("HTTP TLS identity is already initializing");
+			return new IdentityLock(channel, lock);
+		} catch (IOException | RuntimeException failure) {
+			try { channel.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
+			throw failure;
+		}
+	}
+	private static final class IdentityLock implements AutoCloseable {
+		private final FileChannel channel;
+		private final FileLock lock;
+		private IdentityLock(FileChannel channel, FileLock lock) { this.channel = channel; this.lock = lock; }
+		@Override public void close() {
+			try { lock.release(); } catch (IOException ignored) { }
+			try { channel.close(); } catch (IOException ignored) { }
+		}
 	}
 
 	private static KeyStore load(Path path, char[] password) throws Exception {

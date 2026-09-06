@@ -515,7 +515,15 @@ class HttpTransportSecurityTest {
 	void failedRenewalPersistenceRestoresTheActiveBindingAndCanRetry() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("retry-renewal-proxy"), "localhost");
 		Path stateDirectory = directory.resolve("retry-renewal-state");
-		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, stateDirectory);
+		Files.createDirectory(stateDirectory);
+		java.util.concurrent.atomic.AtomicReference<Instant> now = new java.util.concurrent.atomic.AtomicReference<>(Instant.now());
+		Clock clock = new Clock() {
+			@Override public java.time.ZoneId getZone() { return ZoneOffset.UTC; }
+			@Override public Clock withZone(java.time.ZoneId zone) { return this; }
+			@Override public Instant instant() { return now.get(); }
+		};
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, clock,
+				stateDirectory.resolve("http-transport-clients.properties"));
 		HttpConnectionCode code = authority.createConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
 				Duration.ofMinutes(5));
 		HttpTlsIdentity.IssuedClientCertificate original = authority.enroll("lobby-1", code.enrollmentToken());
@@ -528,6 +536,7 @@ class HttpTransportSecurityTest {
 		assertTrue(authority.authenticate("lobby-1", original.certificate()),
 				"a pre-publication renewal failure must leave the active credential usable");
 		Files.delete(stateFile);
+		now.set(now.get().plusSeconds(60));
 		HttpTlsIdentity.IssuedClientCertificate retried = authority.renew("lobby-1", original.certificate());
 		assertTrue(authority.authenticate("lobby-1", retried.certificate()),
 				"renewal must remain retryable after persistence recovers");

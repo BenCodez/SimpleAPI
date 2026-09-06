@@ -24,6 +24,7 @@ import com.bencodez.simpleapi.file.PrivateFilePermissions;
  */
 public final class HttpEnrollmentAuthority {
 	private static final Duration MAX_ENROLLMENT_LIFETIME = Duration.ofMinutes(15);
+	private static final Duration MIN_RENEWAL_INTERVAL = Duration.ofMinutes(1);
 	private static final int MAX_PENDING_ENROLLMENTS = 128;
 	private static final int MAX_BINDINGS = 128;
 	private static final long MAX_STATE_BYTES = 65536;
@@ -32,6 +33,7 @@ public final class HttpEnrollmentAuthority {
 	private final Path stateFile;
 	private final Map<String, Enrollment> enrollments = new HashMap<>();
 	private final Map<String, ClientBinding> bindings = new HashMap<>();
+	private final Map<String, Instant> renewalNotBefore = new HashMap<>();
 	private boolean persistenceFailure;
 	private boolean revocationRetryRequired;
 
@@ -148,8 +150,14 @@ public final class HttpEnrollmentAuthority {
 	 * until the replacement successfully authenticates, making a lost renewal response safe to retry. */
 	public synchronized HttpTlsIdentity.IssuedClientCertificate renew(String serverId,
 			java.security.cert.X509Certificate currentCertificate) throws Exception {
-		if (!authenticate(serverId, currentCertificate)) throw new IllegalArgumentException("Certificate renewal was rejected");
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
+		Instant now = clock.instant();
+		Instant nextAllowed = renewalNotBefore.get(serverId);
+		if (nextAllowed != null && now.isBefore(nextAllowed)) throw new RenewalRateLimitException();
+		if (!authenticate(serverId, currentCertificate)) throw new IllegalArgumentException("Certificate renewal was rejected");
+		// Bound the limiter by active bindings; failed issuance still consumes the window.
+		renewalNotBefore.keySet().retainAll(bindings.keySet());
+		renewalNotBefore.put(serverId, now.plus(MIN_RENEWAL_INTERVAL));
 		ClientBinding binding = bindings.get(serverId);
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate(serverId);
 		bindings.put(serverId, new ClientBinding(binding.certificatePin(),
@@ -162,6 +170,11 @@ public final class HttpEnrollmentAuthority {
 		}
 		catch (java.io.IOException failure) { bindings.put(serverId, binding); throw failure; }
 		return issued;
+	}
+
+	static final class RenewalRateLimitException extends IllegalStateException {
+		private static final long serialVersionUID = 1L;
+		RenewalRateLimitException() { super("HTTP certificate renewal is rate limited"); }
 	}
 
 	public synchronized void revoke(String serverId) {
