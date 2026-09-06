@@ -8,10 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -118,18 +121,25 @@ class VelocityJSONFileTest {
         Path file = tmpRoot.resolve("conc/config.json");
         VelocityJSONFile v = new VelocityJSONFile(file);
 
-       ExecutorService pool = Executors.newFixedThreadPool(4);
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        List<Future<?>> saves = new ArrayList<>();
         try {
             for (int i = 0; i < 20; i++) {
                 final int n = i;
-                pool.submit(() -> {
+                saves.add(pool.submit(() -> {
                     v.set(new Object[] { "counter" }, n);
                     v.save();
-                });
+                }));
+            }
+            for (Future<?> save : saves) {
+                save.get();
             }
         } finally {
             pool.shutdown();
-            Thread.sleep(200); // small settle time
+            if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
+                pool.shutdownNow();
+                assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS), "save workers did not terminate");
+            }
         }
 
         VelocityJSONFile re = new VelocityJSONFile(file);
