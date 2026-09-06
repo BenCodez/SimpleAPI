@@ -92,8 +92,29 @@ public final class HttpClientCredentialStore {
 			if (privateKey == null || chain == null || chain.length != 2
 					|| !(chain[0] instanceof X509Certificate client) || !(chain[1] instanceof X509Certificate authority))
 				throw new IOException("HTTP client certificate bundle is invalid");
+			verifyKeyPair(privateKey, client);
 			return new ClientCredential(privateKey, client, authority, password);
 		} finally { java.util.Arrays.fill(password, '\0'); }
+	}
+
+	private static void verifyKeyPair(PrivateKey privateKey, X509Certificate certificate) throws Exception {
+		String algorithm = switch (certificate.getPublicKey().getAlgorithm()) {
+			case "EC" -> "SHA256withECDSA";
+			case "RSA" -> "SHA256withRSA";
+			case "DSA" -> "SHA256withDSA";
+			case "Ed25519", "Ed448" -> certificate.getPublicKey().getAlgorithm();
+			case "EdDSA" -> ((java.security.interfaces.EdECKey) certificate.getPublicKey()).getParams().getName();
+			default -> throw new IOException("HTTP client key algorithm is unsupported");
+		};
+		byte[] challenge = new byte[32];
+		new java.security.SecureRandom().nextBytes(challenge);
+		java.security.Signature signature = java.security.Signature.getInstance(algorithm);
+		signature.initSign(privateKey);
+		signature.update(challenge);
+		byte[] proof = signature.sign();
+		signature.initVerify(certificate.getPublicKey());
+		signature.update(challenge);
+		if (!signature.verify(proof)) throw new IOException("HTTP client private key does not match its certificate");
 	}
 
 	/** Writes and validates a replacement generation without touching the active credential. */

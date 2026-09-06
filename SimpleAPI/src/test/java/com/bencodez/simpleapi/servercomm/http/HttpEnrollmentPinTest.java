@@ -7,7 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.URI;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
 import java.time.Duration;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
@@ -70,6 +75,25 @@ class HttpEnrollmentPinTest {
 		HttpClientCredentialStore.EnrolledClient enrolled = HttpClientCredentialStore.loadEnrolled(client);
 		assertEquals(code.caCertificatePin(), enrolled.profile().caCertificatePin());
 		assertEquals(code.caCertificatePin(), HttpTransportSecrets.certificatePin(enrolled.credential().caCertificate()));
+	}
+
+	@Test
+	void rejectsPkcs12WithUnrelatedPrivateKeyDuringEnrollmentAndReplacement() throws Exception {
+		HttpTlsIdentity proxy = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
+		HttpConnectionCode code = code(proxy, "lobby-1");
+		HttpTlsIdentity.IssuedClientCertificate original = proxy.issueClientCertificate("lobby-1");
+		HttpTlsIdentity.IssuedClientCertificate mismatched = withUnrelatedPrivateKey(original);
+		Path client = directory.resolve("client");
+
+		assertThrows(java.io.IOException.class, () -> HttpClientCredentialStore.saveEnrolled(client, code, mismatched));
+		assertFalse(HttpClientCredentialStore.hasEnrolledProfile(client));
+
+		HttpClientCredentialStore.saveEnrolled(client, code, original);
+		HttpClientCredentialStore.EnrolledClient before = HttpClientCredentialStore.loadEnrolled(client);
+		assertThrows(java.io.IOException.class, () -> HttpClientCredentialStore.stageReplacement(client, mismatched));
+		HttpClientCredentialStore.EnrolledClient after = HttpClientCredentialStore.loadEnrolled(client);
+		assertEquals(before.profile(), after.profile());
+		assertArrayEquals(before.credential().certificate().getEncoded(), after.credential().certificate().getEncoded());
 	}
 
 	@Test
@@ -140,5 +164,21 @@ class HttpEnrollmentPinTest {
 		return new HttpConnectionCode(serverId, URI.create("https://localhost:8443/"),
 				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300),
 				HttpTransportSecrets.randomToken());
+	}
+
+	private HttpTlsIdentity.IssuedClientCertificate withUnrelatedPrivateKey(
+			HttpTlsIdentity.IssuedClientCertificate issued) throws Exception {
+		char[] password = issued.password();
+		KeyStore source = KeyStore.getInstance("PKCS12");
+		source.load(new ByteArrayInputStream(issued.pkcs12()), password);
+		KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+		generator.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
+		KeyPair unrelated = generator.generateKeyPair();
+		KeyStore replacement = KeyStore.getInstance("PKCS12");
+		replacement.load(null, password);
+		replacement.setKeyEntry("client", unrelated.getPrivate(), password, source.getCertificateChain("client"));
+		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+		replacement.store(bytes, password);
+		return new HttpTlsIdentity.IssuedClientCertificate(issued.serverId(), issued.certificate(), bytes.toByteArray(), password);
 	}
 }

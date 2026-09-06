@@ -111,29 +111,46 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		this.onAcknowledged = onAcknowledged; this.nanoTime = nanoTime;
 		durableOutgoing = outgoingDirectory == null ? null : new DurableOutgoingQueue(outgoingDirectory);
 		durableIncomingRoot = outgoingDirectory == null ? null : incomingRoot(outgoingDirectory);
-		if (durableOutgoing != null) for (Map.Entry<String, List<HttpTransportProtocol.Delivery>> pending
-				: durableOutgoing.load().entrySet()) {
-			BackendState state = backendState(pending.getKey());
-			state.restore(pending.getValue());
-		}
-		server = HttpsServer.create(bind, 32);
-		server.setHttpsConfigurator(new HttpsConfigurator(identity.serverContext()) {
-			@Override public void configure(HttpsParameters parameters) {
-				SSLParameters ssl = HttpPinnedTls.secureParameters(getSSLContext());
-				ssl.setWantClientAuth(true); parameters.setSSLParameters(ssl);
+		try {
+			if (durableOutgoing != null) for (Map.Entry<String, List<HttpTransportProtocol.Delivery>> pending
+					: durableOutgoing.load().entrySet()) {
+				BackendState state = backendState(pending.getKey());
+				state.restore(pending.getValue());
 			}
-		});
-		// Long polls are blocking by design. Capacity is bounded by admission, while enough workers
-		// remain available for all admitted polls plus setup requests.
-		listenerExecutor = executor("SimpleAPI-HTTP-listener", 72, 72);
-		// The proxy router mutates shared presence, vote, and reward state. A separate
-		// bounded FIFO lane keeps wire order without blocking long-poll workers.
-		handlerExecutor = executor("SimpleAPI-HTTP-handler", 1,
-				HttpBackendTransportConnector.CALLBACK_QUEUE_CAPACITY, handlerWorker);
-		server.setExecutor(listenerExecutor);
-		server.createContext("/v1/enroll", exchange -> enroll((HttpsExchange) exchange));
-		server.createContext("/v1/renew", exchange -> renew((HttpsExchange) exchange));
-		server.createContext("/v1/transport", exchange -> transport((HttpsExchange) exchange));
+		} catch (Exception | Error setupFailure) {
+			releaseBackendOwnership();
+			throw setupFailure;
+		}
+		try {
+			server = HttpsServer.create(bind, 32);
+			server.setHttpsConfigurator(new HttpsConfigurator(identity.serverContext()) {
+				@Override public void configure(HttpsParameters parameters) {
+					SSLParameters ssl = HttpPinnedTls.secureParameters(getSSLContext());
+					ssl.setWantClientAuth(true); parameters.setSSLParameters(ssl);
+				}
+			});
+			// Long polls are blocking by design. Capacity is bounded by admission, while enough workers
+			// remain available for all admitted polls plus setup requests.
+			listenerExecutor = executor("SimpleAPI-HTTP-listener", 72, 72);
+			// The proxy router mutates shared presence, vote, and reward state. A separate
+			// bounded FIFO lane keeps wire order without blocking long-poll workers.
+			handlerExecutor = executor("SimpleAPI-HTTP-handler", 1,
+					HttpBackendTransportConnector.CALLBACK_QUEUE_CAPACITY, handlerWorker);
+			server.setExecutor(listenerExecutor);
+			server.createContext("/v1/enroll", exchange -> enroll((HttpsExchange) exchange));
+			server.createContext("/v1/renew", exchange -> renew((HttpsExchange) exchange));
+			server.createContext("/v1/transport", exchange -> transport((HttpsExchange) exchange));
+		} catch (Exception | Error setupFailure) {
+			releaseBackendOwnership();
+			throw setupFailure;
+		}
+	}
+
+	private void releaseBackendOwnership() {
+		synchronized (backends) {
+			for (BackendState backend : backends.values()) backend.seal();
+			backends.clear();
+		}
 	}
 
 	private void renew(HttpsExchange exchange) throws IOException {
@@ -335,11 +352,17 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (existing != null) return existing;
 			if (backends.size() >= MAX_BACKENDS) reclaimInactiveBackend();
 			if (backends.size() >= MAX_BACKENDS) throw new IOException("HTTP backend state exceeds its bound");
-			HttpInboundDeliveryStore inbound = durableIncomingRoot == null ? null
-					: HttpInboundDeliveryStore.open(durableIncomingRoot, serverId);
-			BackendState created = new BackendState(serverId, durableOutgoing, inbound, onAcknowledged, nanoTime);
-			backends.put(serverId, created);
-			return created;
+			HttpInboundDeliveryStore inbound = null;
+			try {
+				inbound = durableIncomingRoot == null ? null
+						: HttpInboundDeliveryStore.open(durableIncomingRoot, serverId);
+				BackendState created = new BackendState(serverId, durableOutgoing, inbound, onAcknowledged, nanoTime);
+				backends.put(serverId, created);
+				return created;
+			} catch (Exception | Error setupFailure) {
+				if (inbound != null) inbound.seal();
+				throw setupFailure;
+			}
 		}
 	}
 	private void reclaimInactiveBackend() throws IOException {

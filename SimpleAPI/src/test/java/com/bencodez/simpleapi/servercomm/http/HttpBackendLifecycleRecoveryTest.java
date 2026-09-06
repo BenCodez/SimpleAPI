@@ -38,7 +38,7 @@ class HttpBackendLifecycleRecoveryTest {
 		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
 		HttpInboundDeliveryStore.State state = null;
 		while (System.nanoTime() < deadline) {
-			state = new HttpInboundDeliveryStore(clientDirectory).state(id);
+			state = HttpInboundDeliveryStore.inspect(clientDirectory).state(id);
 			if (state == HttpInboundDeliveryStore.State.COMPLETED) break;
 			Thread.sleep(5);
 		}

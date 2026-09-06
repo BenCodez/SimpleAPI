@@ -107,28 +107,43 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		this.profile = profile; this.serverId = profile.serverId(); this.onEnvelope = onEnvelope;
 		this.credential = credential;
 		this.credentialDirectory = credentialDirectory;
-		inboundDeliveries = credentialDirectory == null ? null : new HttpInboundDeliveryStore(credentialDirectory);
-		acknowledgementConfirmationStore = credentialDirectory == null ? null
-				: HttpInboundDeliveryStore.open(credentialDirectory, "http-transport-ack-confirmations");
-		if (inboundDeliveries != null) for (var entry : inboundDeliveries.snapshot().entrySet()) {
-			if (entry.getValue() == HttpInboundDeliveryStore.State.COMPLETED) {
-				inboundDeliveries.confirmCompleted(entry.getKey());
-				received.add(entry.getKey());
-				queueAck(entry.getKey());
+		HttpInboundDeliveryStore loadedInbound = null, loadedAcknowledgements = null;
+		HttpClient initializedClient;
+		URI initializedEndpoint;
+		ThreadPoolExecutor initializedCallbacks;
+		try {
+			loadedInbound = credentialDirectory == null ? null : new HttpInboundDeliveryStore(credentialDirectory);
+			loadedAcknowledgements = credentialDirectory == null ? null
+					: HttpInboundDeliveryStore.open(credentialDirectory, "http-transport-ack-confirmations");
+			if (loadedInbound != null) for (var entry : loadedInbound.snapshot().entrySet()) {
+				if (entry.getValue() == HttpInboundDeliveryStore.State.COMPLETED) {
+					loadedInbound.confirmCompleted(entry.getKey());
+					received.add(entry.getKey());
+					queueAck(entry.getKey());
+				}
 			}
+			if (loadedAcknowledgements != null) for (var entry : loadedAcknowledgements.snapshot().entrySet()) {
+				if (entry.getValue() != HttpInboundDeliveryStore.State.COMPLETED)
+					throw new IOException("HTTP acknowledgement confirmation state is invalid");
+				loadedAcknowledgements.confirmCompleted(entry.getKey());
+				queueAcknowledgementConfirmation(entry.getKey());
+			}
+			initializedClient = client(profile, credential);
+			initializedEndpoint = profile.endpoint().resolve("v1/transport");
+			// GlobalMessageHandler routes mutate backend vote state and must observe the
+			// wire order. One bounded lane preserves batch ordering without running work on
+			// the long-poll thread; bounded admission below backpressures this poller.
+			initializedCallbacks = callbackExecutor();
+		} catch (Exception | Error setupFailure) {
+			if (loadedAcknowledgements != null) loadedAcknowledgements.seal();
+			if (loadedInbound != null) loadedInbound.seal();
+			throw setupFailure;
 		}
-		if (acknowledgementConfirmationStore != null) for (var entry : acknowledgementConfirmationStore.snapshot().entrySet()) {
-			if (entry.getValue() != HttpInboundDeliveryStore.State.COMPLETED)
-				throw new IOException("HTTP acknowledgement confirmation state is invalid");
-			acknowledgementConfirmationStore.confirmCompleted(entry.getKey());
-			queueAcknowledgementConfirmation(entry.getKey());
-		}
-		client = client(profile, credential);
-		transportEndpoint = profile.endpoint().resolve("v1/transport");
-		// GlobalMessageHandler routes mutate backend vote state and must observe the
-		// wire order. One bounded lane preserves batch ordering without running work on
-		// the long-poll thread; bounded admission below backpressures this poller.
-		callbackExecutor = callbackExecutor();
+		inboundDeliveries = loadedInbound;
+		acknowledgementConfirmationStore = loadedAcknowledgements;
+		client = initializedClient;
+		transportEndpoint = initializedEndpoint;
+		callbackExecutor = initializedCallbacks;
 	}
 
 	/** Convenience constructor for the owner-only credential directory produced by {@link #enroll}. */

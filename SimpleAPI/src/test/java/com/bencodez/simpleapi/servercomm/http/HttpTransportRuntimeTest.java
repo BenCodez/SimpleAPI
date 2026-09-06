@@ -79,7 +79,7 @@ class HttpTransportRuntimeTest {
 				long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 				while (connector.queuedOutgoing() != 0 && System.nanoTime() < deadline) Thread.sleep(10);
 				assertEquals(0, connector.queuedOutgoing(), "proxy ACK must remove the exact outbound delivery ID");
-				Path proxyInboundFence = directory.resolve("proxy-outgoing-incoming");
+				Path proxyInboundFence = directory.resolve("proxy-outgoing-incoming").resolve("lobby-1");
 				long confirmationDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 				while (countRegularFiles(proxyInboundFence) != 0L && System.nanoTime() < confirmationDeadline) Thread.sleep(10);
 				assertEquals(0L, countRegularFiles(proxyInboundFence),
@@ -355,6 +355,40 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void inboundJournalHasOneWriterWhileReadOnlyInspectionRemainsAvailable() throws Exception {
+		Path root = directory.resolve("exclusive-incoming");
+		Files.createDirectory(root);
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		HttpInboundDeliveryStore owner = HttpInboundDeliveryStore.open(root, "lobby-1");
+		owner.reserve(deliveryId);
+		assertThrows(java.io.IOException.class, () -> HttpInboundDeliveryStore.open(root, "lobby-1"),
+				"a live journal owner must exclude a stale in-memory writer");
+		assertEquals(HttpInboundDeliveryStore.State.RESERVED,
+				HttpInboundDeliveryStore.inspect(root, "lobby-1").state(deliveryId));
+		owner.seal();
+		HttpInboundDeliveryStore successor = HttpInboundDeliveryStore.open(root, "lobby-1");
+		successor.markRunning(deliveryId);
+		successor.seal();
+	}
+
+	@Test
+	void backendConnectorReleasesJournalOwnershipOnlyAfterClose() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("owner-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300), "A".repeat(43));
+		Path credentials = directory.resolve("owner-client");
+		HttpClientCredentialStore.saveEnrolled(credentials, code, issued);
+		try (HttpBackendTransportConnector owner = new HttpBackendTransportConnector(credentials, ignored -> { })) {
+			assertThrows(java.io.IOException.class, () -> new HttpBackendTransportConnector(credentials, ignored -> { }),
+					"two live connectors must not own the same inbound delivery journal");
+		}
+		try (HttpBackendTransportConnector successor = new HttpBackendTransportConnector(credentials, ignored -> { })) {
+			assertFalse(successor.pollerAlive());
+		}
+	}
+
+	@Test
 	void completedInboundPublicationRetriesForceBeforeProxyAcknowledgement() throws Exception {
 		Path root = directory.resolve("proxy-incoming-force-retry");
 		Files.createDirectory(root);
@@ -458,7 +492,7 @@ class HttpTransportRuntimeTest {
 		}
 		store.seal();
 		assertEquals(HttpInboundDeliveryStore.State.RESERVED,
-				HttpInboundDeliveryStore.open(root, "lobby-1").state(deliveryId),
+				HttpInboundDeliveryStore.inspect(root, "lobby-1").state(deliveryId),
 				"a callback never exposed must be recoverable after a one-shot RUNNING force failure");
 	}
 
@@ -624,7 +658,7 @@ class HttpTransportRuntimeTest {
 		closer.join(3000);
 		assertFalse(closer.isAlive());
 		assertEquals(HttpInboundDeliveryStore.State.COMPLETED,
-				new HttpInboundDeliveryStore(clientDirectory).state(id));
+				HttpInboundDeliveryStore.inspect(clientDirectory).state(id));
 	}
 
 	@Test
@@ -655,7 +689,7 @@ class HttpTransportRuntimeTest {
 			assertTrue(stopped.await(2, TimeUnit.SECONDS));
 		} finally { release.countDown(); }
 		assertEquals(HttpInboundDeliveryStore.State.RUNNING,
-				new HttpInboundDeliveryStore(clientDirectory).state(id),
+				HttpInboundDeliveryStore.inspect(clientDirectory).state(id),
 				"an ambiguous callback must remain fail-closed after bounded shutdown");
 	}
 
@@ -1356,7 +1390,9 @@ class HttpTransportRuntimeTest {
 		Path clientDirectory = directory.resolve("reserved-client");
 		HttpClientCredentialStore.saveEnrolled(clientDirectory, code, issued);
 		String id = java.util.UUID.randomUUID().toString();
-		new HttpInboundDeliveryStore(clientDirectory).reserve(id);
+		HttpInboundDeliveryStore reservedStore = new HttpInboundDeliveryStore(clientDirectory);
+		reservedStore.reserve(id);
+		reservedStore.seal();
 		CountDownLatch completed = new CountDownLatch(1);
 		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(id, JsonEnvelope.builder("vote").build());
 		try (HttpBackendTransportConnector restarted = new HttpBackendTransportConnector(clientDirectory, ignored -> completed.countDown())) {

@@ -58,7 +58,7 @@ class HttpProxyLifecycleRecoveryTest {
 			server.close();
 			assertNotNull(deliveryId.get());
 			assertEquals(HttpInboundDeliveryStore.State.COMPLETED,
-					HttpInboundDeliveryStore.open(directory.resolve("outgoing-incoming"), "lobby-1").state(deliveryId.get()),
+					HttpInboundDeliveryStore.inspect(directory.resolve("outgoing-incoming"), "lobby-1").state(deliveryId.get()),
 					"the callback completion must be durable before close seals the journal");
 		} finally {
 			server.close();

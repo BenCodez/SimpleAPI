@@ -3,6 +3,9 @@ package com.bencodez.simpleapi.servercomm.http;
 import com.bencodez.simpleapi.file.DurableFiles;
 import com.bencodez.simpleapi.file.PrivateFilePermissions;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -19,8 +22,13 @@ import java.util.UUID;
 /** Crash-durable state for proxy deliveries around a non-transactional application callback. */
 final class HttpInboundDeliveryStore {
 	private static final String DIRECTORY = "http-transport-inbound-deliveries";
+	// This sidecar is deliberately outside the deletable journal directory. Never remove it:
+	// deleting and recreating a locked file could split ownership across two inodes.
+	private static final String OWNER_LOCK_PREFIX = ".http-inbound-owner-";
+	private static final String OWNER_LOCK_SUFFIX = ".lock";
 	private static final int MAX_ENTRIES = HttpTransportProtocol.MAX_QUEUE;
 	private final Path root;
+	private final boolean readOnly;
 	private final Map<String, State> entries = new LinkedHashMap<>();
 	// A rename completed, but its directory entry still needs a successful fsync.
 	private final Set<String> unconfirmedReservations = new HashSet<>();
@@ -28,32 +36,57 @@ final class HttpInboundDeliveryStore {
 	// RUNNING was published before the callback, but restoring RESERVED was not yet confirmed.
 	// This is process-local evidence only: a RUNNING entry loaded after a restart remains ambiguous.
 	private final Set<String> pendingRunningRollbacks = new HashSet<>();
+	private FileChannel ownershipChannel;
+	private FileLock ownershipLock;
 	private boolean sealed;
 
 	HttpInboundDeliveryStore(Path credentialDirectory) throws IOException {
-		this(credentialDirectory, DIRECTORY);
+		this(credentialDirectory, DIRECTORY, false);
 	}
 
 	static HttpInboundDeliveryStore open(Path parent, String directoryName) throws IOException {
-		return new HttpInboundDeliveryStore(parent, directoryName);
+		return new HttpInboundDeliveryStore(parent, directoryName, false);
 	}
 
-	private HttpInboundDeliveryStore(Path parent, String directoryName) throws IOException {
+	/** Opens an existing journal for state inspection without claiming its writer ownership. */
+	static HttpInboundDeliveryStore inspect(Path parent, String directoryName) throws IOException {
+		return new HttpInboundDeliveryStore(parent, directoryName, true);
+	}
+
+	static HttpInboundDeliveryStore inspect(Path credentialDirectory) throws IOException {
+		return new HttpInboundDeliveryStore(credentialDirectory, DIRECTORY, true);
+	}
+
+	private HttpInboundDeliveryStore(Path parent, String directoryName, boolean readOnly) throws IOException {
 		Path credentials = parent.toAbsolutePath().normalize();
 		if (Files.isSymbolicLink(credentials) || !Files.isDirectory(credentials, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP credential directory is unsafe");
 		if (directoryName == null || !directoryName.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
 			throw new IOException("HTTP inbound delivery directory name is invalid");
-		PrivateFilePermissions.ownerOnlyDirectory(credentials);
+		this.readOnly = readOnly;
+		if (!readOnly) PrivateFilePermissions.ownerOnlyDirectory(credentials);
 		root = credentials.resolve(directoryName).normalize();
 		if (!root.getParent().equals(credentials)) throw new IOException("HTTP inbound delivery directory is invalid");
-		try { Files.createDirectory(root); }
-		catch (java.nio.file.FileAlreadyExistsException existing) { }
-		requireRoot();
-		PrivateFilePermissions.ownerOnlyDirectory(root);
-		// Retry a parent fsync that may have failed after creating this root.
-		DurableFiles.forceDirectory(credentials);
-		load();
+		if (!readOnly) {
+			try {
+				claimOwnership(credentials.resolve(OWNER_LOCK_PREFIX + directoryName + OWNER_LOCK_SUFFIX));
+				// Claim before creating or checking the journal root: a retiring owner may be
+				// between its empty check and deletion, and only one owner may cross that boundary.
+				try { Files.createDirectory(root); }
+				catch (java.nio.file.FileAlreadyExistsException existing) { }
+				requireRoot();
+				PrivateFilePermissions.ownerOnlyDirectory(root);
+				// Retry a parent fsync that may have failed after creating this root.
+				DurableFiles.forceDirectory(credentials);
+				load();
+			} catch (IOException | RuntimeException failure) {
+				releaseOwnership();
+				throw failure;
+			}
+		} else {
+			requireRoot();
+			load();
+		}
 	}
 
 	synchronized State state(String id) { return entries.get(canonical(id)); }
@@ -128,8 +161,13 @@ final class HttpInboundDeliveryStore {
 		transition(id, State.RESERVED, State.RUNNING);
 	}
 	synchronized void markCompleted(String id) throws IOException { transition(id, State.RUNNING, State.COMPLETED); }
-	synchronized void seal() { sealed = true; }
+	synchronized void seal() {
+		if (sealed) return;
+		sealed = true;
+		releaseOwnership();
+	}
 	synchronized void sealAndDeleteIfEmpty() throws IOException {
+		requireWritable();
 		if (!entries.isEmpty()) throw new IOException("HTTP inbound delivery store is not empty");
 		requireRoot();
 		try (DirectoryStream<Path> files = Files.newDirectoryStream(root)) {
@@ -137,8 +175,10 @@ final class HttpInboundDeliveryStore {
 		}
 		sealed = true;
 		Path parent = root.getParent();
-		Files.delete(root);
-		DurableFiles.forceDirectory(parent);
+		try {
+			Files.delete(root);
+			DurableFiles.forceDirectory(parent);
+		} finally { releaseOwnership(); }
 	}
 
 	synchronized void remove(String id) throws IOException {
@@ -216,6 +256,7 @@ final class HttpInboundDeliveryStore {
 
 	/** Retries the directory fsync required before exposing a reservation to a callback. */
 	synchronized void confirmReserved(String id) throws IOException {
+		requireWritable();
 		id = canonical(id);
 		if (entries.get(id) != State.RESERVED) throw new IOException("HTTP inbound delivery fence state is invalid");
 		if (!unconfirmedReservations.contains(id)) return;
@@ -231,6 +272,7 @@ final class HttpInboundDeliveryStore {
 
 	/** Retries the directory fsync required before exposing a completed delivery for acknowledgement. */
 	synchronized void confirmCompleted(String id) throws IOException {
+		requireWritable();
 		id = canonical(id);
 		if (entries.get(id) != State.COMPLETED) throw new IOException("HTTP inbound delivery fence state is invalid");
 		if (!unconfirmedCompletions.contains(id)) return;
@@ -250,14 +292,14 @@ final class HttpInboundDeliveryStore {
 				String name = file.getFileName().toString();
 				if (name.startsWith(".pending-") && name.endsWith(".tmp") && !Files.isSymbolicLink(file)
 						&& Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-					DurableFiles.deleteIfExists(file);
+					if (!readOnly) DurableFiles.deleteIfExists(file);
 					continue;
 				}
 				State state = State.fromFileName(name);
 				if (state == null || Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
 						|| Files.size(file) > 64L)
 					throw new IOException("HTTP inbound delivery fence contains an invalid entry");
-				PrivateFilePermissions.ownerOnlyFile(file);
+				if (!readOnly) PrivateFilePermissions.ownerOnlyFile(file);
 				String id;
 				try { id = canonical(name.substring(0, name.length() - state.suffix.length())); }
 				catch (IllegalArgumentException invalid) {
@@ -273,7 +315,7 @@ final class HttpInboundDeliveryStore {
 					// RUNNING never replays, and COMPLETED alone may be acknowledged.
 					State retained = existing.ordinal() >= state.ordinal() ? existing : state;
 					State obsolete = retained == existing ? state : existing;
-					DurableFiles.deleteIfExists(file(id, obsolete));
+					if (!readOnly) DurableFiles.deleteIfExists(file(id, obsolete));
 					entries.put(id, retained);
 				}
 				if (entries.get(id) == State.COMPLETED) unconfirmedCompletions.add(id);
@@ -290,7 +332,35 @@ final class HttpInboundDeliveryStore {
 			throw new IOException("HTTP inbound delivery fence state is unsafe");
 	}
 	private void requireWritable() throws IOException {
-		if (sealed) throw new IOException("HTTP inbound delivery store ownership has ended");
+		if (readOnly || sealed || ownershipLock == null || !ownershipLock.isValid())
+			throw new IOException("HTTP inbound delivery store ownership has ended");
+	}
+	private void claimOwnership(Path sidecar) throws IOException {
+		if (Files.isSymbolicLink(sidecar) || Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+				&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP inbound delivery ownership lock is unsafe");
+		FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+				LinkOption.NOFOLLOW_LINKS);
+		try {
+			PrivateFilePermissions.ownerOnlyFile(sidecar);
+			FileLock lock;
+			try { lock = channel.tryLock(); }
+			catch (OverlappingFileLockException alreadyOwned) { throw new IOException("HTTP inbound delivery store is already owned", alreadyOwned); }
+			if (lock == null) throw new IOException("HTTP inbound delivery store is already owned");
+			ownershipChannel = channel;
+			ownershipLock = lock;
+		} catch (IOException | RuntimeException failure) {
+			try { channel.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
+			throw failure;
+		}
+	}
+	private void releaseOwnership() {
+		FileLock lock = ownershipLock;
+		FileChannel channel = ownershipChannel;
+		ownershipLock = null;
+		ownershipChannel = null;
+		if (lock != null) try { lock.release(); } catch (IOException ignored) { }
+		if (channel != null) try { channel.close(); } catch (IOException ignored) { }
 	}
 	private static void move(Path source, Path target) throws IOException {
 		try { Files.move(source, target, StandardCopyOption.ATOMIC_MOVE); }
