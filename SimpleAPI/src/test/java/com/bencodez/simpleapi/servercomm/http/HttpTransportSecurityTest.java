@@ -335,7 +335,14 @@ class HttpTransportSecurityTest {
 		assertFalse(authority.authenticate("lobby-2", unaffectedIssued.certificate()),
 				"all authentication must fail closed while persistence is unresolved");
 		Files.delete(stateFile);
+		assertThrows(java.io.IOException.class, () -> authority.enroll("lobby-1", pending.enrollmentToken()),
+				"a restored pending code must not republish an unresolved revocation");
+		assertThrows(IllegalStateException.class,
+				() -> authority.createConnectionCode("lobby-3", endpoint, Duration.ofMinutes(5)),
+				"new codes must not persist the pre-revocation state either");
 		authority.revoke("lobby-1");
+		assertThrows(IllegalArgumentException.class, () -> authority.enroll("lobby-1", pending.enrollmentToken()),
+				"the revocation retry must permanently consume every prior code");
 		assertTrue(authority.authenticate("lobby-2", unaffectedIssued.certificate()),
 				"a successful full-state retry must restore authentication availability");
 

@@ -159,13 +159,36 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		}
 	}
 
-	/** Queues a proxy-origin envelope durably before reporting acceptance. */
+	/**
+	 * Queues a proxy-origin envelope durably before reporting acceptance.
+	 * @throws DeliveryRetryException if publication needs recovery; persist its delivery ID
+	 *         and retry the same envelope through the stable-ID overload
+	 */
 	public boolean send(String serverId, JsonEnvelope envelope) {
-		return send(serverId, UUID.randomUUID().toString(), envelope);
+		return send(serverId, UUID.randomUUID().toString(), envelope, true);
 	}
 
-	/** Queues a proxy-origin envelope with a stable, caller-persisted delivery ID. */
+	/** Carries the generated ID needed to recover a quarantined or indeterminate send. */
+	@SuppressWarnings("serial")
+	public static final class DeliveryRetryException extends IllegalStateException {
+		private final String deliveryId;
+		private DeliveryRetryException(String deliveryId, Throwable cause) {
+			super("HTTP delivery requires a same-ID retry: " + deliveryId, cause);
+			this.deliveryId = deliveryId;
+		}
+		public String deliveryId() { return deliveryId; }
+	}
+
+	/**
+	 * Queues a proxy-origin envelope with a stable, caller-persisted delivery ID.
+	 * Callers recovering {@link DeliveryRetryException} must persist its ID and retry
+	 * the identical envelope through this overload until it returns {@code true}.
+	 */
 	public boolean send(String serverId, String deliveryId, JsonEnvelope envelope) {
+		return send(serverId, deliveryId, envelope, false);
+	}
+
+	private boolean send(String serverId, String deliveryId, JsonEnvelope envelope, boolean generatedId) {
 		if (closed || serverId == null || envelope == null) return false;
 		try {
 			serverId = HttpTlsIdentity.canonicalServerId(serverId);
@@ -177,7 +200,12 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		final String canonicalServerId = serverId;
 		try { backend = backendState(canonicalServerId); }
 		catch (IOException persistenceFailure) { return false; }
-		return backend.enqueue(new HttpTransportProtocol.Delivery(deliveryId, envelope));
+		try { return backend.enqueue(new HttpTransportProtocol.Delivery(deliveryId, envelope), generatedId); }
+		catch (DeliveryRetryException failure) { throw failure; }
+		catch (IllegalStateException indeterminate) {
+			if (generatedId) throw new DeliveryRetryException(deliveryId, indeterminate);
+			throw indeterminate;
+		}
 	}
 
 	@Override public void close() {
@@ -416,6 +444,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (requestedSequence <= sequence) return false; sequence = requestedSequence; return true;
 		}
 		synchronized boolean enqueue(HttpTransportProtocol.Delivery delivery) {
+			return enqueue(delivery, false);
+		}
+		private synchronized boolean enqueue(HttpTransportProtocol.Delivery delivery, boolean generatedId) {
 			if (retired) return false;
 			HttpTransportProtocol.Delivery existing = outgoing.get(delivery.id());
 			if (existing != null) {
@@ -427,6 +458,10 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			}
 			if (outgoing.size() >= HttpTransportProtocol.MAX_QUEUE) return false;
 			if (durableOutgoing != null) try { durableOutgoing.persist(serverId, delivery); }
+			catch (DurableFiles.PublishedException quarantined) {
+				if (generatedId) throw new DeliveryRetryException(delivery.id(), quarantined);
+				return false;
+			}
 			catch (IOException failure) { return false; }
 			outgoing.put(delivery.id(), delivery); touch(); signal(); return true;
 		}
@@ -662,7 +697,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(pending, target); }
 				try { ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
-					quarantinePublished(directory, target, pending, quarantined, delivery.id(), postPublicationFailure);
+					quarantinePublished(directory, target, pending, serverFiles, quarantined, delivery.id(), postPublicationFailure);
 				}
 				quarantined.remove(delivery.id());
 				serverFiles.put(delivery.id(), target);
@@ -683,14 +718,14 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				try { ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
 					pending = directory.resolve(".pending-" + delivery.id() + ".json");
-					quarantinePublished(directory, target, pending, quarantined, delivery.id(), postPublicationFailure);
+					quarantinePublished(directory, target, pending, serverFiles, quarantined, delivery.id(), postPublicationFailure);
 				}
 				serverFiles.put(delivery.id(), target);
 			} finally { Files.deleteIfExists(temporary); }
 		}
 
-		private void quarantinePublished(Path directory, Path target, Path pending, Map<String, Path> quarantined,
-				String id, IOException publicationFailure) throws IOException {
+		private void quarantinePublished(Path directory, Path target, Path pending, Map<String, Path> serverFiles,
+				Map<String, Path> quarantined, String id, IOException publicationFailure) throws IOException {
 			try {
 				try { Files.move(target, pending, StandardCopyOption.ATOMIC_MOVE); }
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(target, pending); }
@@ -700,6 +735,16 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				ownerOnlyFile(pending);
 				directoryForcer.force(directory);
 			} catch (IOException quarantineFailure) {
+				// A failed quarantine rename leaves the original published name in place on
+				// ordinary filesystems. Preserve that observed target for a same-ID retry so
+				// persist() confirms it rather than publishing a second file for the ID.
+				if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+					quarantined.remove(id);
+					serverFiles.put(id, target);
+				} else if (Files.isRegularFile(pending, LinkOption.NOFOLLOW_LINKS)) {
+					serverFiles.remove(id);
+					quarantined.put(id, pending);
+				}
 				quarantineFailure.addSuppressed(publicationFailure);
 				throw new IllegalStateException("HTTP outgoing queue publication could not be quarantined", quarantineFailure);
 			}

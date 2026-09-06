@@ -167,6 +167,84 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void generatedSendExposesRecoverableIdAfterPublicationFailure() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("generated-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("generated-authority"));
+		for (boolean persistentFailure : new boolean[] { false, true }) {
+			Path queueRoot = directory.resolve("generated-outgoing-" + persistentFailure);
+			JsonEnvelope envelope = JsonEnvelope.builder("generated-retry").build();
+			String retryId;
+			try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+					identity, authority, queueRoot, ignored -> { })) {
+				AtomicLong publicationForces = new AtomicLong();
+				try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+						org.mockito.Mockito.CALLS_REAL_METHODS)) {
+					forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(queueRoot.resolve("lobby-1")))
+							.thenAnswer(call -> {
+								if (publicationForces.incrementAndGet() == 1 || persistentFailure)
+									throw new java.io.IOException("injected publication failure");
+								return call.callRealMethod();
+							});
+					HttpProxyTransportServer.DeliveryRetryException retry = assertThrows(
+							HttpProxyTransportServer.DeliveryRetryException.class, () -> server.send("lobby-1", envelope));
+					retryId = retry.deliveryId();
+					assertEquals(retryId, java.util.UUID.fromString(retryId).toString());
+				}
+				assertTrue(server.backendStateForTest("lobby-1")
+						.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty());
+			}
+			try (HttpProxyTransportServer restarted = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+					identity, authority, queueRoot, ignored -> { })) {
+				assertTrue(restarted.backendStateForTest("lobby-1")
+						.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty());
+				assertTrue(restarted.send("lobby-1", retryId, envelope));
+				assertEquals(1L, countRegularFiles(queueRoot));
+				var messages = restarted.backendStateForTest("lobby-1")
+						.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages();
+				assertEquals(1, messages.size());
+				assertEquals(retryId, messages.iterator().next().id());
+				restarted.backendStateForTest("lobby-1").acknowledge(java.util.List.of(retryId));
+				assertEquals(0L, countRegularFiles(queueRoot));
+			}
+		}
+	}
+
+	@Test
+	void outgoingQueueRecoversWhenPromotionQuarantineRenameFails() throws Exception {
+		Path queueRoot = directory.resolve("promotion-rename-failure");
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		Path serverDirectory = queueRoot.resolve("lobby-1");
+		Path pending = serverDirectory.resolve(".pending-" + deliveryId + ".json");
+		AtomicLong serverForces = new AtomicLong();
+		HttpProxyTransportServer.DurableOutgoingQueue queue = new HttpProxyTransportServer.DurableOutgoingQueue(queueRoot,
+				forced -> {
+					if (!forced.equals(serverDirectory)) return;
+					long attempt = serverForces.incrementAndGet();
+					if (attempt == 1L) throw new java.io.IOException("injected initial publication failure");
+					if (attempt == 3L) {
+						Files.createDirectory(pending);
+						throw new java.io.IOException("injected promotion publication failure");
+					}
+				});
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState("lobby-1", queue,
+				(server, id) -> { });
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId,
+				JsonEnvelope.builder("promotion-rename-failure").build());
+		assertFalse(state.enqueue(delivery));
+		assertThrows(IllegalStateException.class, () -> state.enqueue(delivery));
+		Files.delete(pending);
+		assertTrue(state.enqueue(delivery), "same-ID retry must confirm the observed target instead of duplicating it");
+		var quarantinedFiles = HttpProxyTransportServer.DurableOutgoingQueue.class.getDeclaredField("quarantinedFiles");
+		quarantinedFiles.setAccessible(true);
+		@SuppressWarnings("unchecked")
+		var quarantined = (java.util.Map<String, java.util.Map<String, Path>>) quarantinedFiles.get(queue);
+		assertFalse(quarantined.get("lobby-1").containsKey(deliveryId),
+				"target fallback must clear the stale quarantine index");
+		state.acknowledge(java.util.List.of(deliveryId));
+		assertFalse(Files.exists(serverDirectory));
+	}
+
+	@Test
 	void publishedOutgoingDeliveryRemainsTrackedUntilDurabilityCanBeConfirmed() throws Exception {
 		AtomicLong forceCalls = new AtomicLong();
 		Path queueRoot = directory.resolve("uncertain-outgoing");
@@ -715,6 +793,70 @@ class HttpTransportRuntimeTest {
 				connector.start();
 				assertTrue(connector.send(JsonEnvelope.builder("after-rotation").build()));
 				assertTrue(received.await(8, TimeUnit.SECONDS));
+			}
+		}
+	}
+
+	@Test
+	void renewalAdoptsPublishedPointerAndRetriesItBeforeAnotherRenewal() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pointer-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate expiring = identity.issueClientCertificate("lobby-1",
+				Instant.now().minus(Duration.ofDays(340)));
+		String originalPin = HttpTransportSecrets.certificatePin(expiring.certificate());
+		Path authorityDirectory = Files.createDirectory(directory.resolve("pointer-authority"));
+		String key = java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString("lobby-1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		Files.writeString(authorityDirectory.resolve("http-transport-clients.properties"),
+				"version=2\nbinding." + key + "=" + originalPin + ":-:0\n");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, authorityDirectory);
+		CountDownLatch received = new CountDownLatch(1);
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, ignored -> received.countDown())) {
+			Path clientDirectory = directory.resolve("pointer-client");
+			HttpConnectionCode code = new HttpConnectionCode("lobby-1", server.endpoint("localhost"),
+					identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(60), "A".repeat(43));
+			HttpClientCredentialStore.saveEnrolled(clientDirectory, code, expiring);
+			server.start();
+			try (HttpBackendTransportConnector connector = new HttpBackendTransportConnector(clientDirectory, ignored -> { })) {
+				var renew = HttpBackendTransportConnector.class.getDeclaredMethod("maybeRenewCredential");
+				renew.setAccessible(true);
+				var pending = HttpBackendTransportConnector.class.getDeclaredField("pendingActivation");
+				pending.setAccessible(true);
+				var credential = HttpBackendTransportConnector.class.getDeclaredField("credential");
+				credential.setAccessible(true);
+				Path pointer = clientDirectory.resolve("http-transport-client-current");
+				String generation;
+				try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+						org.mockito.Mockito.CALLS_REAL_METHODS)) {
+					AtomicLong clientDirectoryForces = new AtomicLong();
+					forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(clientDirectory))
+							.thenAnswer(call -> {
+								// Staging first confirms the existing directory. Subsequent forces
+								// are the CURRENT pointer publication and its same-generation retry.
+								if (clientDirectoryForces.incrementAndGet() > 1L)
+									throw new java.io.IOException("injected pointer force failure");
+								return call.callRealMethod();
+							});
+					renew.invoke(connector);
+					generation = Files.readString(pointer);
+					var selected = HttpClientCredentialStore.load(clientDirectory);
+					String selectedPin = HttpTransportSecrets.certificatePin(selected.certificate());
+					assertFalse(originalPin.equals(selectedPin));
+					assertEquals(selectedPin, HttpTransportSecrets.certificatePin(
+							((HttpClientCredentialStore.ClientCredential) credential.get(connector)).certificate()));
+					assertTrue(pending.get(connector) != null);
+					assertTrue(authority.authenticate("lobby-1", selected.certificate()));
+					assertFalse(authority.authenticate("lobby-1", expiring.certificate()));
+					renew.invoke(connector);
+					assertEquals(generation, Files.readString(pointer));
+					assertTrue(pending.get(connector) != null, "failed retry must retain the same pending activation");
+				}
+				renew.invoke(connector);
+				assertTrue(pending.get(connector) == null);
+				assertEquals(generation, Files.readString(pointer));
+				connector.start();
+				assertTrue(connector.send(JsonEnvelope.builder("after-pointer-recovery").build()));
+				assertTrue(received.await(8, TimeUnit.SECONDS), "transport must use the adopted TLS client");
 			}
 		}
 	}

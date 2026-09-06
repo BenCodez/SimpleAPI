@@ -383,8 +383,12 @@ public final class HttpClientCredentialStore {
 			DurableFiles.forceFile(temporary);
 			try { Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
 			catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING); }
-			setOwnerOnly(file);
-			DurableFiles.forceDirectory(file.getParent());
+			try {
+				setOwnerOnly(file);
+				DurableFiles.forceDirectory(file.getParent());
+			} catch (IOException postPublicationFailure) {
+				throw new DurableFiles.PublishedException(postPublicationFailure);
+			}
 		} finally { Files.deleteIfExists(temporary); }
 	}
 

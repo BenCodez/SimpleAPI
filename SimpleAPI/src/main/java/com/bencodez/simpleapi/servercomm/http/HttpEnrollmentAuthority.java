@@ -54,6 +54,8 @@ public final class HttpEnrollmentAuthority {
 	}
 
 	public synchronized HttpConnectionCode createConnectionCode(String serverId, URI endpoint, Duration lifetime) {
+		if (revocationRetryRequired)
+			throw new IllegalStateException("HTTP certificate revocation durability must be retried");
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
 		if (lifetime == null || lifetime.isNegative() || lifetime.isZero() || lifetime.compareTo(MAX_ENROLLMENT_LIFETIME) > 0)
 			throw new IllegalArgumentException("Enrollment lifetime must be between one second and fifteen minutes");
@@ -74,6 +76,10 @@ public final class HttpEnrollmentAuthority {
 	}
 
 	public synchronized HttpTlsIdentity.IssuedClientCertificate enroll(String serverId, String enrollmentToken) throws Exception {
+		// A failed revoke may have restored a still-valid pending token in memory.
+		// Do not let enrollment persist that stale state before the revoke is retried.
+		if (revocationRetryRequired)
+			throw new java.io.IOException("HTTP certificate revocation durability must be retried");
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
 		if (enrollmentToken == null || enrollmentToken.length() > 128) throw new IllegalArgumentException("Enrollment was rejected");
 		expireEnrollments();

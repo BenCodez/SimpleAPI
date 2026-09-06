@@ -69,6 +69,9 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private volatile Thread poller;
 	private long sequence;
 	private volatile long nextRenewalCheckNanos;
+	// Guarded by renewal: do not supersede a visibly published credential until
+	// the pointer selecting it has been confirmed durable.
+	private HttpClientCredentialStore.StagedCredential pendingActivation;
 
 	/** In-memory test constructor; production transport must use a directory-backed constructor. */
 	HttpBackendTransportConnector(HttpConnectionCode code, String serverId,
@@ -417,7 +420,14 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private void maybeRenewCredential() {
 		synchronized (renewal) {
 			Path directory = credentialDirectory;
-			if (directory == null || !HttpTlsIdentity.needsRenewal(credential.certificate(), Clock.systemUTC())) return;
+			if (directory == null) return;
+			if (pendingActivation != null) {
+				try {
+					HttpClientCredentialStore.activateReplacement(directory, pendingActivation);
+					pendingActivation = null;
+				} catch (IOException unconfirmed) { return; }
+			}
+			if (!HttpTlsIdentity.needsRenewal(credential.certificate(), Clock.systemUTC())) return;
 			long now = System.nanoTime();
 			if (nextRenewalCheckNanos != 0L && now - nextRenewalCheckNanos < 0L) return;
 			Duration retry = renewalRetryDelay(Duration.between(Instant.now(),
@@ -438,7 +448,12 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				HttpClientCredentialStore.HttpClientProfile replacementProfile = staged.profile();
 				if (!matchesCredential(replacementProfile, replacement)) throw new IllegalArgumentException("Renewed HTTP certificate is invalid");
 				HttpClient replacementClient = client(replacementProfile, replacement);
-				HttpClientCredentialStore.activateReplacement(directory, staged);
+				try { HttpClientCredentialStore.activateReplacement(directory, staged); }
+				catch (com.bencodez.simpleapi.file.DurableFiles.PublishedException published) {
+					// CURRENT already selects this generation. Adopt it in memory as well,
+					// and retry this publication before requesting any newer certificate.
+					pendingActivation = staged;
+				}
 				profile = replacementProfile;
 				client = replacementClient;
 				credential = replacement;
