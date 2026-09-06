@@ -48,6 +48,7 @@ class HttpOutgoingQueueCapacityTest {
 		HttpProxyTransportServer.BackendState existingServer = new HttpProxyTransportServer.BackendState(
 				"server-0", queue, (server, id) -> { });
 		assertTrue(existingServer.enqueue(existingDelivery), "same-server retry must recover its quarantine at capacity");
+		queue.close();
 
 		HttpProxyTransportServer.DurableOutgoingQueue restarted = new HttpProxyTransportServer.DurableOutgoingQueue(
 				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
@@ -72,5 +73,6 @@ class HttpOutgoingQueueCapacityTest {
 		}
 		assertEquals(128L, durableFiles, "each seeded delivery must remain represented exactly once");
 		assertEquals(128, deliveryIds.size());
+		restarted.close();
 	}
 }

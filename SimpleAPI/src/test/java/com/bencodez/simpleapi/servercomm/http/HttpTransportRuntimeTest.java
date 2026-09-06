@@ -177,6 +177,8 @@ class HttpTransportRuntimeTest {
 		assertEquals(2L, serverRootForces.get(), "failed publication and empty-directory cleanup must both force the parent");
 		assertTrue(state.enqueue(delivery));
 		assertEquals(3L, serverRootForces.get(), "retrying backend directory creation must force its parent again");
+		queue.close();
+		serverQueue.close();
 	}
 
 	@Test
@@ -255,6 +257,7 @@ class HttpTransportRuntimeTest {
 				"target fallback must clear the stale quarantine index");
 		state.acknowledge(java.util.List.of(deliveryId));
 		assertFalse(Files.exists(serverDirectory));
+		queue.close();
 	}
 
 	@Test
@@ -275,6 +278,7 @@ class HttpTransportRuntimeTest {
 		assertTrue(state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty(),
 				"an uncertain publication must remain hidden until its durability retry succeeds");
 		assertEquals(1L, countRegularFiles(queueRoot));
+		queue.close();
 		HttpProxyTransportServer.DurableOutgoingQueue restartedQueue = new HttpProxyTransportServer.DurableOutgoingQueue(
 				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
 		assertTrue(restartedQueue.load().isEmpty(),
@@ -286,6 +290,7 @@ class HttpTransportRuntimeTest {
 		assertEquals(1L, countRegularFiles(queueRoot), "durability retry must not create a duplicate file");
 		assertEquals(java.util.List.of(delivery),
 				restarted.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages());
+		restartedQueue.close();
 		HttpProxyTransportServer.DurableOutgoingQueue confirmedQueue = new HttpProxyTransportServer.DurableOutgoingQueue(
 				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
 		java.util.List<HttpTransportProtocol.Delivery> confirmed = confirmedQueue.load().get("lobby-1");
@@ -293,8 +298,12 @@ class HttpTransportRuntimeTest {
 		assertTrue(java.util.Arrays.equals(HttpTransportProtocol.storedDelivery(delivery),
 				HttpTransportProtocol.storedDelivery(confirmed.get(0))),
 				"a confirmed same-ID retry must become deliverable after restart");
-		restarted.acknowledge(java.util.List.of(deliveryId));
+		HttpProxyTransportServer.BackendState confirmedState = new HttpProxyTransportServer.BackendState(
+				"lobby-1", confirmedQueue, (server, id) -> { });
+		assertTrue(confirmedState.enqueue(delivery));
+		confirmedState.acknowledge(java.util.List.of(deliveryId));
 		assertEquals(0L, countRegularFiles(queueRoot), "the tracked published file must be removable by ACK");
+		confirmedQueue.close();
 	}
 
 	@Test
@@ -316,9 +325,11 @@ class HttpTransportRuntimeTest {
 		failForces.set(false);
 		assertTrue(state.enqueue(delivery), "a same-ID retry must recover the observed quarantine");
 		assertEquals(1L, countRegularFiles(queueRoot), "recovery must not leave duplicate queue entries");
+		queue.close();
 		HttpProxyTransportServer.DurableOutgoingQueue restarted = new HttpProxyTransportServer.DurableOutgoingQueue(
 				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
 		assertEquals(1, restarted.load().get("lobby-1").size());
+		restarted.close();
 	}
 
 	@Test

@@ -13,6 +13,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -110,20 +113,17 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		this.identity = identity; this.authority = authority; this.onEnvelope = onEnvelope;
 		this.onAcknowledged = onAcknowledged; this.nanoTime = nanoTime;
 		durableOutgoing = outgoingDirectory == null ? null : new DurableOutgoingQueue(outgoingDirectory);
-		durableIncomingRoot = outgoingDirectory == null ? null : incomingRoot(outgoingDirectory);
+		HttpsServer createdServer = null;
+		ThreadPoolExecutor createdListener = null, createdHandler = null;
 		try {
+			durableIncomingRoot = outgoingDirectory == null ? null : incomingRoot(outgoingDirectory);
 			if (durableOutgoing != null) for (Map.Entry<String, List<HttpTransportProtocol.Delivery>> pending
 					: durableOutgoing.load().entrySet()) {
 				BackendState state = backendState(pending.getKey());
 				state.restore(pending.getValue());
 			}
-		} catch (Exception | Error setupFailure) {
-			releaseBackendOwnership();
-			throw setupFailure;
-		}
-		try {
-			server = HttpsServer.create(bind, 32);
-			server.setHttpsConfigurator(new HttpsConfigurator(identity.serverContext()) {
+			createdServer = HttpsServer.create(bind, 32);
+			createdServer.setHttpsConfigurator(new HttpsConfigurator(identity.serverContext()) {
 				@Override public void configure(HttpsParameters parameters) {
 					SSLParameters ssl = HttpPinnedTls.secureParameters(getSSLContext());
 					ssl.setWantClientAuth(true); parameters.setSSLParameters(ssl);
@@ -131,17 +131,24 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			});
 			// Long polls are blocking by design. Capacity is bounded by admission, while enough workers
 			// remain available for all admitted polls plus setup requests.
-			listenerExecutor = executor("SimpleAPI-HTTP-listener", 72, 72);
+			createdListener = executor("SimpleAPI-HTTP-listener", 72, 72);
 			// The proxy router mutates shared presence, vote, and reward state. A separate
 			// bounded FIFO lane keeps wire order without blocking long-poll workers.
-			handlerExecutor = executor("SimpleAPI-HTTP-handler", 1,
+			createdHandler = executor("SimpleAPI-HTTP-handler", 1,
 					HttpBackendTransportConnector.CALLBACK_QUEUE_CAPACITY, handlerWorker);
-			server.setExecutor(listenerExecutor);
-			server.createContext("/v1/enroll", exchange -> enroll((HttpsExchange) exchange));
-			server.createContext("/v1/renew", exchange -> renew((HttpsExchange) exchange));
-			server.createContext("/v1/transport", exchange -> transport((HttpsExchange) exchange));
+			createdServer.setExecutor(createdListener);
+			createdServer.createContext("/v1/enroll", exchange -> enroll((HttpsExchange) exchange));
+			createdServer.createContext("/v1/renew", exchange -> renew((HttpsExchange) exchange));
+			createdServer.createContext("/v1/transport", exchange -> transport((HttpsExchange) exchange));
+			server = createdServer;
+			listenerExecutor = createdListener;
+			handlerExecutor = createdHandler;
 		} catch (Exception | Error setupFailure) {
+			if (createdServer != null) createdServer.stop(0);
+			if (createdHandler != null) shutdown(createdHandler);
+			if (createdListener != null) shutdown(createdListener);
 			releaseBackendOwnership();
+			if (durableOutgoing != null) durableOutgoing.close();
 			throw setupFailure;
 		}
 	}
@@ -257,14 +264,18 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 
 	private void finishClose() {
 		try {
-			shutdown(handlerExecutor);
-			shutdown(listenerExecutor);
-			synchronized (backends) {
-				for (BackendState backend : backends.values()) { backend.seal(); backend.signal(); }
-				backends.clear();
-			}
+			try { shutdown(handlerExecutor); }
+			finally { shutdown(listenerExecutor); }
 		} finally {
-			synchronized (closeMonitor) { closeFinalizing = false; closeFinalized = true; closeMonitor.notifyAll(); }
+			try {
+				synchronized (backends) {
+					for (BackendState backend : backends.values()) { backend.seal(); backend.signal(); }
+					backends.clear();
+				}
+			} finally { try { if (durableOutgoing != null) durableOutgoing.close(); }
+			finally {
+				synchronized (closeMonitor) { closeFinalizing = false; closeFinalized = true; closeMonitor.notifyAll(); }
+			} }
 		}
 	}
 
@@ -659,7 +670,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized void signal() { notifyAll(); }
 	}
 
-	static final class DurableOutgoingQueue {
+	static final class DurableOutgoingQueue implements AutoCloseable {
 		@FunctionalInterface
 		interface DirectoryForcer { void force(Path directory) throws IOException; }
 		private static final String FILE_PATTERN = "[0-9]{20}-[0-9a-f-]{36}\\.json";
@@ -667,6 +678,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private final DirectoryForcer directoryForcer;
 		private final Map<String, Map<String, Path>> files = new HashMap<>();
 		private final Map<String, Map<String, Path>> quarantinedFiles = new HashMap<>();
+		private FileChannel ownershipChannel;
+		private FileLock ownershipLock;
 		private long sequence;
 
 		private DurableOutgoingQueue(Path root) throws IOException {
@@ -678,17 +691,27 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				throw new IllegalArgumentException("HTTP outgoing queue configuration is required");
 			this.directoryForcer = directoryForcer;
 			this.root = root.toAbsolutePath().normalize();
-			try { Files.createDirectory(this.root); }
-			catch (java.nio.file.FileAlreadyExistsException existing) { }
-			if (Files.isSymbolicLink(this.root) || !Files.isDirectory(this.root, LinkOption.NOFOLLOW_LINKS))
+			Path parent = this.root.getParent();
+			if (parent == null || this.root.getFileName() == null)
 				throw new IOException("HTTP outgoing queue directory is invalid");
-			PrivateFilePermissions.ownerOnlyDirectory(this.root);
-			// A failed parent fsync can leave the directory present but not durable.
-			// Reopening must retry it before the queue can accept work.
-			directoryForcer.force(this.root.getParent());
+			try {
+				claimOwnership(parent.resolve("." + this.root.getFileName() + ".http-outgoing-owner.lock"));
+				try { Files.createDirectory(this.root); }
+				catch (java.nio.file.FileAlreadyExistsException existing) { }
+				if (Files.isSymbolicLink(this.root) || !Files.isDirectory(this.root, LinkOption.NOFOLLOW_LINKS))
+					throw new IOException("HTTP outgoing queue directory is invalid");
+				PrivateFilePermissions.ownerOnlyDirectory(this.root);
+				// A failed parent fsync can leave the directory present but not durable.
+				// Reopening must retry it before the queue can accept work.
+				directoryForcer.force(parent);
+			} catch (IOException | RuntimeException setupFailure) {
+				releaseOwnership();
+				throw setupFailure;
+			}
 		}
 
 		synchronized Map<String, List<HttpTransportProtocol.Delivery>> load() throws IOException {
+			requireOwnership();
 			Map<String, List<HttpTransportProtocol.Delivery>> loaded = new LinkedHashMap<>();
 			int serverDirectories = 0;
 			try (DirectoryStream<Path> servers = Files.newDirectoryStream(root)) {
@@ -762,6 +785,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		}
 
 		private synchronized void persist(String serverId, HttpTransportProtocol.Delivery delivery) throws IOException {
+			requireOwnership();
 			Path directory = root.resolve(serverId).normalize();
 			if (!directory.getParent().equals(root)) throw new IOException("HTTP outgoing queue server is invalid");
 			if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS) && serverDirectoryCount() >= MAX_BACKENDS)
@@ -903,6 +927,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		}
 
 		private synchronized void confirm(String serverId, String id) throws IOException {
+			requireOwnership();
 			Map<String, Path> serverFiles = files.get(serverId);
 			Path file = serverFiles == null ? null : serverFiles.get(id);
 			if (file == null || Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
@@ -912,6 +937,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		}
 
 		private synchronized void remove(String serverId, String id) throws IOException {
+			requireOwnership();
 			Map<String, Path> serverFiles = files.get(serverId);
 			if (serverFiles == null) throw new IOException("HTTP outgoing queue acknowledgement is unknown");
 			Path file = serverFiles.get(id);
@@ -934,6 +960,40 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					// must not make its acknowledgement permanently unprocessable.
 				}
 			}
+		}
+
+		@Override public synchronized void close() { releaseOwnership(); }
+
+		private void requireOwnership() throws IOException {
+			if (ownershipLock == null || !ownershipLock.isValid())
+				throw new IOException("HTTP outgoing queue ownership has ended");
+		}
+		private void claimOwnership(Path sidecar) throws IOException {
+			if (Files.isSymbolicLink(sidecar) || Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+					&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
+				throw new IOException("HTTP outgoing queue ownership lock is unsafe");
+			FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+					LinkOption.NOFOLLOW_LINKS);
+			try {
+				PrivateFilePermissions.ownerOnlyFile(sidecar);
+				FileLock lock;
+				try { lock = channel.tryLock(); }
+				catch (OverlappingFileLockException alreadyOwned) { throw new IOException("HTTP outgoing queue is already owned", alreadyOwned); }
+				if (lock == null) throw new IOException("HTTP outgoing queue is already owned");
+				ownershipChannel = channel;
+				ownershipLock = lock;
+			} catch (IOException | RuntimeException failure) {
+				try { channel.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
+				throw failure;
+			}
+		}
+		private void releaseOwnership() {
+			FileLock lock = ownershipLock;
+			FileChannel channel = ownershipChannel;
+			ownershipLock = null;
+			ownershipChannel = null;
+			if (lock != null) try { lock.release(); } catch (IOException ignored) { }
+			if (channel != null) try { channel.close(); } catch (IOException ignored) { }
 		}
 
 	}

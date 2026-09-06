@@ -83,12 +83,15 @@ class HttpProxyLifecycleRecoveryTest {
 		assertFalse(Files.exists(root.resolve("lobby-1")),
 				"a failed setup must not leave an empty backend directory consuming the global bound");
 		assertTrue(state.enqueue(delivery));
+		queue.close();
 	}
 
 	@Test
 	void restartPrunesAccumulatedEmptyBackendDirectoriesBeforeApplyingTheCap() throws Exception {
 		Path root = directory.resolve("outgoing");
-		new HttpProxyTransportServer.DurableOutgoingQueue(root, ignored -> { });
+		HttpProxyTransportServer.DurableOutgoingQueue initial = new HttpProxyTransportServer.DurableOutgoingQueue(root,
+				ignored -> { });
+		initial.close();
 		for (int index = 0; index < 128; index++) Files.createDirectory(root.resolve("server-" + index));
 
 		HttpProxyTransportServer.DurableOutgoingQueue restarted = new HttpProxyTransportServer.DurableOutgoingQueue(root,
@@ -99,6 +102,7 @@ class HttpProxyLifecycleRecoveryTest {
 		assertTrue(state.enqueue(new HttpTransportProtocol.Delivery(UUID.randomUUID().toString(),
 				JsonEnvelope.builder("recovered-capacity").build())));
 		assertTrue(Files.isDirectory(root.resolve("replacement")));
+		restarted.close();
 	}
 
 	@Test
@@ -132,5 +136,6 @@ class HttpProxyLifecycleRecoveryTest {
 			lobby.acknowledge(List.of(delivery.id()));
 		}
 		assertFalse(Files.exists(lobbyDirectory), "the same acknowledgement retry must be able to finish cleanup");
+		queue.close();
 	}
 }

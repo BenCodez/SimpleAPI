@@ -39,6 +39,7 @@ final class HttpInboundDeliveryStore {
 	private FileChannel ownershipChannel;
 	private FileLock ownershipLock;
 	private boolean sealed;
+	private boolean retirementRecoveryRequired;
 
 	HttpInboundDeliveryStore(Path credentialDirectory) throws IOException {
 		this(credentialDirectory, DIRECTORY, false);
@@ -173,12 +174,13 @@ final class HttpInboundDeliveryStore {
 		try (DirectoryStream<Path> files = Files.newDirectoryStream(root)) {
 			if (files.iterator().hasNext()) throw new IOException("HTTP inbound delivery directory is not empty");
 		}
-		sealed = true;
 		Path parent = root.getParent();
-		try {
-			Files.delete(root);
-			DurableFiles.forceDirectory(parent);
-		} finally { releaseOwnership(); }
+		// Keep exclusive ownership if deletion or its publication cannot be confirmed.
+		// The live backend may retry retirement or reconnect and resume journal writes.
+		retirementRecoveryRequired = true;
+		Files.delete(root);
+		DurableFiles.forceDirectory(parent);
+		seal();
 	}
 
 	synchronized void remove(String id) throws IOException {
@@ -334,6 +336,14 @@ final class HttpInboundDeliveryStore {
 	private void requireWritable() throws IOException {
 		if (readOnly || sealed || ownershipLock == null || !ownershipLock.isValid())
 			throw new IOException("HTTP inbound delivery store ownership has ended");
+		if (retirementRecoveryRequired) {
+			try { Files.createDirectory(root); }
+			catch (java.nio.file.FileAlreadyExistsException existing) { }
+			requireRoot();
+			PrivateFilePermissions.ownerOnlyDirectory(root);
+			DurableFiles.forceDirectory(root.getParent());
+			retirementRecoveryRequired = false;
+		}
 	}
 	private void claimOwnership(Path sidecar) throws IOException {
 		if (Files.isSymbolicLink(sidecar) || Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
