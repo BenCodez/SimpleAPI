@@ -131,6 +131,42 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void outgoingQueueRetriesDirectoryPublicationAfterForceFailure() throws Exception {
+		Path queueRoot = directory.resolve("retry-outgoing-root");
+		java.util.concurrent.atomic.AtomicBoolean failRootPublication = new java.util.concurrent.atomic.AtomicBoolean(true);
+		assertThrows(java.io.IOException.class, () -> new HttpProxyTransportServer.DurableOutgoingQueue(queueRoot,
+				ignored -> {
+					if (failRootPublication.getAndSet(false))
+						throw new java.io.IOException("injected root publication failure");
+				}));
+		assertTrue(Files.isDirectory(queueRoot), "the failed force occurs after the root name is published");
+		AtomicLong parentForces = new AtomicLong();
+		HttpProxyTransportServer.DurableOutgoingQueue queue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, forced -> {
+					if (forced.equals(queueRoot.getParent())) parentForces.incrementAndGet();
+				});
+		assertEquals(1L, parentForces.get(), "reopening an existing root must retry its parent fsync");
+
+		AtomicLong serverRootForces = new AtomicLong();
+		java.util.concurrent.atomic.AtomicBoolean failServerPublication = new java.util.concurrent.atomic.AtomicBoolean(true);
+		HttpProxyTransportServer.DurableOutgoingQueue serverQueue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				directory.resolve("retry-outgoing-server"), forced -> {
+					if (forced.getFileName().toString().equals("retry-outgoing-server")) {
+						serverRootForces.incrementAndGet();
+						if (failServerPublication.getAndSet(false))
+							throw new java.io.IOException("injected backend publication failure");
+					}
+				});
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+				"lobby-1", serverQueue, (server, id) -> { });
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(
+				java.util.UUID.randomUUID().toString(), JsonEnvelope.builder("retry-directory-force").build());
+		assertFalse(state.enqueue(delivery));
+		assertTrue(state.enqueue(delivery));
+		assertEquals(2L, serverRootForces.get(), "retrying an existing backend directory must force its parent again");
+	}
+
+	@Test
 	void publishedOutgoingDeliveryRemainsTrackedUntilDurabilityCanBeConfirmed() throws Exception {
 		AtomicLong forceCalls = new AtomicLong();
 		Path queueRoot = directory.resolve("uncertain-outgoing");
@@ -148,12 +184,50 @@ class HttpTransportRuntimeTest {
 		assertTrue(state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty(),
 				"an uncertain publication must remain hidden until its durability retry succeeds");
 		assertEquals(1L, countRegularFiles(queueRoot));
-		assertTrue(state.enqueue(delivery), "same-ID retry must confirm the existing published file");
+		HttpProxyTransportServer.DurableOutgoingQueue restartedQueue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
+		assertTrue(restartedQueue.load().isEmpty(),
+				"a restart must not expose an operation whose sender observed rejection");
+		HttpProxyTransportServer.BackendState restarted = new HttpProxyTransportServer.BackendState(
+				"lobby-1", restartedQueue, (server, id) -> { });
+		assertTrue(restarted.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty());
+		assertTrue(restarted.enqueue(delivery), "same-ID retry must confirm the quarantined file");
 		assertEquals(1L, countRegularFiles(queueRoot), "durability retry must not create a duplicate file");
 		assertEquals(java.util.List.of(delivery),
-				state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages());
-		state.acknowledge(java.util.List.of(deliveryId));
+				restarted.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages());
+		HttpProxyTransportServer.DurableOutgoingQueue confirmedQueue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
+		java.util.List<HttpTransportProtocol.Delivery> confirmed = confirmedQueue.load().get("lobby-1");
+		assertEquals(1, confirmed.size());
+		assertTrue(java.util.Arrays.equals(HttpTransportProtocol.storedDelivery(delivery),
+				HttpTransportProtocol.storedDelivery(confirmed.get(0))),
+				"a confirmed same-ID retry must become deliverable after restart");
+		restarted.acknowledge(java.util.List.of(deliveryId));
 		assertEquals(0L, countRegularFiles(queueRoot), "the tracked published file must be removable by ACK");
+	}
+
+	@Test
+	void unresolvedOutgoingPublicationDoesNotReportAFalseRejection() throws Exception {
+		AtomicLong forceCalls = new AtomicLong();
+		java.util.concurrent.atomic.AtomicBoolean failForces = new java.util.concurrent.atomic.AtomicBoolean(true);
+		Path queueRoot = directory.resolve("unresolved-outgoing");
+		HttpProxyTransportServer.DurableOutgoingQueue queue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, ignored -> {
+					if (forceCalls.incrementAndGet() >= 3L && failForces.get())
+						throw new java.io.IOException("persistent directory force failure");
+				});
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+				"lobby-1", queue, (server, id) -> { });
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(
+				java.util.UUID.randomUUID().toString(), JsonEnvelope.builder("unresolved").build());
+		assertThrows(IllegalStateException.class, () -> state.enqueue(delivery),
+				"an indeterminate rollback must not be reported as a definitive false result");
+		failForces.set(false);
+		assertTrue(state.enqueue(delivery), "a same-ID retry must recover the observed quarantine");
+		assertEquals(1L, countRegularFiles(queueRoot), "recovery must not leave duplicate queue entries");
+		HttpProxyTransportServer.DurableOutgoingQueue restarted = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
+		assertEquals(1, restarted.load().get("lobby-1").size());
 	}
 
 	@Test

@@ -40,15 +40,12 @@ final class HttpInboundDeliveryStore {
 		ownerOnlyDirectory(credentials);
 		root = credentials.resolve(directoryName).normalize();
 		if (!root.getParent().equals(credentials)) throw new IOException("HTTP inbound delivery directory is invalid");
-		boolean created = false;
-		try { Files.createDirectory(root); created = true; }
+		try { Files.createDirectory(root); }
 		catch (java.nio.file.FileAlreadyExistsException existing) { }
-		try {
-			requireRoot();
-			ownerOnlyDirectory(root);
-		} finally {
-			if (created) DurableFiles.forceDirectory(credentials);
-		}
+		requireRoot();
+		ownerOnlyDirectory(root);
+		// Retry a parent fsync that may have failed after creating this root.
+		DurableFiles.forceDirectory(credentials);
 		load();
 	}
 

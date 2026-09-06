@@ -284,13 +284,14 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		Path parent = outgoing.getParent();
 		if (parent == null || outgoing.getFileName() == null) throw new IOException("HTTP incoming queue path is invalid");
 		Path root = parent.resolve(outgoing.getFileName().toString() + "-incoming");
-		boolean created = false;
-		try { Files.createDirectory(root); created = true; }
+		try { Files.createDirectory(root); }
 		catch (java.nio.file.FileAlreadyExistsException existing) { }
 		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP incoming queue directory is invalid");
 		DurableOutgoingQueue.ownerOnlyDirectory(root);
-		if (created) DurableFiles.forceDirectory(parent);
+		// Retry publication durability even when an earlier attempt created the
+		// directory but failed before its parent could be forced.
+		DurableFiles.forceDirectory(parent);
 		return root;
 	}
 	private static JsonEnvelope normalizeBackendIdentity(String serverId, JsonEnvelope envelope) {
@@ -540,6 +541,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private final Path root;
 		private final DirectoryForcer directoryForcer;
 		private final Map<String, Map<String, Path>> files = new HashMap<>();
+		private final Map<String, Map<String, Path>> quarantinedFiles = new HashMap<>();
 		private long sequence;
 
 		private DurableOutgoingQueue(Path root) throws IOException {
@@ -551,19 +553,17 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				throw new IllegalArgumentException("HTTP outgoing queue configuration is required");
 			this.directoryForcer = directoryForcer;
 			this.root = root.toAbsolutePath().normalize();
-			boolean created = false;
-			try { Files.createDirectory(this.root); created = true; }
+			try { Files.createDirectory(this.root); }
 			catch (java.nio.file.FileAlreadyExistsException existing) { }
-			try {
-				if (Files.isSymbolicLink(this.root) || !Files.isDirectory(this.root, LinkOption.NOFOLLOW_LINKS))
-					throw new IOException("HTTP outgoing queue directory is invalid");
-				ownerOnlyDirectory(this.root);
-			} finally {
-				if (created) directoryForcer.force(this.root.getParent());
-			}
+			if (Files.isSymbolicLink(this.root) || !Files.isDirectory(this.root, LinkOption.NOFOLLOW_LINKS))
+				throw new IOException("HTTP outgoing queue directory is invalid");
+			ownerOnlyDirectory(this.root);
+			// A failed parent fsync can leave the directory present but not durable.
+			// Reopening must retry it before the queue can accept work.
+			directoryForcer.force(this.root.getParent());
 		}
 
-		private synchronized Map<String, List<HttpTransportProtocol.Delivery>> load() throws IOException {
+		synchronized Map<String, List<HttpTransportProtocol.Delivery>> load() throws IOException {
 			Map<String, List<HttpTransportProtocol.Delivery>> loaded = new LinkedHashMap<>();
 			int serverDirectories = 0;
 			try (DirectoryStream<Path> servers = Files.newDirectoryStream(root)) {
@@ -583,6 +583,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					entries.sort(java.util.Comparator.comparing(path -> path.getFileName().toString()));
 					List<HttpTransportProtocol.Delivery> deliveries = new java.util.ArrayList<>();
 					Map<String, Path> serverFiles = files.computeIfAbsent(serverId, ignored -> new HashMap<>());
+					Map<String, Path> quarantined = quarantinedFiles.computeIfAbsent(serverId, ignored -> new HashMap<>());
+					int durableEntries = 0;
 					for (Path message : entries) {
 						String name = message.getFileName().toString();
 						if (name.startsWith(".pending-") && name.endsWith(".tmp")
@@ -590,19 +592,31 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 							DurableFiles.deleteIfExists(message);
 							continue;
 						}
-						if (name.startsWith(".pending-") && name.endsWith(".json")
-								&& !Files.isSymbolicLink(message) && Files.isRegularFile(message, LinkOption.NOFOLLOW_LINKS))
+						if (name.startsWith(".pending-") && name.endsWith(".json")) {
+							if (Files.isSymbolicLink(message) || !Files.isRegularFile(message, LinkOption.NOFOLLOW_LINKS)
+									|| Files.size(message) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L)
+								throw new IOException("HTTP outgoing queue quarantine is invalid");
+							HttpTransportProtocol.Delivery delivery;
+							try { delivery = HttpTransportProtocol.parseStoredDelivery(Files.readAllBytes(message)); }
+							catch (IllegalArgumentException invalid) { throw new IOException("HTTP outgoing queue quarantine is invalid", invalid); }
+							if (!name.equals(".pending-" + delivery.id() + ".json")
+									|| serverFiles.containsKey(delivery.id()) || quarantined.put(delivery.id(), message) != null)
+								throw new IOException("HTTP outgoing queue quarantine id is invalid");
+							if (++durableEntries > HttpTransportProtocol.MAX_QUEUE)
+								throw new IOException("HTTP outgoing queue exceeds its bound");
 							continue;
+						}
 						if (Files.isSymbolicLink(message) || !Files.isRegularFile(message, LinkOption.NOFOLLOW_LINKS)
 								|| !name.matches(FILE_PATTERN) || Files.size(message) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L)
 							throw new IOException("HTTP outgoing queue message is invalid");
 						HttpTransportProtocol.Delivery delivery;
 						try { delivery = HttpTransportProtocol.parseStoredDelivery(Files.readAllBytes(message)); }
 						catch (IllegalArgumentException invalid) { throw new IOException("HTTP outgoing queue message is invalid", invalid); }
-						if (!name.endsWith("-" + delivery.id() + ".json") || serverFiles.put(delivery.id(), message) != null)
+						if (!name.endsWith("-" + delivery.id() + ".json") || quarantined.containsKey(delivery.id())
+								|| serverFiles.put(delivery.id(), message) != null)
 							throw new IOException("HTTP outgoing queue message id is invalid");
 						deliveries.add(delivery);
-						if (deliveries.size() > HttpTransportProtocol.MAX_QUEUE)
+						if (++durableEntries > HttpTransportProtocol.MAX_QUEUE)
 							throw new IOException("HTTP outgoing queue exceeds its bound");
 						sequence = Math.max(sequence, Long.parseLong(name.substring(0, 20)));
 					}
@@ -615,19 +629,16 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized void persist(String serverId, HttpTransportProtocol.Delivery delivery) throws IOException {
 			Path directory = root.resolve(serverId).normalize();
 			if (!directory.getParent().equals(root)) throw new IOException("HTTP outgoing queue server is invalid");
-			boolean created = false;
-			try { Files.createDirectory(directory); created = true; }
+			try { Files.createDirectory(directory); }
 			catch (java.nio.file.FileAlreadyExistsException existing) { }
-			try {
-				if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
-					throw new IOException("HTTP outgoing queue server directory is invalid");
-				ownerOnlyDirectory(directory);
-			} finally {
-				// The child fsync below cannot make this newly published name durable in
-				// its parent. Persist the root entry before accepting the first message.
-				if (created) directoryForcer.force(root);
-			}
+			if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
+				throw new IOException("HTTP outgoing queue server directory is invalid");
+			ownerOnlyDirectory(directory);
+			// The child fsync below cannot make this published name durable in its
+			// parent. Repeat it so a prior failed attempt is recoverable.
+			directoryForcer.force(root);
 			Map<String, Path> serverFiles = files.computeIfAbsent(serverId, ignored -> new HashMap<>());
+			Map<String, Path> quarantined = quarantinedFiles.computeIfAbsent(serverId, ignored -> new HashMap<>());
 			Path existing = serverFiles.get(delivery.id());
 			if (existing != null) {
 				if (Files.isSymbolicLink(existing) || !Files.isRegularFile(existing, LinkOption.NOFOLLOW_LINKS)
@@ -638,26 +649,27 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				directoryForcer.force(directory);
 				return;
 			}
-			Path pending = directory.resolve(".pending-" + delivery.id() + ".json");
-			if (Files.isRegularFile(pending, LinkOption.NOFOLLOW_LINKS)) {
-				if (Files.isSymbolicLink(pending) || Files.size(pending) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L
+			Path pending = quarantined.get(delivery.id());
+			if (pending != null) {
+				if (Files.isSymbolicLink(pending) || !Files.isRegularFile(pending, LinkOption.NOFOLLOW_LINKS)
+						|| Files.size(pending) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L
 						|| !Arrays.equals(Files.readAllBytes(pending), HttpTransportProtocol.storedDelivery(delivery)))
 					throw new IOException("HTTP outgoing queue delivery id conflicts with persisted data");
+				if (sequence == Long.MAX_VALUE) throw new IOException("HTTP outgoing queue sequence is exhausted");
 				String name = String.format(java.util.Locale.ROOT, "%020d-%s.json", ++sequence, delivery.id());
 				Path target = directory.resolve(name);
 				try { Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE); }
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(pending, target); }
 				try { ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
-					try {
-						Files.deleteIfExists(pending);
-						Files.move(target, pending, StandardCopyOption.ATOMIC_MOVE);
-					} catch (IOException ignored) { }
-					throw new DurableFiles.PublishedException(postPublicationFailure);
+					quarantinePublished(directory, target, pending, quarantined, delivery.id(), postPublicationFailure);
 				}
+				quarantined.remove(delivery.id());
 				serverFiles.put(delivery.id(), target);
 				return;
 			}
+			if (serverFiles.size() + quarantined.size() >= HttpTransportProtocol.MAX_QUEUE)
+				throw new IOException("HTTP outgoing queue exceeds its bound");
 			if (sequence == Long.MAX_VALUE) throw new IOException("HTTP outgoing queue sequence is exhausted");
 			String name = String.format(java.util.Locale.ROOT, "%020d-%s.json", ++sequence, delivery.id());
 			Path target = directory.resolve(name);
@@ -670,14 +682,28 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, target); }
 				try { ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
-					try {
-						Files.deleteIfExists(pending);
-						Files.move(target, pending, StandardCopyOption.ATOMIC_MOVE);
-					} catch (IOException ignored) { }
-					throw new DurableFiles.PublishedException(postPublicationFailure);
+					pending = directory.resolve(".pending-" + delivery.id() + ".json");
+					quarantinePublished(directory, target, pending, quarantined, delivery.id(), postPublicationFailure);
 				}
 				serverFiles.put(delivery.id(), target);
 			} finally { Files.deleteIfExists(temporary); }
+		}
+
+		private void quarantinePublished(Path directory, Path target, Path pending, Map<String, Path> quarantined,
+				String id, IOException publicationFailure) throws IOException {
+			try {
+				try { Files.move(target, pending, StandardCopyOption.ATOMIC_MOVE); }
+				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(target, pending); }
+				// Record the observed rename before metadata writeback. If the force is
+				// indeterminate, a same-process retry must still find this quarantine.
+				quarantined.put(id, pending);
+				ownerOnlyFile(pending);
+				directoryForcer.force(directory);
+			} catch (IOException quarantineFailure) {
+				quarantineFailure.addSuppressed(publicationFailure);
+				throw new IllegalStateException("HTTP outgoing queue publication could not be quarantined", quarantineFailure);
+			}
+			throw new DurableFiles.PublishedException(publicationFailure);
 		}
 
 		private synchronized void confirm(String serverId, String id) throws IOException {

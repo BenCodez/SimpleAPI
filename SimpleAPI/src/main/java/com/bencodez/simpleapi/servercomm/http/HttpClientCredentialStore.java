@@ -107,12 +107,13 @@ public final class HttpClientCredentialStore {
 		Path credentialDirectory = credentialRoot(directory, true);
 		Path generations = credentialDirectory.resolve(GENERATIONS_DIRECTORY);
 		if (Files.isSymbolicLink(generations)) throw new IOException("HTTP credential generation directory is unsafe");
-		boolean generationsCreated = !Files.exists(generations, LinkOption.NOFOLLOW_LINKS);
 		Files.createDirectories(generations);
 		if (Files.isSymbolicLink(generations) || !Files.isDirectory(generations, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP credential generation directory is unsafe");
 		setOwnerOnlyDirectory(generations);
-		if (generationsCreated) DurableFiles.forceDirectory(credentialDirectory);
+		// Retry publication durability if an earlier staging attempt left this
+		// directory behind after its parent fsync failed.
+		DurableFiles.forceDirectory(credentialDirectory);
 		String name = java.util.UUID.randomUUID().toString();
 		Path generation = generations.resolve(name);
 		Files.createDirectory(generation);
@@ -345,13 +346,13 @@ public final class HttpClientCredentialStore {
 		if (directory == null) throw new IllegalArgumentException("Credential directory is required");
 		Path root = directory.toAbsolutePath().normalize();
 		if (Files.isSymbolicLink(root)) throw new IOException("HTTP credential directory is unsafe");
-		boolean created = !Files.exists(root, LinkOption.NOFOLLOW_LINKS);
 		if (create) Files.createDirectories(root);
 		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP credential directory is unsafe");
 		if (create) {
 			setOwnerOnlyDirectory(root);
-			if (created) DurableFiles.forceDirectory(root.getParent());
+			// Existing can mean create succeeded but publishing it durably did not.
+			DurableFiles.forceDirectory(root.getParent());
 		}
 		return root;
 	}
