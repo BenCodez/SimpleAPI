@@ -417,6 +417,43 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void enrollmentPublicationFailureDisablesAuthenticationUntilCodePersistenceRecovers() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("published-enrollment-proxy"), "localhost");
+		Path stateDirectory = directory.resolve("published-enrollment-state");
+		Files.createDirectories(stateDirectory);
+		java.util.concurrent.atomic.AtomicReference<Instant> now = new java.util.concurrent.atomic.AtomicReference<>(
+				Instant.parse("2030-01-01T00:00:00Z"));
+		Clock clock = new Clock() {
+			@Override public ZoneOffset getZone() { return ZoneOffset.UTC; }
+			@Override public Clock withZone(java.time.ZoneId zone) { return this; }
+			@Override public Instant instant() { return now.get(); }
+		};
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, clock,
+				stateDirectory.resolve("http-transport-clients.properties"));
+		URI endpoint = URI.create("https://localhost:8443/");
+		HttpConnectionCode unrelatedCode = authority.createConnectionCode("unrelated", endpoint, Duration.ofMinutes(5));
+		HttpTlsIdentity.IssuedClientCertificate unrelated = authority.enroll("unrelated", unrelatedCode.enrollmentToken());
+		assertTrue(authority.authenticate("unrelated", unrelated.certificate()));
+
+		HttpConnectionCode targetCode = authority.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(stateDirectory))
+					.thenThrow(new java.io.IOException("injected authority publication failure"));
+			assertThrows(com.bencodez.simpleapi.file.DurableFiles.PublishedException.class,
+					() -> authority.enroll("lobby-1", targetCode.enrollmentToken()));
+		}
+
+		assertFalse(authority.authenticate("unrelated", unrelated.certificate()),
+				"authentication must fail closed while the published enrollment state is unresolved");
+		now.set(Instant.parse("2030-01-01T00:06:00Z"));
+		HttpConnectionCode recoveryCode = authority.createConnectionCode("recovery", endpoint, Duration.ofMinutes(5));
+		assertFalse(recoveryCode.enrollmentToken().isEmpty());
+		assertTrue(authority.authenticate("unrelated", unrelated.certificate()),
+				"a successful full-state rewrite must restore authentication availability");
+	}
+
+	@Test
 	void authorityStatePrunesRevocationsAndBoundsActiveBindings() throws Exception {
 		Path proxy = directory.resolve("bounded-proxy");
 		Path state = directory.resolve("bounded-state");

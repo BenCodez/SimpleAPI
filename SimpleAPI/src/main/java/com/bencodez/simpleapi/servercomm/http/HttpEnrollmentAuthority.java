@@ -67,7 +67,7 @@ public final class HttpEnrollmentAuthority {
 		byte[] tokenHash = HttpTransportSecrets.sha256(token.getBytes(StandardCharsets.US_ASCII));
 		String lookup = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(tokenHash);
 		enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, null));
-		try { persistState(); }
+		try { persistState(); persistenceFailure = false; }
 		catch (java.io.IOException failure) {
 			enrollments.remove(lookup);
 			throw new IllegalStateException("Could not persist HTTP enrollment", failure);

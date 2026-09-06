@@ -422,7 +422,10 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (durableIncoming != null) for (Map.Entry<String, HttpInboundDeliveryStore.State> entry
 					: durableIncoming.snapshot().entrySet()) {
 				if (entry.getValue() == HttpInboundDeliveryStore.State.COMPLETED) {
-					seen.add(entry.getKey()); queueAck(entry.getKey());
+					try {
+						durableIncoming.confirmCompleted(entry.getKey());
+						seen.add(entry.getKey()); queueAck(entry.getKey());
+					} catch (IOException unconfirmed) { }
 				}
 			}
 		}
@@ -482,7 +485,12 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			List<HttpTransportProtocol.Delivery> accepted = new java.util.ArrayList<>();
 			for (HttpTransportProtocol.Delivery delivery : received) {
 				HttpInboundDeliveryStore.State persisted = durableIncoming == null ? null : durableIncoming.state(delivery.id());
-				if (seen.contains(delivery.id()) || persisted == HttpInboundDeliveryStore.State.COMPLETED) {
+				if (persisted == HttpInboundDeliveryStore.State.COMPLETED) {
+					try { durableIncoming.confirmCompleted(delivery.id()); }
+					catch (IOException unconfirmed) { continue; }
+					seen.add(delivery.id()); queueAck(delivery.id()); continue;
+				}
+				if (seen.contains(delivery.id())) {
 					seen.add(delivery.id()); queueAck(delivery.id()); continue;
 				}
 				if (persisted == HttpInboundDeliveryStore.State.RUNNING) continue;

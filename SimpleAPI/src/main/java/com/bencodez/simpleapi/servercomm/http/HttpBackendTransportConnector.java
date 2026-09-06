@@ -107,6 +107,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				: HttpInboundDeliveryStore.open(credentialDirectory, "http-transport-ack-confirmations");
 		if (inboundDeliveries != null) for (var entry : inboundDeliveries.snapshot().entrySet()) {
 			if (entry.getValue() == HttpInboundDeliveryStore.State.COMPLETED) {
+				inboundDeliveries.confirmCompleted(entry.getKey());
 				received.add(entry.getKey());
 				queueAck(entry.getKey());
 			}
@@ -114,6 +115,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		if (acknowledgementConfirmationStore != null) for (var entry : acknowledgementConfirmationStore.snapshot().entrySet()) {
 			if (entry.getValue() != HttpInboundDeliveryStore.State.COMPLETED)
 				throw new IOException("HTTP acknowledgement confirmation state is invalid");
+			acknowledgementConfirmationStore.confirmCompleted(entry.getKey());
 			queueAcknowledgementConfirmation(entry.getKey());
 		}
 		client = client(profile, credential);
@@ -307,7 +309,12 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			List<HttpTransportProtocol.Delivery> accepted = new java.util.ArrayList<>();
 			for (HttpTransportProtocol.Delivery delivery : deliveries) {
 				HttpInboundDeliveryStore.State persisted = inboundDeliveries == null ? null : inboundDeliveries.state(delivery.id());
-				if (received.contains(delivery.id()) || persisted == HttpInboundDeliveryStore.State.COMPLETED) {
+				if (persisted == HttpInboundDeliveryStore.State.COMPLETED) {
+					try { inboundDeliveries.confirmCompleted(delivery.id()); }
+					catch (IOException unconfirmed) { continue; }
+					received.add(delivery.id()); queueAck(delivery.id()); continue;
+				}
+				if (received.contains(delivery.id())) {
 					received.add(delivery.id()); queueAck(delivery.id()); continue;
 				}
 				// A callback that was running when the process stopped may already have

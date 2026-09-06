@@ -11,8 +11,10 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /** Crash-durable state for proxy deliveries around a non-transactional application callback. */
@@ -21,6 +23,9 @@ final class HttpInboundDeliveryStore {
 	private static final int MAX_ENTRIES = HttpTransportProtocol.MAX_QUEUE;
 	private final Path root;
 	private final Map<String, State> entries = new LinkedHashMap<>();
+	// A rename completed, but its directory entry still needs a successful fsync.
+	private final Set<String> unconfirmedReservations = new HashSet<>();
+	private final Set<String> unconfirmedCompletions = new HashSet<>();
 	private boolean sealed;
 
 	HttpInboundDeliveryStore(Path credentialDirectory) throws IOException {
@@ -55,7 +60,10 @@ final class HttpInboundDeliveryStore {
 		requireWritable();
 		id = canonical(id);
 		State existing = entries.get(id);
-		if (existing == State.RESERVED) return;
+		if (existing == State.RESERVED) {
+			confirmReserved(id);
+			return;
+		}
 		if (existing != null) throw new IOException("HTTP inbound delivery fence is already active");
 		if (entries.size() >= MAX_ENTRIES) throw new IOException("HTTP inbound delivery fence is full");
 		requireRoot();
@@ -68,8 +76,14 @@ final class HttpInboundDeliveryStore {
 			Files.writeString(temporary, id, StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
 			DurableFiles.forceFile(temporary);
 			move(temporary, target);
-			ownerOnlyFile(target);
-			DurableFiles.forceDirectory(root);
+			try {
+				ownerOnlyFile(target);
+				DurableFiles.forceDirectory(root);
+			} catch (IOException postPublicationFailure) {
+				entries.put(id, State.RESERVED);
+				unconfirmedReservations.add(id);
+				throw new DurableFiles.PublishedException(postPublicationFailure);
+			}
 			entries.put(id, State.RESERVED);
 		} finally { Files.deleteIfExists(temporary); }
 	}
@@ -78,7 +92,10 @@ final class HttpInboundDeliveryStore {
 	synchronized void recordCompleted(String id) throws IOException {
 		requireWritable();
 		id = canonical(id);
-		if (entries.get(id) == State.COMPLETED) return;
+		if (entries.get(id) == State.COMPLETED) {
+			confirmCompleted(id);
+			return;
+		}
 		if (entries.containsKey(id) || entries.size() >= MAX_ENTRIES)
 			throw new IOException("HTTP acknowledgement confirmation fence is full");
 		requireRoot();
@@ -89,8 +106,15 @@ final class HttpInboundDeliveryStore {
 			Files.writeString(temporary, id, StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
 			DurableFiles.forceFile(temporary);
 			move(temporary, target);
-			ownerOnlyFile(target);
-			DurableFiles.forceDirectory(root);
+			try {
+				ownerOnlyFile(target);
+				DurableFiles.forceDirectory(root);
+			}
+			catch (IOException postPublicationFailure) {
+				entries.put(id, State.COMPLETED);
+				unconfirmedCompletions.add(id);
+				throw new DurableFiles.PublishedException(postPublicationFailure);
+			}
 			entries.put(id, State.COMPLETED);
 		} finally { Files.deleteIfExists(temporary); }
 	}
@@ -118,6 +142,8 @@ final class HttpInboundDeliveryStore {
 		requireRoot();
 		DurableFiles.deleteIfExists(file(id, state));
 		entries.remove(id);
+		unconfirmedReservations.remove(id);
+		unconfirmedCompletions.remove(id);
 	}
 
 	synchronized Map<String, State> snapshot() { return Map.copyOf(entries); }
@@ -125,6 +151,11 @@ final class HttpInboundDeliveryStore {
 	private void transition(String id, State expected, State replacement) throws IOException {
 		requireWritable();
 		id = canonical(id);
+		if (expected == State.RESERVED) confirmReserved(id);
+		if (replacement == State.COMPLETED && entries.get(id) == replacement) {
+			confirmCompleted(id);
+			return;
+		}
 		if (entries.get(id) != expected) throw new IOException("HTTP inbound delivery fence state is invalid");
 		requireRoot();
 		Path source = file(id, expected), target = file(id, replacement);
@@ -132,8 +163,43 @@ final class HttpInboundDeliveryStore {
 				|| Files.exists(target, LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("HTTP inbound delivery fence state is unsafe");
 		move(source, target);
-		DurableFiles.forceDirectory(root);
+		try { DurableFiles.forceDirectory(root); }
+		catch (IOException postPublicationFailure) {
+			entries.put(id, replacement);
+			if (replacement == State.COMPLETED) unconfirmedCompletions.add(id);
+			throw new DurableFiles.PublishedException(postPublicationFailure);
+		}
 		entries.put(id, replacement);
+	}
+
+	/** Retries the directory fsync required before exposing a reservation to a callback. */
+	synchronized void confirmReserved(String id) throws IOException {
+		id = canonical(id);
+		if (entries.get(id) != State.RESERVED) throw new IOException("HTTP inbound delivery fence state is invalid");
+		if (!unconfirmedReservations.contains(id)) return;
+		requireRoot();
+		Path target = file(id, State.RESERVED);
+		if (Files.isSymbolicLink(target) || !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
+				|| Files.size(target) > 64L
+				|| !Files.readString(target, StandardCharsets.US_ASCII).equals(id))
+			throw new IOException("HTTP inbound delivery fence state is unsafe");
+		DurableFiles.forceDirectory(root);
+		unconfirmedReservations.remove(id);
+	}
+
+	/** Retries the directory fsync required before exposing a completed delivery for acknowledgement. */
+	synchronized void confirmCompleted(String id) throws IOException {
+		id = canonical(id);
+		if (entries.get(id) != State.COMPLETED) throw new IOException("HTTP inbound delivery fence state is invalid");
+		if (!unconfirmedCompletions.contains(id)) return;
+		requireRoot();
+		Path target = file(id, State.COMPLETED);
+		if (Files.isSymbolicLink(target) || !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
+				|| Files.size(target) > 64L
+				|| !Files.readString(target, StandardCharsets.US_ASCII).equals(id))
+			throw new IOException("HTTP inbound delivery fence state is unsafe");
+		DurableFiles.forceDirectory(root);
+		unconfirmedCompletions.remove(id);
 	}
 
 	private void load() throws IOException {
@@ -167,6 +233,8 @@ final class HttpInboundDeliveryStore {
 					DurableFiles.deleteIfExists(file(id, obsolete));
 					entries.put(id, retained);
 				}
+				if (entries.get(id) == State.COMPLETED) unconfirmedCompletions.add(id);
+				if (entries.get(id) == State.RESERVED) unconfirmedReservations.add(id);
 				if (entries.size() > MAX_ENTRIES) throw new IOException("HTTP inbound delivery fence exceeds its bound");
 			}
 		}

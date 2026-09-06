@@ -342,6 +342,86 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void completedInboundPublicationRetriesForceBeforeProxyAcknowledgement() throws Exception {
+		Path root = directory.resolve("proxy-incoming-force-retry");
+		Files.createDirectory(root);
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		Path inboundDirectory = root.resolve("lobby-1");
+		Path completed = inboundDirectory.resolve(deliveryId + ".completed");
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId,
+				JsonEnvelope.builder("backend-event").build());
+		HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(root, "lobby-1");
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+				"lobby-1", null, store, (server, id) -> { });
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(inboundDirectory))
+					.thenAnswer(call -> {
+						if (Files.exists(completed)) throw new java.io.IOException("injected completed fsync failure");
+						return call.callRealMethod();
+					});
+			assertEquals(java.util.List.of(delivery), state.acceptIncoming(java.util.List.of(delivery)));
+			state.beginIncoming(deliveryId);
+			assertThrows(com.bencodez.simpleapi.file.DurableFiles.PublishedException.class,
+					() -> state.completeIncomingDurably(deliveryId));
+			state.completeIncoming(deliveryId, false);
+			assertEquals(HttpInboundDeliveryStore.State.COMPLETED, store.state(deliveryId));
+			assertTrue(state.acceptIncoming(java.util.List.of(delivery)).isEmpty(),
+					"a visible completed target must never rerun its callback while fsync is unresolved");
+			assertTrue(state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).acks().isEmpty(),
+					"a completed target must not be acknowledged before its fsync succeeds");
+		}
+		assertTrue(state.acceptIncoming(java.util.List.of(delivery)).isEmpty(),
+				"recovered publication must be acknowledged rather than dispatched again");
+		assertEquals(java.util.List.of(deliveryId), state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).acks());
+	}
+
+	@Test
+	void reservedInboundPublicationRetriesBeforeProxyCallback() throws Exception {
+		Path root = directory.resolve("reserved-force-proxy");
+		Files.createDirectory(root);
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		Path inboundDirectory = root.resolve("lobby-1");
+		Path reserved = inboundDirectory.resolve(deliveryId + ".reserved");
+		CountDownLatch firstForce = new CountDownLatch(1), secondForce = new CountDownLatch(1);
+		java.util.concurrent.atomic.AtomicInteger forceCalls = new java.util.concurrent.atomic.AtomicInteger();
+		java.util.concurrent.atomic.AtomicInteger callbacks = new java.util.concurrent.atomic.AtomicInteger();
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId, JsonEnvelope.builder("vote").build());
+		HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(root, "lobby-1");
+		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+				"lobby-1", null, store, (server, id) -> { });
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(inboundDirectory))
+					.thenAnswer(call -> {
+						if (Files.exists(reserved)) {
+							if (forceCalls.incrementAndGet() == 1) firstForce.countDown(); else secondForce.countDown();
+							throw new java.io.IOException("injected reservation fsync failure");
+						}
+						return call.callRealMethod();
+					});
+			assertEquals(java.util.List.of(delivery), state.acceptIncoming(java.util.List.of(delivery)));
+			assertThrows(com.bencodez.simpleapi.file.DurableFiles.PublishedException.class,
+					() -> state.beginIncoming(deliveryId));
+			state.completeIncoming(deliveryId, false);
+			assertTrue(firstForce.await(2, TimeUnit.SECONDS));
+			assertEquals(java.util.List.of(delivery), state.acceptIncoming(java.util.List.of(delivery)));
+			assertThrows(java.io.IOException.class, () -> state.beginIncoming(deliveryId));
+			state.completeIncoming(deliveryId, false);
+			assertTrue(secondForce.await(2, TimeUnit.SECONDS));
+			assertEquals(0, callbacks.get(), "an unconfirmed reservation must not enter the callback");
+			assertTrue(state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).acks().isEmpty());
+		}
+		assertEquals(java.util.List.of(delivery), state.acceptIncoming(java.util.List.of(delivery)));
+		state.beginIncoming(deliveryId);
+		callbacks.incrementAndGet(); // Models the callback reached only after beginIncoming's durable RUNNING transition.
+		state.completeIncomingDurably(deliveryId);
+		state.completeIncoming(deliveryId, true);
+		assertEquals(java.util.List.of(deliveryId), state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).acks());
+		assertEquals(1, callbacks.get());
+	}
+
+	@Test
 	void failedAcknowledgementCallbackRetainsProxyDelivery() throws Exception {
 		HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState("lobby-1", null,
 				(server, deliveryId) -> { throw new java.io.IOException("cache save failed"); });
