@@ -222,6 +222,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				reply(exchange, 200, HttpTransportProtocol.response(packet.server(), packet.session(), packet.sequence(),
 						response.acks(), packet.acks(), response.messages()));
 			} finally { backend.endPoll(); }
+		} catch (RateLimitException rateLimited) { reply(exchange, 429, new byte[0]);
 		} catch (IllegalArgumentException rejected) { reply(exchange, 400, new byte[0]);
 		} catch (Exception failure) { reply(exchange, 503, new byte[0]);
 		} finally { admission.release(); }
@@ -230,7 +231,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	private void handlePacket(HttpTransportProtocol.Packet packet, BackendState backend) throws IOException {
 		List<HttpTransportProtocol.Delivery> accepted;
 		synchronized (backend) {
-			if (!backend.allowRequest()) throw new IllegalArgumentException("transport rate limited");
+			if (!backend.allowRequest()) throw new RateLimitException("transport rate limited");
 			if (!backend.acceptSession(packet.session(), packet.sequence())) throw new IllegalArgumentException("stale session request");
 		}
 		backend.confirmIncoming(packet.ackConfirmations());
@@ -353,6 +354,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		void confirm(String serverId, String deliveryId) throws IOException;
 	}
 	static record Response(Collection<String> acks, Collection<HttpTransportProtocol.Delivery> messages) { }
+	static final class RateLimitException extends IllegalArgumentException {
+		RateLimitException(String message) { super(message); }
+	}
 	static final class BackendState {
 		private final String serverId;
 		private final DurableOutgoingQueue durableOutgoing;
@@ -586,6 +590,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 							DurableFiles.deleteIfExists(message);
 							continue;
 						}
+						if (name.startsWith(".pending-") && name.endsWith(".json")
+								&& !Files.isSymbolicLink(message) && Files.isRegularFile(message, LinkOption.NOFOLLOW_LINKS))
+							continue;
 						if (Files.isSymbolicLink(message) || !Files.isRegularFile(message, LinkOption.NOFOLLOW_LINKS)
 								|| !name.matches(FILE_PATTERN) || Files.size(message) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L)
 							throw new IOException("HTTP outgoing queue message is invalid");
@@ -631,6 +638,26 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				directoryForcer.force(directory);
 				return;
 			}
+			Path pending = directory.resolve(".pending-" + delivery.id() + ".json");
+			if (Files.isRegularFile(pending, LinkOption.NOFOLLOW_LINKS)) {
+				if (Files.isSymbolicLink(pending) || Files.size(pending) > HttpTransportProtocol.MAX_ENVELOPE_BYTES * 2L
+						|| !Arrays.equals(Files.readAllBytes(pending), HttpTransportProtocol.storedDelivery(delivery)))
+					throw new IOException("HTTP outgoing queue delivery id conflicts with persisted data");
+				String name = String.format(java.util.Locale.ROOT, "%020d-%s.json", ++sequence, delivery.id());
+				Path target = directory.resolve(name);
+				try { Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE); }
+				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(pending, target); }
+				try { ownerOnlyFile(target); directoryForcer.force(directory); }
+				catch (IOException postPublicationFailure) {
+					try {
+						Files.deleteIfExists(pending);
+						Files.move(target, pending, StandardCopyOption.ATOMIC_MOVE);
+					} catch (IOException ignored) { }
+					throw new DurableFiles.PublishedException(postPublicationFailure);
+				}
+				serverFiles.put(delivery.id(), target);
+				return;
+			}
 			if (sequence == Long.MAX_VALUE) throw new IOException("HTTP outgoing queue sequence is exhausted");
 			String name = String.format(java.util.Locale.ROOT, "%020d-%s.json", ++sequence, delivery.id());
 			Path target = directory.resolve(name);
@@ -641,11 +668,15 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				DurableFiles.forceFile(temporary);
 				try { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE); }
 				catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, target); }
-				serverFiles.put(delivery.id(), target);
 				try { ownerOnlyFile(target); directoryForcer.force(directory); }
 				catch (IOException postPublicationFailure) {
+					try {
+						Files.deleteIfExists(pending);
+						Files.move(target, pending, StandardCopyOption.ATOMIC_MOVE);
+					} catch (IOException ignored) { }
 					throw new DurableFiles.PublishedException(postPublicationFailure);
 				}
+				serverFiles.put(delivery.id(), target);
 			} finally { Files.deleteIfExists(temporary); }
 		}
 
