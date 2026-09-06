@@ -40,6 +40,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import javax.net.ssl.SSLParameters;
@@ -70,6 +71,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	private final HttpsServer server;
 	private final ThreadPoolExecutor listenerExecutor;
 	private final ThreadPoolExecutor handlerExecutor;
+	private final AtomicReference<Thread> handlerWorker = new AtomicReference<>();
+	private final Object closeMonitor = new Object();
 	private final Semaphore admission = new Semaphore(64);
 	private final Map<String, BackendState> backends = new HashMap<>();
 	private final DurableOutgoingQueue durableOutgoing;
@@ -78,6 +81,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	private final DeliveryAcknowledgement onAcknowledged;
 	private final LongSupplier nanoTime;
 	private volatile boolean closed;
+	private boolean closeFinalizing, closeFinalized;
 
 	/** In-memory constructor for tests; production callers must supply a durable state directory. */
 	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
@@ -124,7 +128,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		listenerExecutor = executor("SimpleAPI-HTTP-listener", 72, 72);
 		// The proxy router mutates shared presence, vote, and reward state. A separate
 		// bounded FIFO lane keeps wire order without blocking long-poll workers.
-		handlerExecutor = executor("SimpleAPI-HTTP-handler", 1, HttpBackendTransportConnector.CALLBACK_QUEUE_CAPACITY);
+		handlerExecutor = executor("SimpleAPI-HTTP-handler", 1,
+				HttpBackendTransportConnector.CALLBACK_QUEUE_CAPACITY, handlerWorker);
 		server.setExecutor(listenerExecutor);
 		server.createContext("/v1/enroll", exchange -> enroll((HttpsExchange) exchange));
 		server.createContext("/v1/renew", exchange -> renew((HttpsExchange) exchange));
@@ -212,9 +217,47 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	}
 
 	@Override public void close() {
-		if (closed) return; closed = true; server.stop(1);
-		shutdown(handlerExecutor); shutdown(listenerExecutor);
-		synchronized (backends) { for (BackendState backend : backends.values()) { backend.seal(); backend.signal(); } backends.clear(); }
+		boolean callbackWorker = Thread.currentThread() == handlerWorker.get();
+		boolean finalizeHere = false;
+		synchronized (closeMonitor) {
+			if (!closed) {
+				closed = true;
+				server.stop(1);
+				closeFinalizing = true;
+				if (callbackWorker) {
+					Thread finalizer = new Thread(this::finishClose, "SimpleAPI-HTTP-proxy-close");
+					finalizer.setDaemon(true);
+					finalizer.start();
+					return;
+				}
+				finalizeHere = true;
+			} else if (callbackWorker || closeFinalized) {
+				return;
+			}
+		}
+		if (finalizeHere) finishClose(); else awaitClose();
+	}
+
+	private void finishClose() {
+		try {
+			shutdown(handlerExecutor);
+			shutdown(listenerExecutor);
+			synchronized (backends) {
+				for (BackendState backend : backends.values()) { backend.seal(); backend.signal(); }
+				backends.clear();
+			}
+		} finally {
+			synchronized (closeMonitor) { closeFinalizing = false; closeFinalized = true; closeMonitor.notifyAll(); }
+		}
+	}
+
+	private void awaitClose() {
+		boolean interrupted = false;
+		synchronized (closeMonitor) {
+			while (closeFinalizing && !closeFinalized) try { closeMonitor.wait(); }
+			catch (InterruptedException stopRequested) { interrupted = true; }
+		}
+		if (interrupted) Thread.currentThread().interrupt();
 	}
 
 	private void enroll(HttpsExchange exchange) throws IOException {
@@ -358,7 +401,17 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		} catch (NumberFormatException invalid) { return 400; }
 	}
 	private static ThreadPoolExecutor executor(String name, int threads, int queue) {
-		ThreadFactory factory = task -> { Thread thread = new Thread(task, name); thread.setDaemon(true); return thread; };
+		return executor(name, threads, queue, null);
+	}
+	private static ThreadPoolExecutor executor(String name, int threads, int queue, AtomicReference<Thread> worker) {
+		ThreadFactory factory = task -> {
+			Thread thread = new Thread(() -> {
+				if (worker != null) worker.set(Thread.currentThread());
+				task.run();
+			}, name);
+			thread.setDaemon(true);
+			return thread;
+		};
 		return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(queue), factory, new ThreadPoolExecutor.AbortPolicy());
 	}
 	private static void setDefault(String name, String value) { if (System.getProperty(name) == null) System.setProperty(name, value); }
@@ -617,7 +670,6 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			int serverDirectories = 0;
 			try (DirectoryStream<Path> servers = Files.newDirectoryStream(root)) {
 				for (Path directory : servers) {
-					if (++serverDirectories > MAX_BACKENDS) throw new IOException("HTTP outgoing queue exceeds its backend bound");
 					if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
 						throw new IOException("HTTP outgoing queue contains an invalid entry");
 					PrivateFilePermissions.ownerOnlyDirectory(directory);
@@ -672,6 +724,14 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 							throw new IOException("HTTP outgoing queue exceeds its bound");
 						sequence = Math.max(sequence, Long.parseLong(name.substring(0, 20)));
 					}
+					if (durableEntries == 0 && hasNoIndexedDeliveries(serverId)) {
+						deleteVerifiedEmptyDirectory(directory);
+						files.remove(serverId);
+						quarantinedFiles.remove(serverId);
+						continue;
+					}
+					if (++serverDirectories > MAX_BACKENDS)
+						throw new IOException("HTTP outgoing queue exceeds its backend bound");
 					if (!deliveries.isEmpty()) loaded.put(serverId, deliveries);
 				}
 			}
@@ -683,14 +743,21 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (!directory.getParent().equals(root)) throw new IOException("HTTP outgoing queue server is invalid");
 			if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS) && serverDirectoryCount() >= MAX_BACKENDS)
 				throw new IOException("HTTP outgoing queue exceeds its backend bound");
-			try { Files.createDirectory(directory); }
+			boolean created = false;
+			try { Files.createDirectory(directory); created = true; }
 			catch (java.nio.file.FileAlreadyExistsException existing) { }
-			if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
-				throw new IOException("HTTP outgoing queue server directory is invalid");
-			PrivateFilePermissions.ownerOnlyDirectory(directory);
-			// The child fsync below cannot make this published name durable in its
-			// parent. Repeat it so a prior failed attempt is recoverable.
-			directoryForcer.force(root);
+			try {
+				if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
+					throw new IOException("HTTP outgoing queue server directory is invalid");
+				PrivateFilePermissions.ownerOnlyDirectory(directory);
+				// The child fsync below cannot make this published name durable in its
+				// parent. Repeat it so a prior failed attempt is recoverable.
+				directoryForcer.force(root);
+			} catch (IOException setupFailure) {
+				if (created) try { deleteVerifiedEmptyDirectory(directory); }
+				catch (IOException cleanupFailure) { setupFailure.addSuppressed(cleanupFailure); }
+				throw setupFailure;
+			}
 			Map<String, Path> serverFiles = files.computeIfAbsent(serverId, ignored -> new HashMap<>());
 			Map<String, Path> quarantined = quarantinedFiles.computeIfAbsent(serverId, ignored -> new HashMap<>());
 			Path existing = serverFiles.get(delivery.id());
@@ -755,10 +822,34 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					catch (IllegalArgumentException invalid) { throw new IOException("HTTP outgoing queue server is invalid", invalid); }
 					if (!serverId.equals(directory.getFileName().toString()))
 						throw new IOException("HTTP outgoing queue server is not canonical");
+					PrivateFilePermissions.ownerOnlyDirectory(directory);
+					if (isEmptyDirectory(directory) && hasNoIndexedDeliveries(serverId)) {
+						deleteVerifiedEmptyDirectory(directory);
+						continue;
+					}
 					if (++count > MAX_BACKENDS) throw new IOException("HTTP outgoing queue exceeds its backend bound");
 				}
 			}
 			return count;
+		}
+
+		private boolean isEmptyDirectory(Path directory) throws IOException {
+			try (DirectoryStream<Path> entries = Files.newDirectoryStream(directory)) { return !entries.iterator().hasNext(); }
+		}
+
+		private boolean hasNoIndexedDeliveries(String serverId) {
+			Map<String, Path> serverFiles = files.get(serverId);
+			Map<String, Path> quarantined = quarantinedFiles.get(serverId);
+			return (serverFiles == null || serverFiles.isEmpty()) && (quarantined == null || quarantined.isEmpty());
+		}
+
+		/** Deletes only a validated, observed-empty backend directory and makes its removal durable. */
+		private void deleteVerifiedEmptyDirectory(Path directory) throws IOException {
+			if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)
+					|| !isEmptyDirectory(directory))
+				throw new IOException("HTTP outgoing queue server directory is no longer empty");
+			Files.delete(directory);
+			directoryForcer.force(root);
 		}
 
 		private void quarantinePublished(Path directory, Path target, Path pending, Map<String, Path> serverFiles,

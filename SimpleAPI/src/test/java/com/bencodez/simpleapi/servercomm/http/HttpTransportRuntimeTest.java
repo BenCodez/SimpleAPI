@@ -174,8 +174,9 @@ class HttpTransportRuntimeTest {
 		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(
 				java.util.UUID.randomUUID().toString(), JsonEnvelope.builder("retry-directory-force").build());
 		assertFalse(state.enqueue(delivery));
+		assertEquals(2L, serverRootForces.get(), "failed publication and empty-directory cleanup must both force the parent");
 		assertTrue(state.enqueue(delivery));
-		assertEquals(2L, serverRootForces.get(), "retrying an existing backend directory must force its parent again");
+		assertEquals(3L, serverRootForces.get(), "retrying backend directory creation must force its parent again");
 	}
 
 	@Test
@@ -994,7 +995,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
-	void renewalAdoptsPublishedPointerAndRetriesItBeforeAnotherRenewal() throws Exception {
+	void renewalRetainsOldCredentialUntilPublishedPointerIsConfirmed() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pointer-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate expiring = identity.issueClientCertificate("lobby-1",
 				Instant.now().minus(Duration.ofDays(340)));
@@ -1038,11 +1039,11 @@ class HttpTransportRuntimeTest {
 					var selected = HttpClientCredentialStore.load(clientDirectory);
 					String selectedPin = HttpTransportSecrets.certificatePin(selected.certificate());
 					assertFalse(originalPin.equals(selectedPin));
-					assertEquals(selectedPin, HttpTransportSecrets.certificatePin(
+					assertEquals(originalPin, HttpTransportSecrets.certificatePin(
 							((HttpClientCredentialStore.ClientCredential) credential.get(connector)).certificate()));
 					assertTrue(pending.get(connector) != null);
-					assertTrue(authority.authenticate("lobby-1", selected.certificate()));
-					assertFalse(authority.authenticate("lobby-1", expiring.certificate()));
+					assertTrue(authority.authenticate("lobby-1", expiring.certificate()),
+							"uncertain pointer publication must not invalidate the restart-safe old credential");
 					renew.invoke(connector);
 					assertEquals(generation, Files.readString(pointer));
 					assertTrue(pending.get(connector) != null, "failed retry must retain the same pending activation");
@@ -1050,6 +1051,12 @@ class HttpTransportRuntimeTest {
 				renew.invoke(connector);
 				assertTrue(pending.get(connector) == null);
 				assertEquals(generation, Files.readString(pointer));
+				var confirmed = HttpClientCredentialStore.load(clientDirectory);
+				assertEquals(HttpTransportSecrets.certificatePin(confirmed.certificate()),
+						HttpTransportSecrets.certificatePin(((HttpClientCredentialStore.ClientCredential)
+								credential.get(connector)).certificate()));
+				assertTrue(authority.authenticate("lobby-1", confirmed.certificate()));
+				assertFalse(authority.authenticate("lobby-1", expiring.certificate()));
 				connector.start();
 				assertTrue(connector.send(JsonEnvelope.builder("after-pointer-recovery").build()));
 				assertTrue(received.await(8, TimeUnit.SECONDS), "transport must use the adopted TLS client");

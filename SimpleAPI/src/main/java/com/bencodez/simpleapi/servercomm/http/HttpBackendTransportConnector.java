@@ -58,7 +58,10 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private final URI transportEndpoint;
 	private final ThreadPoolExecutor callbackExecutor;
 	private final AtomicBoolean running = new AtomicBoolean();
+	private final AtomicBoolean closing = new AtomicBoolean();
+	private final CountDownLatch closed = new CountDownLatch(1);
 	private final CountDownLatch firstResponse = new CountDownLatch(1);
+	private final Object lifecycle = new Object();
 	private final Object state = new Object();
 	private final Object renewal = new Object();
 	private final LinkedHashMap<String, HttpTransportProtocol.Delivery> outgoing = new LinkedHashMap<>();
@@ -67,11 +70,13 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private final ArrayDeque<String> acknowledgementConfirmations = new ArrayDeque<>();
 	private final String session = UUID.randomUUID().toString();
 	private volatile Thread poller;
+	// Set by the executor's worker wrapper. Thread names are not an ownership boundary.
+	private volatile Thread callbackWorker;
 	private long sequence;
 	private volatile long nextRenewalCheckNanos;
 	// Guarded by renewal: do not supersede a visibly published credential until
 	// the pointer selecting it has been confirmed durable.
-	private HttpClientCredentialStore.StagedCredential pendingActivation;
+	private PendingActivation pendingActivation;
 
 	/** In-memory test constructor; production transport must use a directory-backed constructor. */
 	HttpBackendTransportConnector(HttpConnectionCode code, String serverId,
@@ -123,7 +128,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		// GlobalMessageHandler routes mutate backend vote state and must observe the
 		// wire order. One bounded lane preserves batch ordering without running work on
 		// the long-poll thread; bounded admission below backpressures this poller.
-		callbackExecutor = executor("SimpleAPI-HTTP-callback", 1, CALLBACK_QUEUE_CAPACITY);
+		callbackExecutor = callbackExecutor();
 	}
 
 	/** Convenience constructor for the owner-only credential directory produced by {@link #enroll}. */
@@ -156,8 +161,12 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	}
 
 	public void start() {
-		if (!running.compareAndSet(false, true)) return;
-		poller = new Thread(this::pollLoop, "SimpleAPI-HTTP-poll"); poller.setDaemon(true); poller.start();
+		synchronized (lifecycle) {
+			if (closing.get() || !running.compareAndSet(false, true)) return;
+			poller = new Thread(this::pollLoop, "SimpleAPI-HTTP-poll");
+			poller.setDaemon(true);
+			poller.start();
+		}
 	}
 	/** Waits for one authenticated, protocol-valid transport response. */
 	public boolean awaitFirstResponse(long deadlineNanos) throws InterruptedException {
@@ -246,19 +255,58 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		}
 		return true;
 	}
+	/**
+	 * Stops polling and drains callbacks before sealing their journals. When called by the
+	 * callback worker itself, terminal cleanup is deferred until that callback returns so
+	 * its COMPLETED transition cannot be sealed out from under it.
+	 */
 	@Override public void close() {
-		running.getAndSet(false);
-		firstResponse.countDown();
-		Thread current = poller; if (current != null) current.interrupt();
+		boolean calledByCallbackWorker = Thread.currentThread() == callbackWorker;
+		Thread current;
+		boolean alreadyClosing;
+		synchronized (lifecycle) {
+			alreadyClosing = !closing.compareAndSet(false, true);
+			if (alreadyClosing) current = null;
+			else {
+				running.set(false);
+				firstResponse.countDown();
+				current = poller;
+				if (current != null) current.interrupt();
+			}
+		}
+		if (alreadyClosing) {
+			if (!calledByCallbackWorker) awaitClosed();
+			return;
+		}
+		// Closing admission before joining the poller releases an executeOrdered call
+		// that is backpressured behind this callback.
+		callbackExecutor.shutdown();
 		// The owning transport may release the credential-directory semaphore as soon
 		// as close returns. Wait for the interrupted poller so an in-flight renewal
 		// cannot activate an old credential generation after that ownership handoff.
 		joinPoller(current);
-		shutdownCallbacks();
+		if (calledByCallbackWorker) {
+			Thread cleanup = new Thread(this::finishClose, "SimpleAPI-HTTP-callback-close");
+			cleanup.setDaemon(true);
+			cleanup.start();
+			return;
+		}
+		finishClose();
+	}
+	private void finishClose() {
+		try {
+			shutdownCallbacks();
 		// No poller can enqueue more callbacks and every running journal transition has
 		// finished, so ownership can now be revoked without stranding completed work.
-		if (inboundDeliveries != null) inboundDeliveries.seal();
-		if (acknowledgementConfirmationStore != null) acknowledgementConfirmationStore.seal();
+			if (inboundDeliveries != null) inboundDeliveries.seal();
+			if (acknowledgementConfirmationStore != null) acknowledgementConfirmationStore.seal();
+		} finally { closed.countDown(); }
+	}
+	private void awaitClosed() {
+		boolean interrupted = false;
+		while (closed.getCount() != 0L) try { closed.await(); }
+		catch (InterruptedException stopRequested) { interrupted = true; }
+		if (interrupted) Thread.currentThread().interrupt();
 	}
 	private void shutdownCallbacks() {
 		callbackExecutor.shutdown();
@@ -397,7 +445,18 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	List<String> drainAcknowledgements() { synchronized (state) { return drain(acknowledgements); } }
 	private static <T> List<T> first(Collection<T> values) { List<T> output = new java.util.ArrayList<>(); for (T value : values) { output.add(value); if (output.size() == HttpTransportProtocol.MAX_BATCH) break; } return output; }
 	private static List<String> drain(ArrayDeque<String> values) { List<String> output = new java.util.ArrayList<>(); while (!values.isEmpty() && output.size() < HttpTransportProtocol.MAX_BATCH) output.add(values.remove()); return output; }
-	private static ThreadPoolExecutor executor(String name, int threads, int queue) { ThreadFactory factory = task -> { Thread thread = new Thread(task, name); thread.setDaemon(true); return thread; }; return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(queue), factory, new ThreadPoolExecutor.AbortPolicy()); }
+	private ThreadPoolExecutor callbackExecutor() {
+		ThreadFactory factory = task -> {
+			Thread thread = new Thread(() -> {
+				callbackWorker = Thread.currentThread();
+				task.run();
+			}, "SimpleAPI-HTTP-callback");
+			thread.setDaemon(true);
+			return thread;
+		};
+		return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+				new ArrayBlockingQueue<>(CALLBACK_QUEUE_CAPACITY), factory, new ThreadPoolExecutor.AbortPolicy());
+	}
 	static boolean executeOrdered(ThreadPoolExecutor executor, Runnable task) {
 		try { executor.execute(task); return true; }
 		catch (RejectedExecutionException fullOrClosed) {
@@ -433,7 +492,10 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (directory == null) return;
 			if (pendingActivation != null) {
 				try {
-					HttpClientCredentialStore.activateReplacement(directory, pendingActivation);
+					HttpClientCredentialStore.activateReplacement(directory, pendingActivation.staged());
+					profile = pendingActivation.staged().profile();
+					client = pendingActivation.client();
+					credential = pendingActivation.staged().credential();
 					pendingActivation = null;
 				} catch (IOException unconfirmed) { return; }
 			}
@@ -459,10 +521,12 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				if (!matchesCredential(replacementProfile, replacement)) throw new IllegalArgumentException("Renewed HTTP certificate is invalid");
 				HttpClient replacementClient = client(replacementProfile, replacement);
 				try { HttpClientCredentialStore.activateReplacement(directory, staged); }
-				catch (com.bencodez.simpleapi.file.DurableFiles.PublishedException published) {
-					// CURRENT already selects this generation. Adopt it in memory as well,
-					// and retry this publication before requesting any newer certificate.
-					pendingActivation = staged;
+				catch (IOException unconfirmed) {
+					// A rename may already be visible while its parent fsync is unresolved.
+					// Keep using the restart-safe old identity and retry precisely this
+					// generation; requesting another renewal could revoke both identities.
+					pendingActivation = new PendingActivation(staged, replacementClient);
+					return;
 				}
 				profile = replacementProfile;
 				client = replacementClient;
@@ -474,6 +538,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			}
 		}
 	}
+	private record PendingActivation(HttpClientCredentialStore.StagedCredential staged, HttpClient client) { }
 	static Duration renewalRetryDelay(Duration remainingValidity) {
 		if (remainingValidity == null || remainingValidity.isNegative() || remainingValidity.isZero())
 			return Duration.ofSeconds(1);
