@@ -359,6 +359,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	}
 	private BackendState backendState(String serverId) throws IOException {
 		synchronized (backends) {
+			if (closed) throw new IOException("HTTP proxy transport is closed");
 			BackendState existing = backends.get(serverId);
 			if (existing != null) return existing;
 			if (backends.size() >= MAX_BACKENDS) reclaimInactiveBackend();

@@ -17,6 +17,38 @@ class HttpOutgoingOwnershipTest {
 	@TempDir Path directory;
 
 	@Test
+	void senderWaitingForBackendMonitorCannotReopenJournalAfterClose() throws Exception {
+		Path root = directory.resolve("outgoing");
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
+		HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, root, ignored -> { });
+		var field = HttpProxyTransportServer.class.getDeclaredField("backends");
+		field.setAccessible(true);
+		java.util.concurrent.atomic.AtomicBoolean sent = new java.util.concurrent.atomic.AtomicBoolean(true);
+		Thread sender = new Thread(() -> sent.set(server.send("lobby-1", JsonEnvelope.builder("close-race").build())));
+		try {
+			synchronized (field.get(server)) {
+				sender.start();
+				long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+				while (sender.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(5);
+				org.junit.jupiter.api.Assertions.assertEquals(Thread.State.BLOCKED, sender.getState());
+				server.close();
+			}
+			sender.join(3000);
+			assertFalse(sender.isAlive());
+			assertFalse(sent.get());
+			try (HttpProxyTransportServer successor = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+					identity, authority, root, ignored -> { })) {
+				org.junit.jupiter.api.Assertions.assertNotNull(successor.backendStateForTest("lobby-1"));
+			}
+		} finally {
+			server.close();
+			sender.join(3000);
+		}
+	}
+
+	@Test
 	void outgoingQueueAllowsOneOwnerAndFailsClosedAfterClose() throws Exception {
 		Path root = directory.resolve("outgoing");
 		HttpProxyTransportServer.DurableOutgoingQueue owner = new HttpProxyTransportServer.DurableOutgoingQueue(root,
