@@ -217,7 +217,34 @@ public final class HttpClientCredentialStore {
 	public static boolean matchesEnrollmentCode(Path directory, HttpConnectionCode code) throws IOException {
 		if (code == null) throw new IllegalArgumentException("Connection code is required");
 		String stored = readConnectionCodeDigest(activeDirectory(directory));
-		if (stored == null) return false;
+		return stored != null && matchesConnectionCodeDigest(stored, code);
+	}
+
+	/** Confirms and returns an already-published initial enrollment before its one-time code is sent again. */
+	static ClientCredential recoverPublishedEnrollment(Path directory, HttpConnectionCode code,
+			HttpClientProfile expectedProfile) throws Exception {
+		if (directory == null || code == null || expectedProfile == null)
+			throw new IllegalArgumentException("Enrollment recovery is required");
+		Path candidate = directory.toAbsolutePath().normalize();
+		if (!Files.exists(candidate, LinkOption.NOFOLLOW_LINKS)) return null;
+		Path root = credentialRoot(candidate, false);
+		Path active = activeDirectory(root);
+		if (!Files.isRegularFile(active.resolve(BUNDLE_FILE), LinkOption.NOFOLLOW_LINKS)
+				|| !Files.isRegularFile(active.resolve(PASSWORD_FILE), LinkOption.NOFOLLOW_LINKS)
+				|| !Files.isRegularFile(active.resolve(PROFILE_FILE), LinkOption.NOFOLLOW_LINKS)
+				|| !Files.isRegularFile(active.resolve(CONNECTION_CODE_DIGEST_FILE), LinkOption.NOFOLLOW_LINKS))
+			return null;
+		EnrolledClient enrolled = loadEnrolledDirectory(active);
+		String stored = readConnectionCodeDigest(active);
+		if (!expectedProfile.equals(enrolled.profile()) || stored == null || !matchesConnectionCodeDigest(stored, code))
+			return null;
+		// CURRENT and every generation file were already forced before publication.
+		// Re-forcing the root confirms a pointer whose post-rename directory force failed.
+		DurableFiles.forceDirectory(root);
+		return enrolled.credential();
+	}
+
+	private static boolean matchesConnectionCodeDigest(String stored, HttpConnectionCode code) {
 		byte[] storedBytes = stored.getBytes(StandardCharsets.US_ASCII);
 		return HttpTransportSecrets.constantTimeEquals(storedBytes,
 				connectionCodeDigest(code.encode()).getBytes(StandardCharsets.US_ASCII))

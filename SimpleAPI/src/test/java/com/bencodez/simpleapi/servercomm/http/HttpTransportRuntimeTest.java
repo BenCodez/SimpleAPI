@@ -281,8 +281,8 @@ class HttpTransportRuntimeTest {
 		queue.close();
 		HttpProxyTransportServer.DurableOutgoingQueue restartedQueue = new HttpProxyTransportServer.DurableOutgoingQueue(
 				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory);
-		assertTrue(restartedQueue.load().isEmpty(),
-				"a restart must not expose an operation whose sender observed rejection");
+		assertEquals(java.util.List.of(), restartedQueue.load().get("lobby-1"),
+				"a quarantine must reserve its backend without exposing an operation whose sender observed rejection");
 		HttpProxyTransportServer.BackendState restarted = new HttpProxyTransportServer.BackendState(
 				"lobby-1", restartedQueue, (server, id) -> { });
 		assertTrue(restarted.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty());

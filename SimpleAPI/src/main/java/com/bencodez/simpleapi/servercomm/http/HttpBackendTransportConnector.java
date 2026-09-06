@@ -153,8 +153,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	/** Convenience constructor for the owner-only credential directory produced by {@link #enroll}. */
 	public HttpBackendTransportConnector(HttpConnectionCode code, String serverId, Path credentials,
 			Consumer<JsonEnvelope> onEnvelope) throws Exception {
-		this(HttpClientCredentialStore.loadEnrolled(credentials), onEnvelope, credentials);
-		if (code == null || !profile(code, serverId).equals(this.profile)) throw new IllegalArgumentException("HTTP transport profile does not match connection code");
+		this(validatedEnrollment(code, serverId, credentials), onEnvelope, credentials);
 	}
 
 	/** Starts normal transport using only the persisted certificate and non-secret profile. */
@@ -164,9 +163,11 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 
 	/** Performs enrollment network I/O; call this from a connector/setup worker, never a platform main thread. */
 	public static HttpClientCredentialStore.ClientCredential enroll(HttpConnectionCode code, String serverId, Path credentials) throws Exception {
-		if (code == null || credentials == null || serverId == null || !serverId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")) throw new IllegalArgumentException("Enrollment configuration is invalid");
-		if (!code.serverId().equals(HttpTlsIdentity.canonicalServerId(serverId)))
-			throw new IllegalArgumentException("HTTP connection code belongs to a different backend");
+		if (credentials == null) throw new IllegalArgumentException("Enrollment configuration is invalid");
+		HttpClientCredentialStore.HttpClientProfile expectedProfile = profile(code, serverId);
+		HttpClientCredentialStore.ClientCredential published = HttpClientCredentialStore.recoverPublishedEnrollment(
+				credentials, code, expectedProfile);
+		if (published != null) return published;
 		code.requireActive(Clock.systemUTC());
 		byte[] payload = ("{\"server\":\"" + serverId + "\",\"token\":\"" + code.enrollmentToken() + "\"}").getBytes(StandardCharsets.UTF_8);
 		HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).followRedirects(HttpClient.Redirect.NEVER)
@@ -509,6 +510,14 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		if (code == null || serverId == null) throw new IllegalArgumentException("HTTP backend transport configuration is invalid");
 		if (!code.serverId().equals(HttpTlsIdentity.canonicalServerId(serverId))) throw new IllegalArgumentException("HTTP connection code belongs to a different backend");
 		return new HttpClientCredentialStore.HttpClientProfile(serverId, code.endpoint(), code.serverCertificatePin(), code.caCertificatePin());
+	}
+	private static HttpClientCredentialStore.EnrolledClient validatedEnrollment(HttpConnectionCode code,
+			String serverId, Path credentials) throws Exception {
+		HttpClientCredentialStore.HttpClientProfile expected = profile(code, serverId);
+		HttpClientCredentialStore.EnrolledClient enrolled = HttpClientCredentialStore.loadEnrolled(credentials);
+		if (!expected.equals(enrolled.profile()))
+			throw new IllegalArgumentException("HTTP transport profile does not match connection code");
+		return enrolled;
 	}
 	private static boolean matchesCredential(HttpClientCredentialStore.HttpClientProfile profile,
 			HttpClientCredentialStore.ClientCredential credential) {

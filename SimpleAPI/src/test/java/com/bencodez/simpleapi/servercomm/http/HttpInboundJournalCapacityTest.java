@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -57,8 +59,35 @@ class HttpInboundJournalCapacityTest {
 		}
 	}
 
+	@Test
+	void quarantineOnlyBackendIsIncludedInTheCombinedStartupCapacity() throws Exception {
+		Path outgoing = directory.resolve("quarantine-outgoing");
+		Files.createDirectory(outgoing);
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("quarantine-identity"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("quarantine-authority"));
+		seedRunningJournals(outgoing, 128);
+		String serverId = "server-128";
+		String deliveryId = UUID.nameUUIDFromBytes(serverId.getBytes(StandardCharsets.UTF_8)).toString();
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(deliveryId,
+				JsonEnvelope.builder("quarantined-retry").build());
+		Path serverDirectory = Files.createDirectory(outgoing.resolve(serverId));
+		Files.write(serverDirectory.resolve(".pending-" + deliveryId + ".json"),
+				HttpTransportProtocol.storedDelivery(delivery));
+
+		assertThrows(java.io.IOException.class, () -> new HttpProxyTransportServer(
+				new InetSocketAddress("localhost", 0), identity, authority, outgoing, ignored -> { }),
+				"129 distinct durable backend states must be rejected during startup rather than blocking a later retry");
+
+		try (HttpProxyTransportServer.DurableOutgoingQueue queue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				outgoing, com.bencodez.simpleapi.file.DurableFiles::forceDirectory)) {
+			var loaded = queue.load();
+			assertTrue(loaded.containsKey(serverId), "quarantine-only state must reserve its backend identity");
+			assertTrue(loaded.get(serverId).isEmpty(), "an unconfirmed quarantine must remain hidden from delivery");
+		}
+	}
+
 	private static void seedRunningJournals(Path outgoing, int count) throws Exception {
-		Path incoming = outgoing.getParent().resolve("outgoing-incoming");
+		Path incoming = outgoing.getParent().resolve(outgoing.getFileName() + "-incoming");
 		Files.createDirectory(incoming);
 		for (int index = 0; index < count; index++) {
 			String serverId = "server-" + index;
@@ -71,7 +100,7 @@ class HttpInboundJournalCapacityTest {
 	}
 
 	private static void seedEmptyJournals(Path outgoing, int count) throws Exception {
-		Path incoming = outgoing.getParent().resolve("outgoing-incoming");
+		Path incoming = outgoing.getParent().resolve(outgoing.getFileName() + "-incoming");
 		Files.createDirectory(incoming);
 		for (int index = 0; index < count; index++) {
 			HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(incoming, "server-" + index);

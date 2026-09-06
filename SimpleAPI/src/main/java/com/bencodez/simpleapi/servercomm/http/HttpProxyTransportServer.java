@@ -799,7 +799,10 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					}
 					if (++serverDirectories > MAX_BACKENDS)
 						throw new IOException("HTTP outgoing queue exceeds its backend bound");
-					if (!deliveries.isEmpty()) loaded.put(serverId, deliveries);
+					// Quarantine-only queues still reserve this backend's runtime state. Omitting
+					// them can consume the cap with unrelated inbound journals and make the
+					// identical retry unable to reach persist()'s quarantine recovery path.
+					loaded.put(serverId, deliveries);
 				}
 			}
 			return loaded;
