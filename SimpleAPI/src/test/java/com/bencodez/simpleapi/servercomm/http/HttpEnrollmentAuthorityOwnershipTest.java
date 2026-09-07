@@ -108,9 +108,11 @@ class HttpEnrollmentAuthorityOwnershipTest {
 			assertThrows(IllegalStateException.class, () -> failed.revoke("history"));
 		}
 		peer.revoke("history");
-		HttpConnectionCode secondCode = peer.createConnectionCode("history", endpoint, Duration.ofMinutes(5));
-		peer.enroll("history", secondCode.enrollmentToken());
-		peer.revoke("history");
+		for (int cycle = 0; cycle < 5; cycle++) {
+			HttpConnectionCode nextCode = peer.createConnectionCode("history", endpoint, Duration.ofMinutes(5));
+			peer.enroll("history", nextCode.enrollmentToken());
+			peer.revoke("history");
+		}
 		assertFalse(failed.authenticate("history", firstCertificate.certificate()),
 				"the stale authority must still reject the first revoked credential");
 		assertTrue(failed.enroll("history", peer.createConnectionCode("history", endpoint, Duration.ofMinutes(5)).enrollmentToken()) != null,
