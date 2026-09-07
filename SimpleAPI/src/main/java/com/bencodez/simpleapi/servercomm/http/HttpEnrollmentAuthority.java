@@ -51,8 +51,8 @@ public final class HttpEnrollmentAuthority {
 	private boolean rollbackStateAvailable;
 	private boolean revocationRetryRequired;
 	private String revocationRetryServerId;
-	private String revocationRetryFingerprint;
 	private long revocationRetryGeneration;
+	private RevocationFence revocationRetryFence;
 
 	/** Creates a restart-safe authority. State contains public certificate pins plus bounded hashes of pending tokens. */
 	public HttpEnrollmentAuthority(HttpTlsIdentity identity, Path stateDirectory) throws java.io.IOException {
@@ -276,12 +276,7 @@ public final class HttpEnrollmentAuthority {
 		Map<String, Long> previousRevocationGenerations = new HashMap<>(revocationGenerations);
 		if (removedBinding != null || !removedEnrollments.isEmpty() || removedRenewalNotBefore != null
 				|| revocationRetryRequired) try {
-			// Byte compaction may retain a generation after dropping its fingerprint marker.
-			// That detached proof is still needed to distinguish a stale authority from a
-			// peer that completed the same revocation, so never evict it to admit another
-			// server. The surrounding rollback restores this revocation if the bounded
-			// proof index is already full.
-			requireRevocationGenerationCapacity(serverId);
+			makeRevocationGenerationCapacity(serverId);
 			Set<String> fingerprints = revocationMarkers.computeIfAbsent(serverId, ignored -> new LinkedHashSet<>());
 			fingerprints.clear();
 			fingerprints.add(revocationFingerprint);
@@ -292,7 +287,7 @@ public final class HttpEnrollmentAuthority {
 			rollbackStateAvailable = false;
 			revocationRetryRequired = false;
 			revocationRetryServerId = null;
-			revocationRetryFingerprint = null;
+			revocationRetryFence = null;
 		}
 		catch (java.io.IOException failure) {
 			// Before publication, restore the exact disk-backed state so a retry still has work to persist.
@@ -307,14 +302,12 @@ public final class HttpEnrollmentAuthority {
 				revocationGenerations.putAll(previousRevocationGenerations);
 				rollbackStateAvailable = true;
 			}
-			if (failure instanceof RevocationProofCapacityException)
-				throw new IllegalStateException("HTTP enrollment revocation proof history exceeds its bound", failure);
 			persistenceFailure = true;
 			if (failure instanceof DurableFiles.PublishedException) rollbackStateAvailable = false;
 			revocationRetryRequired = true;
 			revocationRetryServerId = serverId;
-			revocationRetryFingerprint = revocationFingerprint;
 			revocationRetryGeneration = revocationGeneration;
+			revocationRetryFence = RevocationFence.of(removedBinding, removedEnrollments, removedRenewalNotBefore);
 			throw new IllegalStateException("Could not persist HTTP certificate revocation", failure);
 		}
 	}
@@ -399,7 +392,7 @@ public final class HttpEnrollmentAuthority {
 			rollbackStateAvailable = false;
 			revocationRetryRequired = false;
 			revocationRetryServerId = null;
-			revocationRetryFingerprint = null;
+			revocationRetryFence = null;
 			revocationRetryGeneration = 0L;
 		}
 	}
@@ -408,6 +401,9 @@ public final class HttpEnrollmentAuthority {
 		if (revocationRetryServerId == null) return false;
 		if (revocationRetryGeneration > 0L
 				&& revocationGenerations.getOrDefault(revocationRetryServerId, 0L) >= revocationRetryGeneration)
+			return true;
+		if (revocationRetryFence != null && revocationRetryFence.absentFrom(
+				bindings.get(revocationRetryServerId), enrollments, renewalNotBefore.get(revocationRetryServerId)))
 			return true;
 		if (bindings.containsKey(revocationRetryServerId)
 				|| renewalNotBefore.containsKey(revocationRetryServerId)) return false;
@@ -450,14 +446,19 @@ public final class HttpEnrollmentAuthority {
 			throw new java.io.IOException("HTTP enrollment revocation history exceeds its bound");
 	}
 
-	private void requireRevocationGenerationCapacity(String serverId) throws java.io.IOException {
-		if (!revocationGenerations.containsKey(serverId)
-				&& revocationGenerations.size() >= MAX_REVOCATION_MARKERS)
-			throw new RevocationProofCapacityException();
-	}
-
-	private static final class RevocationProofCapacityException extends java.io.IOException {
-		private static final long serialVersionUID = 1L;
+	private void makeRevocationGenerationCapacity(String serverId) throws java.io.IOException {
+		if (revocationGenerations.containsKey(serverId) || revocationGenerations.size() < MAX_REVOCATION_MARKERS)
+			return;
+		var iterator = revocationGenerations.keySet().iterator();
+		while (iterator.hasNext()) {
+			String candidate = iterator.next();
+			if (!candidate.equals(serverId) && !serverStatePresent(candidate)) {
+				iterator.remove();
+				revocationMarkers.remove(candidate);
+				return;
+			}
+		}
+		throw new java.io.IOException("HTTP enrollment revocation history exceeds its bound");
 	}
 
 	private Map<String, Set<String>> copyRevocationMarkers() {
@@ -730,6 +731,26 @@ public final class HttpEnrollmentAuthority {
 	private record Enrollment(byte[] tokenHash, Instant expiresAt, String serverId, String pendingCertificatePin) {
 		private Enrollment { tokenHash = tokenHash.clone(); }
 		@Override public byte[] tokenHash() { return tokenHash.clone(); }
+	}
+	private record RevocationFence(Set<String> certificatePins, Set<String> enrollmentLookups,
+			Instant renewalNotBefore) {
+		private static RevocationFence of(ClientBinding binding, Map<String, Enrollment> removedEnrollments,
+				Instant renewalNotBefore) {
+			Set<String> pins = new java.util.HashSet<>();
+			if (binding != null) {
+				if (binding.certificatePin() != null) pins.add(binding.certificatePin());
+				if (binding.pendingCertificatePin() != null) pins.add(binding.pendingCertificatePin());
+			}
+			return new RevocationFence(Set.copyOf(pins), Set.copyOf(removedEnrollments.keySet()), renewalNotBefore);
+		}
+
+		private boolean absentFrom(ClientBinding binding, Map<String, Enrollment> enrollments, Instant renewal) {
+			if (binding != null && (binding.certificatePin() != null && certificatePins.contains(binding.certificatePin())
+					|| binding.pendingCertificatePin() != null && certificatePins.contains(binding.pendingCertificatePin())))
+				return false;
+			if (enrollmentLookups.stream().anyMatch(enrollments::containsKey)) return false;
+			return renewalNotBefore == null || !renewalNotBefore.equals(renewal);
+		}
 	}
 	private static boolean samePin(String expected, String actual) {
 		return expected != null && actual != null && HttpTransportSecrets.constantTimeEquals(

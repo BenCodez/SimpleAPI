@@ -166,6 +166,10 @@ public final class HttpTlsIdentity {
 					server.setKeyEntry("server", serverKey, password, new Certificate[] { serverCertificate, caCertificate });
 					writeStore(serverFile, server, password);
 				}
+				// A prior initialization attempt may have unlinked its marker before
+				// directory writeback failed. Re-confirm that deletion before returning
+				// an otherwise complete identity for listener use.
+				DurableFiles.forceDirectory(directory);
 				return new HttpTlsIdentity(caKey, caCertificate, serverKey, serverCertificate, password, caFile, serverFile,
 						advertisedHost);
 			} finally { Arrays.fill(password, '\0'); }

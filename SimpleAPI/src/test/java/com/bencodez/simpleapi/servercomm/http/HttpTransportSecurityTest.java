@@ -552,7 +552,7 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
-	void revocationProofCapacityRejectsNewUniqueRevocationsWithoutDroppingDetachedProofs() throws Exception {
+	void revocationProofCapacityCompactsInactiveProofsWithoutBlockingRevocation() throws Exception {
 		Path state = directory.resolve("bounded-revocation-generations");
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("bounded-revocation-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
@@ -565,13 +565,13 @@ class HttpTransportSecurityTest {
 		}
 		HttpConnectionCode overflow = authority.createConnectionCode("backend-overflow",
 				URI.create("https://localhost:8443/"), Duration.ofMinutes(5));
-		assertThrows(IllegalStateException.class, () -> authority.revoke("backend-overflow"));
+		authority.revoke("backend-overflow");
 		java.util.Properties persisted = new java.util.Properties();
 		try (var input = Files.newInputStream(state.resolve("http-transport-clients.properties"))) { persisted.load(input); }
 		assertEquals(256L, persisted.stringPropertyNames().stream()
 				.filter(name -> name.startsWith("revocationGeneration.")).count());
-		assertDoesNotThrow(() -> authority.enroll("backend-overflow", overflow.enrollmentToken()),
-				"a revocation rejected by the proof bound must restore its pending enrollment");
+		assertThrows(IllegalArgumentException.class, () -> authority.enroll("backend-overflow", overflow.enrollmentToken()),
+				"capacity compaction must not prevent the new revocation from invalidating its token");
 		assertDoesNotThrow(() -> new HttpEnrollmentAuthority(identity, state));
 	}
 

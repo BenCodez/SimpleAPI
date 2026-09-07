@@ -84,6 +84,14 @@ class HttpEnrollmentAuthorityOwnershipTest {
 
 		peer.revoke("revoked");
 		HttpConnectionCode replacementCode = peer.createConnectionCode("revoked", endpoint, Duration.ofMinutes(5));
+		java.util.Properties compacted = new java.util.Properties();
+		Path stateFile = state.resolve("http-transport-clients.properties");
+		try (var input = Files.newInputStream(stateFile)) { compacted.load(input); }
+		String encodedServer = java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString("revoked".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		compacted.remove("revocation." + encodedServer);
+		compacted.remove("revocationGeneration." + encodedServer);
+		try (var output = Files.newOutputStream(stateFile)) { compacted.store(output, "compacted test state"); }
 		assertFalse(failed.authenticate("revoked", revoked.certificate()));
 		assertTrue(failed.authenticate("active", active.certificate()),
 				"adopting a peer-completed revocation must clear the stale global failure fence");

@@ -1,9 +1,12 @@
 package com.bencodez.simpleapi.servercomm.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -15,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -53,6 +57,38 @@ class HttpTlsIdentityOwnershipTest {
 
 		HttpTlsIdentity reloaded = HttpTlsIdentity.loadOrCreate(identityDirectory, "::1");
 		assertEquals(originalPin, reloaded.serverCertificatePin());
+	}
+
+	@Test
+	void retryReconfirmsInitializationMarkerRemoval() throws Exception {
+		Path identityDirectory = directory.resolve("marker-removal").toAbsolutePath().normalize();
+		AtomicInteger initialDirectoryForces = new AtomicInteger();
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(identityDirectory))
+					.thenAnswer(invocation -> {
+						if (initialDirectoryForces.incrementAndGet() == 5)
+							throw new IOException("injected marker deletion writeback failure");
+						return invocation.callRealMethod();
+					});
+			assertThrows(IOException.class, () -> HttpTlsIdentity.loadOrCreate(identityDirectory, "localhost"));
+		}
+		assertFalse(Files.exists(identityDirectory.resolve("http-transport-initializing")));
+		assertTrue(Files.isRegularFile(identityDirectory.resolve("http-transport-ca.p12")));
+		assertTrue(Files.isRegularFile(identityDirectory.resolve("http-transport-server.p12")));
+		assertTrue(Files.isRegularFile(identityDirectory.resolve("http-transport-password")));
+
+		AtomicInteger retryDirectoryForces = new AtomicInteger();
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(identityDirectory))
+					.thenAnswer(invocation -> {
+						retryDirectoryForces.incrementAndGet();
+						return invocation.callRealMethod();
+					});
+			assertNotEquals(null, HttpTlsIdentity.loadOrCreate(identityDirectory, "localhost"));
+		}
+		assertEquals(1, retryDirectoryForces.get(), "the retry must force the identity directory before returning");
 	}
 
 	@Test
