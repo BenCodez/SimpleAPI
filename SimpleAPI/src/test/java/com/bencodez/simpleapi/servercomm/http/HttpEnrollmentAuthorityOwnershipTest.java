@@ -83,9 +83,12 @@ class HttpEnrollmentAuthorityOwnershipTest {
 				"the failed authority must remain fail-closed before peer reconciliation");
 
 		peer.revoke("revoked");
+		HttpConnectionCode replacementCode = peer.createConnectionCode("revoked", endpoint, Duration.ofMinutes(5));
 		assertFalse(failed.authenticate("revoked", revoked.certificate()));
 		assertTrue(failed.authenticate("active", active.certificate()),
 				"adopting a peer-completed revocation must clear the stale global failure fence");
+		assertNotNull(failed.enroll("revoked", replacementCode.enrollmentToken()),
+				"a fresh post-revocation enrollment must not obscure the completed revocation");
 		assertTrue(Files.isRegularFile(state.resolve("http-transport-clients.properties")));
 	}
 }

@@ -33,6 +33,7 @@ public final class HttpEnrollmentAuthority {
 	private static final Duration MIN_RENEWAL_INTERVAL = Duration.ofMinutes(1);
 	private static final int MAX_PENDING_ENROLLMENTS = 128;
 	private static final int MAX_BINDINGS = 128;
+	private static final int MAX_REVOCATION_MARKERS = MAX_BINDINGS + MAX_PENDING_ENROLLMENTS;
 	private static final long MAX_STATE_BYTES = 65536;
 	private final HttpTlsIdentity identity;
 	private final Clock clock;
@@ -40,10 +41,12 @@ public final class HttpEnrollmentAuthority {
 	private final Map<String, Enrollment> enrollments = new HashMap<>();
 	private final Map<String, ClientBinding> bindings = new HashMap<>();
 	private final Map<String, Instant> renewalNotBefore = new HashMap<>();
+	private final Map<String, String> revocationMarkers = new HashMap<>();
 	private boolean persistenceFailure;
 	private boolean rollbackStateAvailable;
 	private boolean revocationRetryRequired;
 	private String revocationRetryServerId;
+	private String revocationRetryFingerprint;
 
 	/** Creates a restart-safe authority. State contains public certificate pins plus bounded hashes of pending tokens. */
 	public HttpEnrollmentAuthority(HttpTlsIdentity identity, Path stateDirectory) throws java.io.IOException {
@@ -247,13 +250,19 @@ public final class HttpEnrollmentAuthority {
 		// Absence is the durable revocation fence: authentication always requires an exact active binding.
 		ClientBinding removedBinding = bindings.remove(serverId);
 		Instant removedRenewalNotBefore = renewalNotBefore.remove(serverId);
+		String revocationFingerprint = revocationFingerprint(serverId, removedBinding,
+				removedEnrollments, removedRenewalNotBefore);
+		Map<String, String> previousRevocationMarkers = new HashMap<>(revocationMarkers);
 		if (removedBinding != null || !removedEnrollments.isEmpty() || removedRenewalNotBefore != null
 				|| revocationRetryRequired) try {
+			revocationMarkers.put(serverId, revocationFingerprint);
+			trimRevocationMarkers(serverId);
 			persistState();
 			persistenceFailure = false;
 			rollbackStateAvailable = false;
 			revocationRetryRequired = false;
 			revocationRetryServerId = null;
+			revocationRetryFingerprint = null;
 		}
 		catch (java.io.IOException failure) {
 			// Before publication, restore the exact disk-backed state so a retry still has work to persist.
@@ -262,12 +271,15 @@ public final class HttpEnrollmentAuthority {
 				if (removedBinding != null) bindings.put(serverId, removedBinding);
 				enrollments.putAll(removedEnrollments);
 				if (removedRenewalNotBefore != null) renewalNotBefore.put(serverId, removedRenewalNotBefore);
+				revocationMarkers.clear();
+				revocationMarkers.putAll(previousRevocationMarkers);
 				rollbackStateAvailable = true;
 			}
 			persistenceFailure = true;
 			if (failure instanceof DurableFiles.PublishedException) rollbackStateAvailable = false;
 			revocationRetryRequired = true;
 			revocationRetryServerId = serverId;
+			revocationRetryFingerprint = revocationFingerprint;
 			throw new IllegalStateException("Could not persist HTTP certificate revocation", failure);
 		}
 	}
@@ -323,14 +335,17 @@ public final class HttpEnrollmentAuthority {
 		Map<String, Enrollment> previousEnrollments = new HashMap<>(enrollments);
 		Map<String, ClientBinding> previousBindings = new HashMap<>(bindings);
 		Map<String, Instant> previousRenewalNotBefore = new HashMap<>(renewalNotBefore);
+		Map<String, String> previousRevocationMarkers = new HashMap<>(revocationMarkers);
 		enrollments.clear();
 		bindings.clear();
 		renewalNotBefore.clear();
+		revocationMarkers.clear();
 		try { loadState(); }
 		catch (java.io.IOException failure) {
 			enrollments.putAll(previousEnrollments);
 			bindings.putAll(previousBindings);
 			renewalNotBefore.putAll(previousRenewalNotBefore);
+			revocationMarkers.putAll(previousRevocationMarkers);
 			throw failure;
 		}
 		boolean peerCompletedRevocation = persistenceFailure && rollbackStateAvailable
@@ -346,14 +361,55 @@ public final class HttpEnrollmentAuthority {
 			rollbackStateAvailable = false;
 			revocationRetryRequired = false;
 			revocationRetryServerId = null;
+			revocationRetryFingerprint = null;
 		}
 	}
 
 	private boolean revocationReflectedInState() {
-		if (revocationRetryServerId == null || bindings.containsKey(revocationRetryServerId)
+		if (revocationRetryServerId == null) return false;
+		if (revocationRetryFingerprint != null && revocationRetryFingerprint.equals(
+				revocationMarkers.get(revocationRetryServerId))) return true;
+		if (bindings.containsKey(revocationRetryServerId)
 				|| renewalNotBefore.containsKey(revocationRetryServerId)) return false;
 		return enrollments.values().stream()
 				.noneMatch(enrollment -> revocationRetryServerId.equals(enrollment.serverId()));
+	}
+
+	private static String revocationFingerprint(String serverId, ClientBinding binding,
+			Map<String, Enrollment> removedEnrollments, Instant renewal) {
+		StringBuilder value = new StringBuilder();
+		appendFingerprintPart(value, serverId);
+		appendFingerprintPart(value, binding == null ? null : binding.certificatePin());
+		appendFingerprintPart(value, binding == null ? null : binding.pendingCertificatePin());
+		appendFingerprintPart(value, binding == null ? null : Boolean.toString(binding.revoked()));
+		new java.util.TreeMap<>(removedEnrollments).forEach((lookup, enrollment) -> {
+			appendFingerprintPart(value, lookup);
+			appendFingerprintPart(value, Long.toString(enrollment.expiresAt().toEpochMilli()));
+			appendFingerprintPart(value, enrollment.serverId());
+			appendFingerprintPart(value, enrollment.pendingCertificatePin());
+		});
+		appendFingerprintPart(value, renewal == null ? null : Long.toString(renewal.toEpochMilli()));
+		return HttpTransportSecrets.sha256Hex(value.toString().getBytes(StandardCharsets.UTF_8));
+	}
+
+	private static void appendFingerprintPart(StringBuilder output, String value) {
+		if (value == null) output.append("-1:");
+		else output.append(value.length()).append(':').append(value);
+	}
+
+	private void trimRevocationMarkers(String preservedServerId) throws java.io.IOException {
+		var iterator = revocationMarkers.keySet().iterator();
+		while (revocationMarkers.size() > MAX_REVOCATION_MARKERS && iterator.hasNext()) {
+			String candidate = iterator.next();
+			if (!candidate.equals(preservedServerId) && !serverStatePresent(candidate)) iterator.remove();
+		}
+		if (revocationMarkers.size() > MAX_REVOCATION_MARKERS)
+			throw new java.io.IOException("HTTP enrollment revocation history exceeds its bound");
+	}
+
+	private boolean serverStatePresent(String serverId) {
+		return bindings.containsKey(serverId) || renewalNotBefore.containsKey(serverId)
+				|| enrollments.values().stream().anyMatch(enrollment -> serverId.equals(enrollment.serverId()));
 	}
 
 	private synchronized void loadState() throws java.io.IOException {
@@ -365,7 +421,7 @@ public final class HttpEnrollmentAuthority {
 		try (var input = Files.newInputStream(stateFile, LinkOption.NOFOLLOW_LINKS)) { properties.load(input); }
 		String version = properties.getProperty("version");
 		if (!("1".equals(version) || "2".equals(version) || "3".equals(version) || "4".equals(version)
-				|| "5".equals(version)))
+				|| "5".equals(version) || "6".equals(version)))
 			throw new java.io.IOException("HTTP enrollment state is invalid");
 		for (String key : properties.stringPropertyNames()) {
 			if (key.startsWith("binding.")) {
@@ -374,7 +430,7 @@ public final class HttpEnrollmentAuthority {
 				String[] value = properties.getProperty(key, "").split(":", -1);
 				if (!((value.length == 2 && "1".equals(version))
 						|| (value.length == 3 && ("2".equals(version) || "3".equals(version)
-								|| "4".equals(version) || "5".equals(version))))
+								|| "4".equals(version) || "5".equals(version) || "6".equals(version))))
 						|| !value[0].matches("[0-9a-f]{64}"))
 					throw new java.io.IOException("HTTP enrollment state is invalid");
 				String pending = value.length == 3 && !"-".equals(value[1]) ? value[1] : null;
@@ -386,7 +442,8 @@ public final class HttpEnrollmentAuthority {
 					bindings.put(serverId, new ClientBinding(value[0], pending, false));
 				}
 			} else if (key.startsWith("enrollment.")
-					&& ("3".equals(version) || "4".equals(version) || "5".equals(version))) {
+					&& ("3".equals(version) || "4".equals(version) || "5".equals(version)
+							|| "6".equals(version))) {
 				String lookup = key.substring("enrollment.".length());
 				if (!lookup.matches("[A-Za-z0-9_-]{43}")) throw new java.io.IOException("HTTP enrollment state is invalid");
 				byte[] tokenHash;
@@ -395,7 +452,8 @@ public final class HttpEnrollmentAuthority {
 				if (tokenHash.length != 32) throw new java.io.IOException("HTTP enrollment state is invalid");
 				String[] value = properties.getProperty(key, "").split(":", -1);
 				if (!(value.length == 2 && "3".equals(version))
-						&& !(value.length == 3 && ("4".equals(version) || "5".equals(version))))
+						&& !(value.length == 3 && ("4".equals(version) || "5".equals(version)
+								|| "6".equals(version))))
 					throw new java.io.IOException("HTTP enrollment state is invalid");
 				Instant expiresAt;
 				String serverId;
@@ -411,7 +469,7 @@ public final class HttpEnrollmentAuthority {
 						throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 					enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, pendingPin));
 				}
-			} else if (key.startsWith("renewal.") && "5".equals(version)) {
+			} else if (key.startsWith("renewal.") && ("5".equals(version) || "6".equals(version))) {
 				String encodedServer = key.substring("renewal.".length());
 				String serverId;
 				Instant notBefore;
@@ -430,6 +488,22 @@ public final class HttpEnrollmentAuthority {
 				if (renewalNotBefore.size() >= MAX_BINDINGS
 						|| renewalNotBefore.putIfAbsent(serverId, notBefore) != null)
 					throw new java.io.IOException("HTTP enrollment state exceeds its bound");
+			} else if (key.startsWith("revocation.") && "6".equals(version)) {
+				String encodedServer = key.substring("revocation.".length());
+				String serverId;
+				try {
+					serverId = HttpTlsIdentity.canonicalServerId(new String(
+							Base64.getUrlDecoder().decode(encodedServer), StandardCharsets.UTF_8));
+					String canonicalEncoding = Base64.getUrlEncoder().withoutPadding().encodeToString(
+							serverId.getBytes(StandardCharsets.UTF_8));
+					if (!canonicalEncoding.equals(encodedServer)) throw new IllegalArgumentException();
+				} catch (RuntimeException invalid) {
+					throw new java.io.IOException("HTTP enrollment state is invalid", invalid);
+				}
+				String fingerprint = properties.getProperty(key, "");
+				if (!fingerprint.matches("[0-9a-f]{64}") || revocationMarkers.size() >= MAX_REVOCATION_MARKERS
+						|| revocationMarkers.putIfAbsent(serverId, fingerprint) != null)
+					throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 			} else if (!"version".equals(key)) throw new java.io.IOException("HTTP enrollment state is invalid");
 		}
 		Instant now = clock.instant();
@@ -444,10 +518,11 @@ public final class HttpEnrollmentAuthority {
 		Instant now = clock.instant();
 		renewalNotBefore.entrySet().removeIf(entry -> !bindings.containsKey(entry.getKey())
 				|| !entry.getValue().isAfter(now));
-		if (reservedBindingCount() > MAX_BINDINGS || enrollments.size() > MAX_PENDING_ENROLLMENTS)
+		if (reservedBindingCount() > MAX_BINDINGS || enrollments.size() > MAX_PENDING_ENROLLMENTS
+				|| revocationMarkers.size() > MAX_REVOCATION_MARKERS)
 			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 		Properties properties = new Properties();
-		properties.setProperty("version", "5");
+		properties.setProperty("version", "6");
 		for (Map.Entry<String, ClientBinding> entry : bindings.entrySet()) {
 			String key = Base64.getUrlEncoder().withoutPadding().encodeToString(entry.getKey().getBytes(StandardCharsets.UTF_8));
 			properties.setProperty("binding." + key, entry.getValue().certificatePin() + ":"
@@ -465,6 +540,11 @@ public final class HttpEnrollmentAuthority {
 			String server = Base64.getUrlEncoder().withoutPadding().encodeToString(
 					entry.getKey().getBytes(StandardCharsets.UTF_8));
 			properties.setProperty("renewal." + server, Long.toString(entry.getValue().toEpochMilli()));
+		}
+		for (Map.Entry<String, String> entry : revocationMarkers.entrySet()) {
+			String key = Base64.getUrlEncoder().withoutPadding().encodeToString(
+					entry.getKey().getBytes(StandardCharsets.UTF_8));
+			properties.setProperty("revocation." + key, entry.getValue());
 		}
 		java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
 		properties.store(bytes, "VotingPlugin HTTP transport authority state");
