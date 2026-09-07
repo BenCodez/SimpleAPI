@@ -16,6 +16,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.X509TrustManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,6 +33,13 @@ class HttpTransportSecurityTest {
 				HttpBackendTransportConnector.renewalRetryDelay(Duration.ofMinutes(4)));
 		assertTrue(HttpBackendTransportConnector.renewalRetryDelay(Duration.ofSeconds(3))
 				.compareTo(Duration.ofSeconds(3)) < 0);
+	}
+
+	@Test
+	void requestTimeoutConversionPreservesSubMillisecondDurations() {
+		assertEquals(1L, HttpBackendTransportConnector.timeoutNanos(Duration.ofNanos(1L)));
+		assertEquals(999_999L, HttpBackendTransportConnector.timeoutNanos(Duration.ofNanos(999_999L)));
+		assertEquals(Long.MAX_VALUE, HttpBackendTransportConnector.timeoutNanos(Duration.ofSeconds(Long.MAX_VALUE)));
 	}
 
 	@Test
@@ -640,6 +651,51 @@ class HttpTransportSecurityTest {
 		HttpClientCredentialStore.saveEnrolled(client, code, manuallyReenrolled);
 		assertEquals(HttpTransportSecrets.certificatePin(manuallyReenrolled.certificate()),
 				HttpTransportSecrets.certificatePin(HttpClientCredentialStore.loadEnrolled(client).credential().certificate()));
+	}
+
+	@Test
+	void credentialReplacementReclaimsSupersededGenerations() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("retention-proxy"), "localhost");
+		Path client = directory.resolve("retention-client");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(60), "R".repeat(43));
+		HttpClientCredentialStore.saveEnrolled(client, code, identity.issueClientCertificate("lobby-1"));
+		for (int i = 0; i < 5; i++) {
+			HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(client,
+					identity.issueClientCertificate("lobby-1"));
+			HttpClientCredentialStore.activateReplacement(client, staged);
+		}
+		Path generations = client.resolve("http-transport-client-generations");
+		try (var entries = Files.list(generations)) {
+			assertTrue(entries.filter(Files::isDirectory).count() <= 2,
+					"only the active and immediately previous generation may remain");
+		}
+		assertDoesNotThrow(() -> HttpClientCredentialStore.loadEnrolled(client));
+	}
+
+	@Test
+	void enrollmentLockSerializesCredentialMutations() throws Exception {
+		Path client = directory.resolve("lock-client");
+		AtomicInteger active = new AtomicInteger();
+		AtomicInteger maximum = new AtomicInteger();
+		CountDownLatch started = new CountDownLatch(2);
+		var executor = Executors.newFixedThreadPool(2);
+		try {
+			for (int i = 0; i < 2; i++) executor.submit(() -> {
+				try {
+					HttpClientCredentialStore.withEnrollmentLock(client, () -> {
+						started.countDown();
+						int current = active.incrementAndGet();
+						maximum.accumulateAndGet(current, Math::max);
+						try { Thread.sleep(40L); }
+						finally { active.decrementAndGet(); }
+						return null;
+					});
+				} catch (Exception failure) { throw new RuntimeException(failure); }
+			});
+			assertTrue(started.await(2, TimeUnit.SECONDS));
+		} finally { executor.shutdownNow(); }
+		assertEquals(1, maximum.get(), "credential mutations must not overlap");
 	}
 
 	@Test

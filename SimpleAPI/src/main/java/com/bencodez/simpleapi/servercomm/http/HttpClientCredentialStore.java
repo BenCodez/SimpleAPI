@@ -92,13 +92,17 @@ public final class HttpClientCredentialStore {
 	public static void saveEnrolled(Path directory, HttpConnectionCode code, HttpTlsIdentity.IssuedClientCertificate issued)
 			throws IOException {
 		if (code == null || issued == null) throw new IllegalArgumentException("Connection code and credential are required");
+		try { withEnrollmentLock(directory, () -> { saveEnrolledLocked(directory, code, issued); return null; }); }
+		catch (IOException failure) { throw failure; }
+		catch (Exception failure) { throw new IOException("Could not persist HTTP client credential", failure); }
+	}
+
+	static void saveEnrolledLocked(Path directory, HttpConnectionCode code,
+			HttpTlsIdentity.IssuedClientCertificate issued) throws Exception {
 		HttpClientProfile profile = new HttpClientProfile(HttpTlsIdentity.canonicalServerId(issued.serverId()), code.endpoint(),
 				code.serverCertificatePin(), code.caCertificatePin());
-		try {
-			StagedCredential staged = stage(directory, issued, profile, connectionCodeDigest(code), null);
-			activateReplacement(directory, staged);
-		} catch (IOException failure) { throw failure;
-		} catch (Exception failure) { throw new IOException("Could not persist HTTP client credential", failure); }
+		StagedCredential staged = stage(directory, issued, profile, connectionCodeDigest(code), null);
+		activateReplacement(directory, staged);
 	}
 
 	private static void writeProfile(Path directory, HttpClientProfile profile) throws IOException {
@@ -236,7 +240,39 @@ public final class HttpClientCredentialStore {
 				|| !Files.isRegularFile(generation.resolve(PASSWORD_FILE), LinkOption.NOFOLLOW_LINKS)
 				|| !Files.isRegularFile(generation.resolve(PROFILE_FILE), LinkOption.NOFOLLOW_LINKS))
 			throw new IOException("Staged HTTP credential is incomplete");
+		String previous = readCurrentGeneration(directory);
 		writePrivate(safe(directory.resolve(CURRENT_FILE)), staged.name().getBytes(StandardCharsets.US_ASCII));
+		reclaimSupersededGenerations(directory, staged.name(), previous);
+	}
+
+	private static String readCurrentGeneration(Path directory) throws IOException {
+		Path current = safe(directory.resolve(CURRENT_FILE));
+		if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) return "";
+		if (!Files.isRegularFile(current, LinkOption.NOFOLLOW_LINKS) || Files.size(current) > 64)
+			throw new IOException("HTTP client credential pointer is invalid");
+		String name = Files.readString(current, StandardCharsets.US_ASCII);
+		return name.matches("[0-9a-f-]{36}") ? name : "";
+	}
+
+	private static void reclaimSupersededGenerations(Path directory, String active, String previous) throws IOException {
+		Path generations = safe(directory.resolve(GENERATIONS_DIRECTORY));
+		try (var stream = Files.list(generations)) {
+			for (Path candidate : stream.toList()) {
+				String name = candidate.getFileName().toString();
+				if (name.equals(active) || name.equals(previous)) continue;
+				if (!name.matches("[0-9a-f-]{36}") || Files.isSymbolicLink(candidate)
+						|| !Files.isDirectory(candidate, LinkOption.NOFOLLOW_LINKS)) continue;
+				try (var files = Files.list(candidate)) {
+					for (Path file : files.toList()) {
+						if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
+							throw new IOException("HTTP credential generation directory is unsafe");
+						Files.deleteIfExists(file);
+					}
+				}
+				Files.deleteIfExists(candidate);
+			}
+		}
+		DurableFiles.forceDirectory(generations);
 	}
 
 	static record StagedCredential(String name, ClientCredential credential, HttpClientProfile profile) { }

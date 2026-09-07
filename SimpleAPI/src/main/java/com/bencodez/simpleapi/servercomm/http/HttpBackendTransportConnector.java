@@ -184,7 +184,8 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		LimitedResponse response = sendLimited(client, request);
 		if (response.statusCode() != 201) throw new IllegalArgumentException("Enrollment was rejected");
 		HttpTlsIdentity.IssuedClientCertificate issued = HttpTransportProtocol.parseEnrollmentResponse(serverId, response.body());
-		HttpClientCredentialStore.saveEnrolled(credentials, code, issued); return HttpClientCredentialStore.load(credentials);
+		HttpClientCredentialStore.saveEnrolledLocked(credentials, code, issued);
+		return HttpClientCredentialStore.load(credentials);
 	}
 
 	public void start() {
@@ -557,12 +558,14 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (directory == null) return;
 			if (pendingActivation != null) {
 				try {
-					HttpClientCredentialStore.activateReplacement(directory, pendingActivation.staged());
+					HttpClientCredentialStore.withEnrollmentLock(directory, () -> {
+						HttpClientCredentialStore.activateReplacement(directory, pendingActivation.staged()); return null;
+					});
 					profile = pendingActivation.staged().profile();
 					client = pendingActivation.client();
 					credential = pendingActivation.staged().credential();
 					pendingActivation = null;
-				} catch (IOException unconfirmed) { return; }
+				} catch (Exception unconfirmed) { return; }
 			}
 			if (!HttpTlsIdentity.needsRenewal(credential.certificate(), Clock.systemUTC())) return;
 			long now = System.nanoTime();
@@ -580,13 +583,24 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 					return;
 				}
 				HttpTlsIdentity.IssuedClientCertificate issued = HttpTransportProtocol.parseEnrollmentResponse(serverId, response.body());
-				HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(directory, issued);
-				HttpClientCredentialStore.ClientCredential replacement = staged.credential();
+				RenewalActivation activation = HttpClientCredentialStore.withEnrollmentLock(directory, () -> {
+					HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(directory, issued);
+					HttpClientCredentialStore.ClientCredential replacement = staged.credential();
+					HttpClientCredentialStore.HttpClientProfile replacementProfile = staged.profile();
+					if (!matchesCredential(replacementProfile, replacement)) throw new IllegalArgumentException("Renewed HTTP certificate is invalid");
+					HttpClient replacementClient = client(replacementProfile, replacement);
+					try {
+						HttpClientCredentialStore.activateReplacement(directory, staged);
+						return new RenewalActivation(staged, replacement, replacementClient, true);
+					} catch (IOException unconfirmed) {
+						return new RenewalActivation(staged, replacement, replacementClient, false);
+					}
+				});
+				HttpClientCredentialStore.StagedCredential staged = activation.staged();
+				HttpClientCredentialStore.ClientCredential replacement = activation.credential();
 				HttpClientCredentialStore.HttpClientProfile replacementProfile = staged.profile();
-				if (!matchesCredential(replacementProfile, replacement)) throw new IllegalArgumentException("Renewed HTTP certificate is invalid");
-				HttpClient replacementClient = client(replacementProfile, replacement);
-				try { HttpClientCredentialStore.activateReplacement(directory, staged); }
-				catch (IOException unconfirmed) {
+				HttpClient replacementClient = activation.client();
+				if (!activation.activated()) {
 					// A rename may already be visible while its parent fsync is unresolved.
 					// Keep using the restart-safe old identity and retry precisely this
 					// generation; requesting another renewal could revoke both identities.
@@ -604,6 +618,8 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		}
 	}
 	private record PendingActivation(HttpClientCredentialStore.StagedCredential staged, HttpClient client) { }
+	private record RenewalActivation(HttpClientCredentialStore.StagedCredential staged,
+			HttpClientCredentialStore.ClientCredential credential, HttpClient client, boolean activated) { }
 	static Duration renewalRetryDelay(Duration remainingValidity) {
 		if (remainingValidity == null || remainingValidity.isNegative() || remainingValidity.isZero())
 			return Duration.ofSeconds(1);
@@ -628,7 +644,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		HttpResponse<byte[]> response;
 		try {
 			Duration timeout = request.timeout().orElse(CLIENT_TIMEOUT);
-			response = exchange.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+			response = exchange.get(timeoutNanos(timeout), TimeUnit.NANOSECONDS);
 		} catch (TimeoutException timeout) {
 			exchange.cancel(true);
 			throw new HttpTimeoutException("HTTP transport response timed out");
@@ -644,6 +660,11 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		if (declaredLength > HttpTransportProtocol.MAX_BODY_BYTES)
 			throw new IOException("HTTP transport response exceeds its limit");
 		return new LimitedResponse(response.statusCode(), response.body());
+	}
+
+	static long timeoutNanos(Duration timeout) {
+		try { return timeout.toNanos(); }
+		catch (ArithmeticException overflow) { return Long.MAX_VALUE; }
 	}
 
 	private static final class LimitedBodySubscriber implements HttpResponse.BodySubscriber<byte[]> {
