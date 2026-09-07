@@ -1,0 +1,99 @@
+name: Shared libraries and downstream compatibility
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, codex/simpleapi-shared-libraries]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-libraries-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+      # Pinned compatibility fixtures, not moving branches or a release/deployment job.
+      - uses: actions/checkout@v4
+        with:
+          repository: BenCodez/AdvancedCore
+          ref: 3f66545590644d87ec45d7864d831691a07830ac
+          path: .compat/AdvancedCore
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: BenCodez/VotingPlugin
+          ref: 350caccb12053a12bb47bbe22012b875580a77d2
+          path: .compat/VotingPlugin
+          persist-credentials: false
+      - name: Isolate Maven cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/simpleapi-candidate-m2"
+          mkdir -p "$repo"
+          if [ -d "$HOME/.m2/repository" ]; then cp -a "$HOME/.m2/repository/." "$repo/"; fi
+          echo "CANDIDATE_M2=$repo" >> "$GITHUB_ENV"
+      - name: Build shared libraries and unchanged legacy artifact
+        run: mvn -B -ntp -Dmaven.repo.local="$CANDIDATE_M2" clean install
+      - name: Collect runtime classpaths
+        shell: bash
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -nsu -Dmaven.repo.local="$CANDIDATE_M2" -pl simpleapi-core,simpleapi-configurate,simpleapi-sql -am org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/runtime-deps
+          mvn -B -ntp -nsu -Dmaven.repo.local="$CANDIDATE_M2" -f SimpleAPI/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dmdep.outputFile=target/compatibility-classpath.txt
+      - name: Verify actual packaged artifacts and Bukkit parity
+        run: python3 tools/verify-shared-artifacts.py
+      - name: Pin candidate dependency bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$CANDIDATE_M2/com/bencodez/simpleapi/1.0.2-SNAPSHOT/simpleapi-1.0.2-SNAPSHOT.jar"
+          cmp SimpleAPI/target/SimpleAPI.jar "$candidate"
+          sha256sum "$candidate" > "$RUNNER_TEMP/simpleapi-candidate.sha256"
+      - name: Build AdvancedCore against candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -nsu -Dmaven.repo.local="$CANDIDATE_M2" -f .compat/AdvancedCore/AdvancedCore/pom.xml clean install
+          sha256sum -c "$RUNNER_TEMP/simpleapi-candidate.sha256"
+          mvn -B -ntp -nsu -Dmaven.repo.local="$CANDIDATE_M2" -f .compat/AdvancedCore/AdvancedCore/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dmdep.outputFile=target/candidate-classpath.txt
+          grep -F "$CANDIDATE_M2/com/bencodez/simpleapi/1.0.2-SNAPSHOT/simpleapi-1.0.2-SNAPSHOT.jar" .compat/AdvancedCore/AdvancedCore/target/candidate-classpath.txt
+          sha256sum "$CANDIDATE_M2/com/bencodez/advancedcore/3.8.2-SNAPSHOT/advancedcore-3.8.2-SNAPSHOT.jar" > "$RUNNER_TEMP/advancedcore-candidate.sha256"
+      - name: Build VotingPlugin against candidate chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -nsu -Dmaven.repo.local="$CANDIDATE_M2" -f .compat/VotingPlugin/VotingPlugin/pom.xml clean verify
+          sha256sum -c "$RUNNER_TEMP/simpleapi-candidate.sha256"
+          sha256sum -c "$RUNNER_TEMP/advancedcore-candidate.sha256"
+          mvn -B -ntp -nsu -Dmaven.repo.local="$CANDIDATE_M2" -f .compat/VotingPlugin/VotingPlugin/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dmdep.outputFile=target/candidate-classpath.txt
+          grep -F "$CANDIDATE_M2/com/bencodez/advancedcore/3.8.2-SNAPSHOT/advancedcore-3.8.2-SNAPSHOT.jar" .compat/VotingPlugin/VotingPlugin/target/candidate-classpath.txt
+      - name: Preserve test reports and candidate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-library-validation
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            simpleapi-*/target/*.jar
+            simpleapi-*/target/surefire-reports/*.xml
+            SimpleAPI/target/surefire-reports/*.xml
+            .compat/AdvancedCore/AdvancedCore/target/surefire-reports/*.xml
+            .compat/VotingPlugin/VotingPlugin/target/surefire-reports/*.xml
