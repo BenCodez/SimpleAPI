@@ -3,11 +3,13 @@ package com.bencodez.simpleapi.servercomm.http;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +18,7 @@ import java.util.UUID;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -23,6 +26,51 @@ import org.junit.jupiter.api.io.TempDir;
 
 class HttpProxyLifecycleRecoveryTest {
 	@TempDir Path directory;
+
+	@Test
+	void closeDefersOutgoingSealUntilAcknowledgeCallbackReturns() throws Exception {
+		Path outgoing = directory.resolve("delayed-ack-outgoing");
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("delayed-ack-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("delayed-ack-authority"));
+		HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0), identity,
+				authority, outgoing, ignored -> { });
+		HttpProxyTransportServer.BackendState state = server.backendStateForTest("lobby-1");
+		String id = UUID.randomUUID().toString();
+		assertTrue(state.enqueue(new HttpTransportProtocol.Delivery(id, JsonEnvelope.builder("delayed-ack").build())));
+		CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1), finished = new CountDownLatch(1);
+		AtomicReference<Throwable> failure = new AtomicReference<>();
+		ThreadPoolExecutor listener = listenerExecutor(server);
+		listener.execute(() -> {
+			started.countDown();
+			while (release.getCount() != 0L) try { release.await(); }
+			catch (InterruptedException ignored) { }
+			try { state.acknowledge(List.of(id)); }
+			catch (Throwable error) { failure.set(error); }
+			finally { finished.countDown(); }
+		});
+		server.start();
+		Thread closer = new Thread(server::close, "delayed-ack-close");
+		closer.start();
+		try {
+			assertTrue(started.await(2, TimeUnit.SECONDS));
+			Thread.sleep(6200L); // after bounded shutdown and interruption grace period
+			release.countDown();
+			assertTrue(finished.await(2, TimeUnit.SECONDS));
+			assertNull(failure.get(), "acknowledgement must complete before outgoing queue sealing");
+			assertTrue(state.await("lobby-1", UUID.randomUUID().toString(), 0).messages().isEmpty(),
+					"the delayed acknowledgement must remove the durable delivery");
+		} finally {
+			release.countDown();
+			server.close();
+			closer.join(3000L);
+		}
+	}
+
+	private static ThreadPoolExecutor listenerExecutor(HttpProxyTransportServer server) throws Exception {
+		Field field = HttpProxyTransportServer.class.getDeclaredField("listenerExecutor");
+		field.setAccessible(true);
+		return (ThreadPoolExecutor) field.get(server);
+	}
 
 	@Test
 	void callbackOwnedCloseCompletesItsInboundJournalBeforeItIsSealed() throws Exception {

@@ -721,6 +721,7 @@ class HttpTransportRuntimeTest {
 			release.countDown();
 			assertTrue(stopped.await(2, TimeUnit.SECONDS));
 		} finally { release.countDown(); }
+		connector.close();
 		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
 		HttpInboundDeliveryStore.State state;
 		do {

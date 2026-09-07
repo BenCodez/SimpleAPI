@@ -286,20 +286,25 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 
 	private void finishClose() {
 		boolean handlersTerminated;
+		boolean listenersTerminated;
 		try { handlersTerminated = shutdown(handlerExecutor); }
-		finally { shutdown(listenerExecutor); }
-		if (!handlersTerminated) {
-			Thread reaper = new Thread(this::finishCloseAfterHandlers, "SimpleAPI-HTTP-proxy-handler-reaper");
+		finally { listenersTerminated = shutdown(listenerExecutor); }
+		// Listener workers can still be inside BackendState.acknowledge(), whose
+		// durable removal must complete before outgoing ownership is released.
+		if (!handlersTerminated || !listenersTerminated) {
+			Thread reaper = new Thread(this::finishCloseAfterExecutors, "SimpleAPI-HTTP-proxy-close-reaper");
 			reaper.setDaemon(true);
 			reaper.start();
 			return;
 		}
 		sealAfterHandlers();
 	}
-	private void finishCloseAfterHandlers() {
+	private void finishCloseAfterExecutors() {
 		boolean interrupted = false;
-		while (!handlerExecutor.isTerminated()) try { handlerExecutor.awaitTermination(1, TimeUnit.DAYS); }
-		catch (InterruptedException ignored) { interrupted = true; }
+		while (!handlerExecutor.isTerminated() || !listenerExecutor.isTerminated()) try {
+			if (!handlerExecutor.isTerminated()) handlerExecutor.awaitTermination(1, TimeUnit.DAYS);
+			if (!listenerExecutor.isTerminated()) listenerExecutor.awaitTermination(1, TimeUnit.DAYS);
+		} catch (InterruptedException ignored) { interrupted = true; }
 		if (interrupted) Thread.currentThread().interrupt();
 		sealAfterHandlers();
 	}
