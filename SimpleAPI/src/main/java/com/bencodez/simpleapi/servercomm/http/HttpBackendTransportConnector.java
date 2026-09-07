@@ -573,17 +573,19 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			Duration retry = renewalRetryDelay(Duration.between(Instant.now(),
 					credential.certificate().getNotAfter().toInstant()));
 			try {
-				byte[] body = HttpTransportProtocol.renewalRequest(serverId);
-				HttpRequest request = HttpRequest.newBuilder(profile.endpoint().resolve("v1/renew")).timeout(CLIENT_TIMEOUT)
-						.header("Content-Type", "application/json").header("Cache-Control", "no-store")
-						.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
-				LimitedResponse response = sendLimited(client, request);
-				if (response.statusCode() != 201) {
-					nextRenewalCheckNanos = renewalDeadline(now, retry);
-					return;
-				}
-				HttpTlsIdentity.IssuedClientCertificate issued = HttpTransportProtocol.parseEnrollmentResponse(serverId, response.body());
+				// Keep the lock from before issuance through parsing, staging, and activation;
+				// enrollment/revocation must not publish a competing generation in between.
 				RenewalActivation activation = HttpClientCredentialStore.withEnrollmentLock(directory, () -> {
+					byte[] body = HttpTransportProtocol.renewalRequest(serverId);
+					HttpRequest request = HttpRequest.newBuilder(profile.endpoint().resolve("v1/renew")).timeout(CLIENT_TIMEOUT)
+							.header("Content-Type", "application/json").header("Cache-Control", "no-store")
+							.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
+					LimitedResponse response = sendLimited(client, request);
+					if (response.statusCode() != 201) {
+						nextRenewalCheckNanos = renewalDeadline(now, retry);
+						return null;
+					}
+					HttpTlsIdentity.IssuedClientCertificate issued = HttpTransportProtocol.parseEnrollmentResponse(serverId, response.body());
 					HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(directory, issued);
 					HttpClientCredentialStore.ClientCredential replacement = staged.credential();
 					HttpClientCredentialStore.HttpClientProfile replacementProfile = staged.profile();
@@ -596,6 +598,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 						return new RenewalActivation(staged, replacement, replacementClient, false);
 					}
 				});
+				if (activation == null) return;
 				HttpClientCredentialStore.StagedCredential staged = activation.staged();
 				HttpClientCredentialStore.ClientCredential replacement = activation.credential();
 				HttpClientCredentialStore.HttpClientProfile replacementProfile = staged.profile();

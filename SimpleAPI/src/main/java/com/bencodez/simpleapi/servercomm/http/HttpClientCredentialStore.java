@@ -265,14 +265,18 @@ public final class HttpClientCredentialStore {
 				if (name.equals(active) || name.equals(previous)) continue;
 				if (!name.matches("[0-9a-f-]{36}") || Files.isSymbolicLink(candidate)
 						|| !Files.isDirectory(candidate, LinkOption.NOFOLLOW_LINKS)) continue;
-				try (var files = Files.list(candidate)) {
-					for (Path file : files.toList()) {
-						if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
-							throw new IOException("HTTP credential generation directory is unsafe");
-						Files.deleteIfExists(file);
+				try {
+					try (var files = Files.list(candidate)) {
+						for (Path file : files.toList()) {
+							if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
+								throw new IOException("HTTP credential generation directory is unsafe");
+							Files.deleteIfExists(file);
+						}
 					}
+					Files.deleteIfExists(candidate);
+				} catch (IOException ignored) {
+					// Keep this candidate for a later retry, but continue reclaiming others.
 				}
-				Files.deleteIfExists(candidate);
 			}
 		}
 		DurableFiles.forceDirectory(generations);

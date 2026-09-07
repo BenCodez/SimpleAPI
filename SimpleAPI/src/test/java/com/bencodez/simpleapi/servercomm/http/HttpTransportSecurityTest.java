@@ -683,11 +683,17 @@ class HttpTransportSecurityTest {
 		Path stale = client.resolve("http-transport-client-generations")
 				.resolve("00000000-0000-0000-0000-000000000000");
 		Files.createDirectories(stale.resolve("unexpected-child"));
+		Path reclaimable = client.resolve("http-transport-client-generations")
+				.resolve("11111111-1111-1111-1111-111111111111");
+		Files.createDirectories(reclaimable);
+		Files.writeString(reclaimable.resolve("orphan"), "orphan");
 		HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(client,
 				identity.issueClientCertificate("lobby-1"));
 		assertDoesNotThrow(() -> HttpClientCredentialStore.activateReplacement(client, staged));
 		assertEquals(HttpTransportSecrets.certificatePin(staged.credential().certificate()),
 				HttpTransportSecrets.certificatePin(HttpClientCredentialStore.loadEnrolled(client).credential().certificate()));
+		assertFalse(Files.exists(reclaimable), "cleanup must continue past an unsafe stale generation");
+		assertTrue(Files.exists(stale), "unsafe stale generations must be retained for a later retry");
 	}
 
 	@Test
