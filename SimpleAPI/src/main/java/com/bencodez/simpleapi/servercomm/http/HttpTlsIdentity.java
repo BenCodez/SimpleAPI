@@ -1,7 +1,6 @@
 package com.bencodez.simpleapi.servercomm.http;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.math.BigInteger;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;

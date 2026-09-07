@@ -132,7 +132,7 @@ class VelocityJSONFileTest {
                 }));
             }
             for (Future<?> save : saves) {
-                save.get();
+                save.get(10, TimeUnit.SECONDS);
             }
         } finally {
             pool.shutdown();

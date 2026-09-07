@@ -67,8 +67,8 @@ class HttpEnrollmentPublicationRecoveryTest {
 			var first = workers.submit(() -> { start.await(); return HttpBackendTransportConnector.enroll(code, "lobby-1", credentials); });
 			var second = workers.submit(() -> { start.await(); return HttpBackendTransportConnector.enroll(code, "lobby-1", credentials); });
 			start.countDown();
-			var firstCredential = first.get();
-			var secondCredential = second.get();
+			var firstCredential = first.get(10, TimeUnit.SECONDS);
+			var secondCredential = second.get(10, TimeUnit.SECONDS);
 			assertArrayEquals(firstCredential.certificate().getEncoded(), secondCredential.certificate().getEncoded(),
 					"the second caller must recover the generation published under the directory lock");
 			assertTrue(authority.authenticate("lobby-1", firstCredential.certificate()));
