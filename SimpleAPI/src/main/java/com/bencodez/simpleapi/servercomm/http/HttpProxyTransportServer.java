@@ -285,20 +285,32 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	}
 
 	private void finishClose() {
-		try {
-			try { shutdown(handlerExecutor); }
-			finally { shutdown(listenerExecutor); }
-		} finally {
-			try {
-				synchronized (backends) {
-					for (BackendState backend : backends.values()) { backend.seal(); backend.signal(); }
-					backends.clear();
-				}
-			} finally { try { if (durableOutgoing != null) durableOutgoing.close(); }
-			finally {
-				synchronized (closeMonitor) { closeFinalizing = false; closeFinalized = true; closeMonitor.notifyAll(); }
-			} }
+		boolean handlersTerminated;
+		try { handlersTerminated = shutdown(handlerExecutor); }
+		finally { shutdown(listenerExecutor); }
+		if (!handlersTerminated) {
+			Thread reaper = new Thread(this::finishCloseAfterHandlers, "SimpleAPI-HTTP-proxy-handler-reaper");
+			reaper.setDaemon(true);
+			reaper.start();
+			return;
 		}
+		sealAfterHandlers();
+	}
+	private void finishCloseAfterHandlers() {
+		boolean interrupted = false;
+		while (!handlerExecutor.isTerminated()) try { handlerExecutor.awaitTermination(1, TimeUnit.DAYS); }
+		catch (InterruptedException ignored) { interrupted = true; }
+		if (interrupted) Thread.currentThread().interrupt();
+		sealAfterHandlers();
+	}
+	private void sealAfterHandlers() {
+		try {
+			synchronized (backends) {
+				for (BackendState backend : backends.values()) { backend.seal(); backend.signal(); }
+				backends.clear();
+			}
+		} finally { try { if (durableOutgoing != null) durableOutgoing.close(); }
+		finally { synchronized (closeMonitor) { closeFinalizing = false; closeFinalized = true; closeMonitor.notifyAll(); } } }
 	}
 
 	private void awaitClose() {
@@ -472,13 +484,13 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(queue), factory, new ThreadPoolExecutor.AbortPolicy());
 	}
 	private static void setDefault(String name, String value) { if (System.getProperty(name) == null) System.setProperty(name, value); }
-	static void shutdown(ExecutorService executor) {
+	static boolean shutdown(ExecutorService executor) {
 		executor.shutdown();
 		boolean interrupted = false;
 		try {
 			if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
 				executor.shutdownNow();
-				executor.awaitTermination(1, TimeUnit.SECONDS);
+				return executor.awaitTermination(1, TimeUnit.SECONDS);
 			}
 		} catch (InterruptedException stopRequested) {
 			interrupted = true;
@@ -487,6 +499,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			catch (InterruptedException repeated) { interrupted = true; }
 		}
 		if (interrupted) Thread.currentThread().interrupt();
+		return executor.isTerminated();
 	}
 
 	public record ReceivedEnvelope(String serverId, String messageId, JsonEnvelope envelope) { }

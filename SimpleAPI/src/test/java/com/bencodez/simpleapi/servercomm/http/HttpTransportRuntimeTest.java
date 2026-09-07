@@ -721,9 +721,15 @@ class HttpTransportRuntimeTest {
 			release.countDown();
 			assertTrue(stopped.await(2, TimeUnit.SECONDS));
 		} finally { release.countDown(); }
-		assertEquals(HttpInboundDeliveryStore.State.RUNNING,
-				HttpInboundDeliveryStore.inspect(clientDirectory).state(id),
-				"an ambiguous callback must remain fail-closed after bounded shutdown");
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+		HttpInboundDeliveryStore.State state;
+		do {
+			state = HttpInboundDeliveryStore.inspect(clientDirectory).state(id);
+			if (state == HttpInboundDeliveryStore.State.COMPLETED) break;
+			Thread.sleep(10);
+		} while (System.nanoTime() < deadline);
+		assertEquals(HttpInboundDeliveryStore.State.COMPLETED, state,
+				"the deferred journal seal must allow the late callback completion to become durable");
 	}
 
 	@Test

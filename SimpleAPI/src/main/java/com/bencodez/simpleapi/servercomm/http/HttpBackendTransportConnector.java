@@ -343,10 +343,25 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		finishClose();
 	}
 	private void finishClose() {
+		if (!shutdownCallbacks()) {
+			// A callback may ignore interruption while still able to durably complete.
+			// Keep journal ownership until it really terminates; sealing here would strand RUNNING.
+			Thread reaper = new Thread(this::finishCloseAfterCallbacks, "SimpleAPI-HTTP-callback-reaper");
+			reaper.setDaemon(true);
+			reaper.start();
+			return;
+		}
+		sealAfterCallbacks();
+	}
+	private void finishCloseAfterCallbacks() {
+		boolean interrupted = false;
+		while (!callbackExecutor.isTerminated()) try { callbackExecutor.awaitTermination(1, TimeUnit.DAYS); }
+		catch (InterruptedException ignored) { interrupted = true; }
+		if (interrupted) Thread.currentThread().interrupt();
+		sealAfterCallbacks();
+	}
+	private void sealAfterCallbacks() {
 		try {
-			shutdownCallbacks();
-		// No poller can enqueue more callbacks and every running journal transition has
-		// finished, so ownership can now be revoked without stranding completed work.
 			if (inboundDeliveries != null) inboundDeliveries.seal();
 			if (acknowledgementConfirmationStore != null) acknowledgementConfirmationStore.seal();
 		} finally { closed.countDown(); }
@@ -357,13 +372,13 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		catch (InterruptedException stopRequested) { interrupted = true; }
 		if (interrupted) Thread.currentThread().interrupt();
 	}
-	private void shutdownCallbacks() {
+	private boolean shutdownCallbacks() {
 		callbackExecutor.shutdown();
 		boolean interrupted = false;
 		try {
 			if (!callbackExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
 				callbackExecutor.shutdownNow();
-				callbackExecutor.awaitTermination(1, TimeUnit.SECONDS);
+				return callbackExecutor.awaitTermination(1, TimeUnit.SECONDS);
 			}
 		} catch (InterruptedException stopRequested) {
 			interrupted = true;
@@ -372,6 +387,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			catch (InterruptedException repeated) { interrupted = true; }
 		}
 		if (interrupted) Thread.currentThread().interrupt();
+		return callbackExecutor.isTerminated();
 	}
 	boolean pollerAlive() { Thread current = poller; return current != null && current.isAlive(); }
 	private static boolean joinPoller(Thread poller, long deadlineNanos) {
