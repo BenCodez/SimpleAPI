@@ -38,6 +38,7 @@ public final class HttpEnrollmentAuthority {
 	private static final int MAX_REVOCATION_MARKERS = MAX_BINDINGS + MAX_PENDING_ENROLLMENTS;
 	private static final int LEGACY_MAX_REVOCATION_FINGERPRINTS_PER_SERVER = 4;
 	private static final long MAX_STATE_BYTES = 65536;
+	private static final long REVOCATION_HEADROOM_BYTES = 512;
 	private final HttpTlsIdentity identity;
 	private final Clock clock;
 	private final Path stateFile;
@@ -99,9 +100,15 @@ public final class HttpEnrollmentAuthority {
 		String lookup = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(tokenHash);
 		enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, null));
 		try { persistState(); persistenceFailure = false; rollbackStateAvailable = false; }
+		catch (DurableFiles.PublishedException published) {
+			// The pending code is already visible. Return its only token and force the
+			// directory again under the next state lock before the token can be consumed.
+			persistenceFailure = true;
+			rollbackStateAvailable = false;
+		}
 		catch (java.io.IOException failure) {
 			enrollments.remove(lookup);
-			rollbackStateAvailable = !(failure instanceof DurableFiles.PublishedException);
+			rollbackStateAvailable = true;
 			throw new IllegalStateException("Could not persist HTTP enrollment", failure);
 		}
 		return code;
@@ -270,7 +277,7 @@ public final class HttpEnrollmentAuthority {
 			fingerprints.add(revocationFingerprint);
 			revocationGenerations.put(serverId, revocationGeneration);
 			trimRevocationMarkers(serverId);
-			persistState();
+			persistState(serverId);
 			persistenceFailure = false;
 			rollbackStateAvailable = false;
 			revocationRetryRequired = false;
@@ -574,7 +581,9 @@ public final class HttpEnrollmentAuthority {
 			throw new java.io.IOException("HTTP enrollment state is invalid");
 	}
 
-	private synchronized void persistState() throws java.io.IOException {
+	private synchronized void persistState() throws java.io.IOException { persistState(null); }
+
+	private synchronized void persistState(String preservedRevocationServerId) throws java.io.IOException {
 		if (stateFile == null) return;
 		Instant now = clock.instant();
 		renewalNotBefore.entrySet().removeIf(entry -> !bindings.containsKey(entry.getKey())
@@ -585,6 +594,29 @@ public final class HttpEnrollmentAuthority {
 				|| revocationMarkers.values().stream().anyMatch(history -> history.size() != 1)
 				|| revocationGenerations.values().stream().anyMatch(generation -> generation == null || generation <= 0L))
 			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
+		long byteLimit = preservedRevocationServerId == null
+				? MAX_STATE_BYTES - REVOCATION_HEADROOM_BYTES : MAX_STATE_BYTES;
+		byte[] bytes = serializedState();
+		while (bytes.length > byteLimit && discardOldestInactiveRevocationMarker(preservedRevocationServerId))
+			bytes = serializedState();
+		if (bytes.length > byteLimit) throw new java.io.IOException("HTTP enrollment state exceeds its byte bound");
+		Path temporary = Files.createTempFile(stateFile.getParent(), stateFile.getFileName().toString(), ".tmp");
+		try {
+			PrivateFilePermissions.ownerOnlyFile(temporary);
+			Files.write(temporary, bytes, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
+			DurableFiles.forceFile(temporary);
+			try { Files.move(temporary, stateFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+			catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, stateFile, StandardCopyOption.REPLACE_EXISTING); }
+			try {
+				PrivateFilePermissions.ownerOnlyFile(stateFile);
+				DurableFiles.forceDirectory(stateFile.getParent());
+			} catch (java.io.IOException postPublicationFailure) {
+				throw new DurableFiles.PublishedException(postPublicationFailure);
+			}
+		} finally { Files.deleteIfExists(temporary); }
+	}
+
+	private byte[] serializedState() throws java.io.IOException {
 		Properties properties = new Properties();
 		properties.setProperty("version", "8");
 		for (Map.Entry<String, ClientBinding> entry : bindings.entrySet()) {
@@ -617,21 +649,20 @@ public final class HttpEnrollmentAuthority {
 		}
 		java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
 		properties.store(bytes, "VotingPlugin HTTP transport authority state");
-		if (bytes.size() > MAX_STATE_BYTES) throw new java.io.IOException("HTTP enrollment state exceeds its byte bound");
-		Path temporary = Files.createTempFile(stateFile.getParent(), stateFile.getFileName().toString(), ".tmp");
-		try {
-			PrivateFilePermissions.ownerOnlyFile(temporary);
-			Files.write(temporary, bytes.toByteArray(), StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
-			DurableFiles.forceFile(temporary);
-			try { Files.move(temporary, stateFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-			catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, stateFile, StandardCopyOption.REPLACE_EXISTING); }
-			try {
-				PrivateFilePermissions.ownerOnlyFile(stateFile);
-				DurableFiles.forceDirectory(stateFile.getParent());
-			} catch (java.io.IOException postPublicationFailure) {
-				throw new DurableFiles.PublishedException(postPublicationFailure);
+		return bytes.toByteArray();
+	}
+
+	private boolean discardOldestInactiveRevocationMarker(String preservedServerId) {
+		var iterator = revocationMarkers.keySet().iterator();
+		while (iterator.hasNext()) {
+			String candidate = iterator.next();
+			if ((preservedServerId == null || !preservedServerId.equals(candidate)) && !serverStatePresent(candidate)) {
+				iterator.remove();
+				revocationGenerations.remove(candidate);
+				return true;
 			}
-		} finally { Files.deleteIfExists(temporary); }
+		}
+		return false;
 	}
 
 	private static Path stateFile(Path directory) throws java.io.IOException {

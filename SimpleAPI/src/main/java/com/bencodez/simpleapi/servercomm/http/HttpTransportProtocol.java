@@ -6,12 +6,17 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /** Strict, versioned HTTP transport envelope.  Payloads remain canonical JsonEnvelopeCodec values. */
@@ -66,7 +71,7 @@ final class HttpTransportProtocol {
 	static Delivery parseStoredDelivery(byte[] body) {
 		if (body == null || body.length == 0 || body.length > MAX_ENVELOPE_BYTES * 2) throw bad();
 		try {
-			JsonObject root = JsonParser.parseString(new String(body, StandardCharsets.UTF_8)).getAsJsonObject();
+			JsonObject root = parseStrict(body).getAsJsonObject();
 			requireOnly(root, "v", "id", "payload");
 			if (integer(root, "v") != VERSION) throw bad();
 			String id = string(root, "id", 64); validId(id);
@@ -84,7 +89,7 @@ final class HttpTransportProtocol {
 	static Packet parsePacket(byte[] body) {
 		if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES) throw bad();
 		try {
-			JsonElement parsed = JsonParser.parseString(new String(body, StandardCharsets.UTF_8));
+			JsonElement parsed = parseStrict(body);
 			if (!parsed.isJsonObject()) throw bad();
 			JsonObject root = parsed.getAsJsonObject();
 			requireOnly(root, "v", "server", "session", "sequence", "timestamp", "acks", "ackConfirmations", "messages");
@@ -116,7 +121,7 @@ final class HttpTransportProtocol {
 	static Enrollment parseEnrollment(byte[] body) {
 		if (body == null || body.length == 0 || body.length > 8192) throw bad();
 		try {
-			JsonElement parsed = JsonParser.parseString(new String(body, StandardCharsets.UTF_8));
+			JsonElement parsed = parseStrict(body);
 			if (!parsed.isJsonObject()) throw bad();
 			JsonObject root = parsed.getAsJsonObject();
 			requireOnly(root, "server", "token");
@@ -136,7 +141,7 @@ final class HttpTransportProtocol {
 	static String parseRenewal(byte[] body) {
 		if (body == null || body.length == 0 || body.length > 1024) throw bad();
 		try {
-			JsonElement parsed = JsonParser.parseString(new String(body, StandardCharsets.UTF_8));
+			JsonElement parsed = parseStrict(body);
 			if (!parsed.isJsonObject()) throw bad();
 			JsonObject root = parsed.getAsJsonObject();
 			requireOnly(root, "server");
@@ -147,7 +152,7 @@ final class HttpTransportProtocol {
 	static HttpTlsIdentity.IssuedClientCertificate parseEnrollmentResponse(String server, byte[] body) {
 		if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES) throw bad();
 		try {
-			JsonObject root = JsonParser.parseString(new String(body, StandardCharsets.UTF_8)).getAsJsonObject();
+			JsonObject root = parseStrict(body).getAsJsonObject();
 			requireOnly(root, "bundle", "password");
 			byte[] bundle = Base64.getUrlDecoder().decode(string(root, "bundle", MAX_BODY_BYTES * 2));
 			char[] password = string(root, "password", 128).toCharArray();
@@ -200,6 +205,38 @@ final class HttpTransportProtocol {
 			output.add(new Delivery(id, envelope));
 		}
 		return output;
+	}
+	private static JsonElement parseStrict(byte[] body) {
+		String json = new String(body, StandardCharsets.UTF_8);
+		try (JsonReader reader = new JsonReader(new StringReader(json))) {
+			reader.setLenient(false);
+			validateUniqueMembers(reader, 0);
+			if (reader.peek() != JsonToken.END_DOCUMENT) throw bad();
+		} catch (java.io.IOException invalid) { throw bad(); }
+		return JsonParser.parseString(json);
+	}
+	private static void validateUniqueMembers(JsonReader reader, int depth) throws java.io.IOException {
+		if (depth > 32) throw bad();
+		switch (reader.peek()) {
+		case BEGIN_OBJECT -> {
+			reader.beginObject();
+			Set<String> names = new HashSet<>();
+			while (reader.hasNext()) {
+				if (!names.add(reader.nextName())) throw bad();
+				validateUniqueMembers(reader, depth + 1);
+			}
+			reader.endObject();
+		}
+		case BEGIN_ARRAY -> {
+			reader.beginArray();
+			while (reader.hasNext()) validateUniqueMembers(reader, depth + 1);
+			reader.endArray();
+		}
+		case STRING, NUMBER -> reader.nextString();
+		case BOOLEAN -> reader.nextBoolean();
+		case NULL -> reader.nextNull();
+		default -> throw bad();
+		}
 	}
 	private static void requireOnly(JsonObject object, String... names) {
 		for (String name : object.keySet()) { boolean found = false; for (String allowed : names) if (allowed.equals(name)) { found = true; break; } if (!found) throw bad(); }

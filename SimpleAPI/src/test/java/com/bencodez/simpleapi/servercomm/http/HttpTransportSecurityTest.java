@@ -43,6 +43,13 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void renewalDeadlineHandlesNegativeNanoTimeOrigins() {
+		assertEquals(-9L, HttpBackendTransportConnector.renewalDeadline(-10L, Duration.ofNanos(1L)));
+		assertEquals(Long.MIN_VALUE + 1L, HttpBackendTransportConnector.renewalDeadline(Long.MIN_VALUE, Duration.ofNanos(1L)));
+		assertEquals(Long.MIN_VALUE, HttpBackendTransportConnector.renewalDeadline(Long.MAX_VALUE, Duration.ofNanos(1L)));
+	}
+
+	@Test
 	void connectionCodeRejectsExplicitZeroPort() {
 		assertThrows(IllegalArgumentException.class,
 				() -> new HttpConnectionCode("lobby", URI.create("https://proxy.example.test:0/"), pin('a'),
@@ -435,6 +442,27 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void publishedConnectionCodeReturnsItsOnlyUsableToken() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("published-code-proxy"), "localhost");
+		Path state = directory.resolve("published-code-state");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
+		java.util.concurrent.atomic.AtomicBoolean failPublication = new java.util.concurrent.atomic.AtomicBoolean(true);
+		HttpConnectionCode code;
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceDirectory(state)).thenAnswer(call -> {
+				if (failPublication.getAndSet(false)) throw new java.io.IOException("injected code publication failure");
+				return call.callRealMethod();
+			});
+			code = authority.createConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+					Duration.ofMinutes(5));
+			assertFalse(code.enrollmentToken().isEmpty(), "the published slot must not be orphaned from its only token");
+			HttpTlsIdentity.IssuedClientCertificate issued = authority.enroll("lobby-1", code.enrollmentToken());
+			assertTrue(authority.authenticate("lobby-1", issued.certificate()));
+		}
+	}
+
+	@Test
 	void enrollmentPublicationFailureDisablesAuthenticationUntilCodePersistenceRecovers() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("published-enrollment-proxy"), "localhost");
 		Path stateDirectory = directory.resolve("published-enrollment-state");
@@ -469,6 +497,51 @@ class HttpTransportSecurityTest {
 		assertFalse(recoveryCode.enrollmentToken().isEmpty());
 		assertTrue(authority.authenticate("unrelated", unrelated.certificate()),
 				"a successful full-state rewrite must restore authentication availability");
+	}
+
+	@Test
+	void revocationCompactsHistoryWhenStateIsNearItsByteLimit() throws Exception {
+		Path proxy = directory.resolve("revocation-headroom-proxy");
+		Path state = directory.resolve("revocation-headroom-state");
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(proxy, "localhost");
+		Files.createDirectories(state);
+		java.util.Properties properties = new java.util.Properties();
+		properties.setProperty("version", "8");
+		String target = boundedServerId(0);
+		String encodedTarget = java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(target.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		properties.setProperty("binding." + encodedTarget, pin('a') + ":-:0");
+		for (int index = 1; index < 128; index++) {
+			String serverId = boundedServerId(index);
+			String encodedServer = java.util.Base64.getUrlEncoder().withoutPadding()
+					.encodeToString(serverId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			byte[] hash = new byte[32];
+			java.nio.ByteBuffer.wrap(hash).putInt(index);
+			properties.setProperty("enrollment." + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(hash),
+					Instant.parse("2099-01-01T00:00:00Z").toEpochMilli() + ":" + encodedServer + ":-");
+		}
+		int markers = 0;
+		for (; markers < 255; markers++) {
+			String serverId = "r" + String.format("%03d", markers) + "y".repeat(60);
+			String encodedServer = java.util.Base64.getUrlEncoder().withoutPadding()
+					.encodeToString(serverId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			properties.setProperty("revocation." + encodedServer, pin('b'));
+			properties.setProperty("revocationGeneration." + encodedServer, "1");
+			if (storedSize(properties) > 65536) {
+				properties.remove("revocation." + encodedServer);
+				properties.remove("revocationGeneration." + encodedServer);
+				break;
+			}
+		}
+		assertTrue(markers > 0);
+		assertTrue(storedSize(properties) > 65536 - 512, "the fixture must exercise reserved revocation headroom");
+		Path stateFile = state.resolve("http-transport-clients.properties");
+		try (var output = Files.newOutputStream(stateFile)) { properties.store(output, "near-limit authority state"); }
+
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
+		assertDoesNotThrow(() -> authority.revoke(target));
+		assertTrue(Files.size(stateFile) <= 65536);
+		assertDoesNotThrow(() -> new HttpEnrollmentAuthority(identity, state));
 	}
 
 	@Test
@@ -769,6 +842,12 @@ class HttpTransportSecurityTest {
 				"rollback must not reactivate a same-endpoint certificate that renewal may have revoked");
 		assertTrue(HttpClientCredentialStore.matchesEnrollmentCode(client, code),
 				"the retained credential must recognize the connection code restored in YAML");
+	}
+
+	private static int storedSize(java.util.Properties properties) throws java.io.IOException {
+		java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+		properties.store(output, "authority state size");
+		return output.size();
 	}
 
 	private static String pin(char character) { return String.valueOf(character).repeat(64); }

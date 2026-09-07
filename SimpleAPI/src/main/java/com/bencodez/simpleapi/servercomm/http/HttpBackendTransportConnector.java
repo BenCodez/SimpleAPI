@@ -265,6 +265,9 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (acceptIncoming) for (HttpTransportProtocol.Delivery delivery : accept(packet.messages())) dispatch(delivery);
 			if (requireRunning) runResponse.received();
 			return true;
+		} catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+			return false;
 		} catch (Exception failure) { return false;
 		} finally {
 			if (!acknowledgementsConfirmed) requeue(acknowledgements, acks);
@@ -424,7 +427,13 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 
 	private void pollLoop() {
 		long retry = 1000L;
-		while (running.get()) { if (pollOnce()) { retry = 1000L; continue; } try { Thread.sleep(retry); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; } retry = Math.min(30_000L, retry * 2); }
+		while (running.get()) {
+			if (pollOnce()) { retry = 1000L; continue; }
+			if (!running.get()) break;
+			try { Thread.sleep(retry); }
+			catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
+			retry = Math.min(30_000L, retry * 2);
+		}
 	}
 	List<HttpTransportProtocol.Delivery> accept(List<HttpTransportProtocol.Delivery> deliveries) {
 		synchronized (state) {
@@ -581,6 +590,9 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 					client = pendingActivation.client();
 					credential = pendingActivation.staged().credential();
 					pendingActivation = null;
+				} catch (InterruptedException interrupted) {
+					Thread.currentThread().interrupt();
+					return;
 				} catch (Exception unconfirmed) { return; }
 			}
 			if (!HttpTlsIdentity.needsRenewal(credential.certificate(), Clock.systemUTC())) return;
@@ -630,6 +642,8 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				client = replacementClient;
 				credential = replacement;
 				nextRenewalCheckNanos = renewalDeadline(now, RENEWAL_SUCCESS_CHECK);
+			} catch (InterruptedException interrupted) {
+				Thread.currentThread().interrupt();
 			} catch (Exception ignored) {
 				// Keep the active generation and retry well before its remaining validity is consumed.
 				nextRenewalCheckNanos = renewalDeadline(now, retry);
@@ -646,11 +660,11 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		if (beforeExpiry.isZero()) beforeExpiry = Duration.ofNanos(1L);
 		return beforeExpiry.compareTo(RENEWAL_FAILURE_RETRY) < 0 ? beforeExpiry : RENEWAL_FAILURE_RETRY;
 	}
-	private static long renewalDeadline(long now, Duration delay) {
+	static long renewalDeadline(long now, Duration delay) {
 		long nanos;
 		try { nanos = delay.toNanos(); }
-		catch (ArithmeticException overflow) { nanos = Long.MAX_VALUE; }
-		return nanos > Long.MAX_VALUE - now ? Long.MAX_VALUE : now + nanos;
+		catch (ArithmeticException overflow) { nanos = delay.isNegative() ? Long.MIN_VALUE : Long.MAX_VALUE; }
+		return now + nanos;
 	}
 	private static HttpClient client(HttpClientCredentialStore.HttpClientProfile profile,
 			HttpClientCredentialStore.ClientCredential credential) throws Exception {

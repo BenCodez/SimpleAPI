@@ -1029,6 +1029,25 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void protocolParsingRejectsDuplicateObjectMembers() {
+		String deliveryId = java.util.UUID.randomUUID().toString();
+		String packet = new String(HttpTransportProtocol.request("lobby-1", java.util.UUID.randomUUID().toString(), 0,
+				java.util.List.of(), java.util.List.of(), java.util.List.of(new HttpTransportProtocol.Delivery(
+						deliveryId, JsonEnvelope.builder("payload").build()))), java.nio.charset.StandardCharsets.UTF_8);
+		String duplicateRoot = packet.replaceFirst("\\\"server\\\":\\\"lobby-1\\\"",
+				"\\\"server\\\":\\\"other\\\",\\\"server\\\":\\\"lobby-1\\\"");
+		assertThrows(IllegalArgumentException.class, () -> HttpTransportProtocol.parsePacket(
+				duplicateRoot.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+		String duplicateNested = packet.replaceFirst("\\\"id\\\":\\\"" + deliveryId + "\\\"",
+				"\\\"id\\\":\\\"" + deliveryId + "\\\",\\\"id\\\":\\\"" + deliveryId + "\\\"");
+		assertThrows(IllegalArgumentException.class, () -> HttpTransportProtocol.parsePacket(
+				duplicateNested.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+		assertThrows(IllegalArgumentException.class, () -> HttpTransportProtocol.parseEnrollment(
+				("{\\\"server\\\":\\\"lobby-1\\\",\\\"server\\\":\\\"lobby-2\\\",\\\"token\\\":\\\""
+						+ "A".repeat(43) + "\\\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+	}
+
+	@Test
 	void packetParsingRejectsNoncanonicalUuidForms() {
 		String deliveryId = java.util.UUID.randomUUID().toString();
 		com.google.gson.JsonObject packet = com.google.gson.JsonParser.parseString(new String(HttpTransportProtocol.request(
