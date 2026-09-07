@@ -103,6 +103,34 @@ class HttpBackendSendLifecycleTest {
 		}
 	}
 
+	@Test
+	void restartWaitsForThePreviousPollerToExit() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("restart-proxy"), "localhost");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", java.net.URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), java.time.Instant.now().plusSeconds(60),
+				HttpTransportSecrets.randomToken());
+		Path credentials = directory.resolve("restart-client");
+		HttpClientCredentialStore.saveEnrolled(credentials, code, identity.issueClientCertificate("lobby-1"));
+		try (HttpBackendTransportConnector connector = new HttpBackendTransportConnector(credentials, ignored -> { })) {
+			CountDownLatch releasePrevious = new CountDownLatch(1);
+			Thread previous = new Thread(() -> {
+				try { releasePrevious.await(); }
+				catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+			}, "previous-http-poller");
+			previous.start();
+			field("poller").set(connector, previous);
+
+			connector.start();
+			assertFalse(((AtomicBoolean) field("running").get(connector)).get());
+			assertEquals(previous, field("poller").get(connector));
+
+			releasePrevious.countDown();
+			previous.join(2000);
+			connector.start();
+			assertTrue(((AtomicBoolean) field("running").get(connector)).get());
+		}
+	}
+
 	private static void assertPausedSendIsRejectedByClose(HttpBackendTransportConnector connector) throws Exception {
 		Object state = field("state").get(connector);
 		AtomicBoolean closing = (AtomicBoolean) field("closing").get(connector);

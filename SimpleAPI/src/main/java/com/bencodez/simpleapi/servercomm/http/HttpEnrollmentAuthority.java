@@ -93,6 +93,10 @@ public final class HttpEnrollmentAuthority {
 		// Validate the complete code before reserving or persisting a pending slot.
 		HttpConnectionCode code = new HttpConnectionCode(serverId, endpoint, identity.serverCertificatePin(),
 				identity.caCertificatePin(), expiresAt, token);
+		// Constructor validation deliberately permits general HTTPS paths. The wire
+		// representation has its own hard length bound, so prove a generated code can
+		// be consumed before reserving durable enrollment capacity for it.
+		HttpConnectionCode.parse(code.encode());
 		expireEnrollments();
 		if (enrollments.size() >= MAX_PENDING_ENROLLMENTS)
 			throw new IllegalStateException("Too many pending HTTP enrollments");
@@ -272,6 +276,12 @@ public final class HttpEnrollmentAuthority {
 		Map<String, Long> previousRevocationGenerations = new HashMap<>(revocationGenerations);
 		if (removedBinding != null || !removedEnrollments.isEmpty() || removedRenewalNotBefore != null
 				|| revocationRetryRequired) try {
+			// Byte compaction may retain a generation after dropping its fingerprint marker.
+			// That detached proof is still needed to distinguish a stale authority from a
+			// peer that completed the same revocation, so never evict it to admit another
+			// server. The surrounding rollback restores this revocation if the bounded
+			// proof index is already full.
+			requireRevocationGenerationCapacity(serverId);
 			Set<String> fingerprints = revocationMarkers.computeIfAbsent(serverId, ignored -> new LinkedHashSet<>());
 			fingerprints.clear();
 			fingerprints.add(revocationFingerprint);
@@ -297,6 +307,8 @@ public final class HttpEnrollmentAuthority {
 				revocationGenerations.putAll(previousRevocationGenerations);
 				rollbackStateAvailable = true;
 			}
+			if (failure instanceof RevocationProofCapacityException)
+				throw new IllegalStateException("HTTP enrollment revocation proof history exceeds its bound", failure);
 			persistenceFailure = true;
 			if (failure instanceof DurableFiles.PublishedException) rollbackStateAvailable = false;
 			revocationRetryRequired = true;
@@ -436,6 +448,16 @@ public final class HttpEnrollmentAuthority {
 		}
 		if (revocationMarkers.size() > MAX_REVOCATION_MARKERS)
 			throw new java.io.IOException("HTTP enrollment revocation history exceeds its bound");
+	}
+
+	private void requireRevocationGenerationCapacity(String serverId) throws java.io.IOException {
+		if (!revocationGenerations.containsKey(serverId)
+				&& revocationGenerations.size() >= MAX_REVOCATION_MARKERS)
+			throw new RevocationProofCapacityException();
+	}
+
+	private static final class RevocationProofCapacityException extends java.io.IOException {
+		private static final long serialVersionUID = 1L;
 	}
 
 	private Map<String, Set<String>> copyRevocationMarkers() {
@@ -590,6 +612,7 @@ public final class HttpEnrollmentAuthority {
 				|| !entry.getValue().isAfter(now));
 		if (reservedBindingCount() > MAX_BINDINGS || enrollments.size() > MAX_PENDING_ENROLLMENTS
 				|| revocationMarkers.size() > MAX_REVOCATION_MARKERS
+				|| revocationGenerations.size() > MAX_REVOCATION_MARKERS
 				|| !revocationGenerations.keySet().containsAll(revocationMarkers.keySet())
 				|| revocationMarkers.values().stream().anyMatch(history -> history.size() != 1)
 				|| revocationGenerations.values().stream().anyMatch(generation -> generation == null || generation <= 0L))

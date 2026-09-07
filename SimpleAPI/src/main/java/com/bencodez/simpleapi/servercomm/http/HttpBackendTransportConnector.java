@@ -190,7 +190,12 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 
 	public void start() {
 		synchronized (lifecycle) {
-			if (closing.get() || flushingOutgoing || !running.compareAndSet(false, true)) return;
+			if (closing.get() || flushingOutgoing || running.get()) return;
+			// A timed-out flush can leave the interrupted poller winding down. It still
+			// owns the single long-poll slot until it exits, so a restart must wait for a
+			// later start call rather than creating an overlapping poller.
+			if (poller != null && poller.isAlive()) return;
+			running.set(true);
 			responseState.cancel();
 			responseState = new ResponseState();
 			synchronized (state) { sendAdmissionOpen = true; }

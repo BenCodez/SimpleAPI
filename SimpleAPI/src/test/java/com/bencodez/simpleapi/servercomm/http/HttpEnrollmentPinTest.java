@@ -166,6 +166,19 @@ class HttpEnrollmentPinTest {
 		assertEquals("lobby-2", second.serverId());
 	}
 
+	@Test
+	void generatedConnectionCodesAreAlwaysAcceptedByTheParser() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("state"));
+		URI oversizedPath = URI.create("https://localhost/" + "a".repeat(4096));
+		assertThrows(IllegalArgumentException.class, () -> authority.createConnectionCode("oversized", oversizedPath,
+				Duration.ofMinutes(5)));
+
+		HttpConnectionCode code = authority.createConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				Duration.ofMinutes(5));
+		assertEquals(code, HttpConnectionCode.parse(code.encode()));
+	}
+
 	private HttpConnectionCode code(HttpTlsIdentity identity, String serverId) {
 		return new HttpConnectionCode(serverId, URI.create("https://localhost:8443/"),
 				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300),

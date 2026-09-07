@@ -420,7 +420,11 @@ final class HttpInboundDeliveryStore {
 		Path sidecar = ownershipSidecar;
 		if (sidecar == null) throw new IOException("HTTP inbound delivery store ownership has ended");
 		withOwnerGuard(root.getParent(), () -> {
-			releaseOwnershipForRetirement();
+			// Root deletion and its parent fsync have already made retirement durable.
+			// A late release/close failure cannot safely be retried through this store
+			// (the lock may already be gone), so finish logical retirement and leave the
+			// reusable sidecar for normal orphan reclamation.
+			try { releaseOwnershipForRetirement(); } catch (IOException ignored) { }
 			// Ownership has ended and the journal root is durably gone. A cleanup
 			// failure may leave one safe, reusable sidecar, but must not leave the
 			// caller retaining an unusable BackendState that can never retire.

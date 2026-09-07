@@ -1,10 +1,14 @@
 package com.bencodez.simpleapi.servercomm.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
@@ -90,5 +94,34 @@ class HttpInboundRetirementTest {
 
 		HttpInboundDeliveryStore successor = HttpInboundDeliveryStore.open(parent, "lobby-1");
 		successor.sealAndDeleteIfEmpty();
+	}
+
+	@Test
+	void retirementCompletesWhenOwnershipReleaseOrCloseFails() throws Exception {
+		Path parent = directory.resolve("incoming");
+		Files.createDirectory(parent);
+		HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(parent, "lobby-1");
+		FileLock originalLock = (FileLock) field("ownershipLock").get(store);
+		FileChannel originalChannel = (FileChannel) field("ownershipChannel").get(store);
+		originalLock.release();
+		originalChannel.close();
+		FileLock failingLock = org.mockito.Mockito.mock(FileLock.class);
+		FileChannel failingChannel = org.mockito.Mockito.mock(FileChannel.class);
+		org.mockito.Mockito.when(failingLock.isValid()).thenReturn(true);
+		org.mockito.Mockito.doThrow(new IOException("injected release failure")).when(failingLock).release();
+		org.mockito.Mockito.doThrow(new IOException("injected close failure")).when(failingChannel).close();
+		field("ownershipLock").set(store, failingLock);
+		field("ownershipChannel").set(store, failingChannel);
+
+		assertDoesNotThrow(store::sealAndDeleteIfEmpty);
+		assertThrows(IOException.class, () -> store.reserve(UUID.randomUUID().toString()));
+		HttpInboundDeliveryStore successor = HttpInboundDeliveryStore.open(parent, "lobby-1");
+		successor.sealAndDeleteIfEmpty();
+	}
+
+	private static Field field(String name) throws Exception {
+		Field field = HttpInboundDeliveryStore.class.getDeclaredField(name);
+		field.setAccessible(true);
+		return field;
 	}
 }
