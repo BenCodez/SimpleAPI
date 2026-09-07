@@ -74,6 +74,35 @@ class HttpBackendSendLifecycleTest {
 		}
 	}
 
+	@Test
+	void startOpensSendAdmissionBeforeThePollerCanRun() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("startup-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("startup-authority"));
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0), identity,
+				authority, ignored -> { })) {
+			server.start();
+			HttpConnectionCode code = authority.createConnectionCode("lobby-1", server.endpoint("localhost"), Duration.ofMinutes(5));
+			Path credentials = directory.resolve("startup-client");
+			HttpBackendTransportConnector.enroll(code, "lobby-1", credentials);
+			try (HttpBackendTransportConnector connector = new HttpBackendTransportConnector(credentials, ignored -> { })) {
+				Object state = field("state").get(connector);
+				AtomicBoolean running = (AtomicBoolean) field("running").get(connector);
+				Thread starter = new Thread(connector::start, "backend-start");
+				synchronized (state) {
+					starter.start();
+					long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+					while (!running.get() && System.nanoTime() < deadline) Thread.onSpinWait();
+					assertTrue(running.get());
+					assertEquals(null, field("poller").get(connector),
+							"the poller must not become runnable before send admission opens");
+				}
+				starter.join(3000);
+				assertFalse(starter.isAlive());
+				assertTrue(connector.send(JsonEnvelope.builder("accepted-at-start").build()));
+			}
+		}
+	}
+
 	private static void assertPausedSendIsRejectedByClose(HttpBackendTransportConnector connector) throws Exception {
 		Object state = field("state").get(connector);
 		AtomicBoolean closing = (AtomicBoolean) field("closing").get(connector);

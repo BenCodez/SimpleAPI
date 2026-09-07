@@ -333,18 +333,27 @@ public final class HttpEnrollmentAuthority {
 			renewalNotBefore.putAll(previousRenewalNotBefore);
 			throw failure;
 		}
-		if (persistenceFailure && !rollbackStateAvailable) {
+		boolean peerCompletedRevocation = persistenceFailure && rollbackStateAvailable
+				&& revocationRetryRequired && revocationReflectedInState();
+		if (persistenceFailure && (!rollbackStateAvailable || peerCompletedRevocation)) {
 			// A published replacement is visible but remains fail-closed until its
 			// directory entry is forced successfully. Reconciliation under the state
 			// lock makes that publication durable even when no mutation is required.
-			// Pre-publication revocation failures retain rollback state and must still
-			// be retried rather than re-enabling the restored certificate here.
+			// A pre-publication revocation failure can also be cleared when the loaded
+			// durable state proves that a peer completed that exact revocation.
 			DurableFiles.forceDirectory(stateFile.getParent());
 			persistenceFailure = false;
 			rollbackStateAvailable = false;
 			revocationRetryRequired = false;
 			revocationRetryServerId = null;
 		}
+	}
+
+	private boolean revocationReflectedInState() {
+		if (revocationRetryServerId == null || bindings.containsKey(revocationRetryServerId)
+				|| renewalNotBefore.containsKey(revocationRetryServerId)) return false;
+		return enrollments.values().stream()
+				.noneMatch(enrollment -> revocationRetryServerId.equals(enrollment.serverId()));
 	}
 
 	private synchronized void loadState() throws java.io.IOException {

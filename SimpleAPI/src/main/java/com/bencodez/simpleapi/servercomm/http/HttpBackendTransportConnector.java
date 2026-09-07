@@ -192,14 +192,10 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (closing.get() || flushingOutgoing || !running.compareAndSet(false, true)) return;
 			responseState.cancel();
 			responseState = new ResponseState();
+			synchronized (state) { sendAdmissionOpen = true; }
 			poller = new Thread(this::pollLoop, "SimpleAPI-HTTP-poll");
 			poller.setDaemon(true);
 			poller.start();
-		}
-		// Do not nest lifecycle and state: close/flush transition running before taking
-		// state, while send observes both values under state before enqueuing.
-		synchronized (state) {
-			if (running.get() && !closing.get()) sendAdmissionOpen = true;
 		}
 	}
 	/** Waits for one authenticated, protocol-valid transport response. */
