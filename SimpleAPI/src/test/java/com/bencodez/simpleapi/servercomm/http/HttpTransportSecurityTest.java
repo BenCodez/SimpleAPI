@@ -539,8 +539,15 @@ class HttpTransportSecurityTest {
 		try (var output = Files.newOutputStream(stateFile)) { properties.store(output, "near-limit authority state"); }
 
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, state);
+		authority.createConnectionCode("extra", URI.create("https://localhost:8443/"), Duration.ofMinutes(5));
 		assertDoesNotThrow(() -> authority.revoke(target));
 		assertTrue(Files.size(stateFile) <= 65536);
+		java.util.Properties persisted = new java.util.Properties();
+		try (var input = Files.newInputStream(stateFile)) { persisted.load(input); }
+		assertTrue(persisted.stringPropertyNames().stream()
+				.filter(name -> name.startsWith("revocationGeneration."))
+				.anyMatch(name -> !persisted.containsKey("revocation." + name.substring("revocationGeneration.".length()))),
+				"byte compaction must retain generation proof after dropping a fingerprint marker");
 		assertDoesNotThrow(() -> new HttpEnrollmentAuthority(identity, state));
 	}
 

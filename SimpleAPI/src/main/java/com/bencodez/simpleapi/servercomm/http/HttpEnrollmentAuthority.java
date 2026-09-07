@@ -577,7 +577,7 @@ public final class HttpEnrollmentAuthority {
 				|| !entry.getValue().isAfter(now));
 		if (reservedBindingCount() > MAX_BINDINGS)
 			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
-		if (!revocationGenerations.keySet().equals(revocationMarkers.keySet()))
+		if (!revocationGenerations.keySet().containsAll(revocationMarkers.keySet()))
 			throw new java.io.IOException("HTTP enrollment state is invalid");
 	}
 
@@ -590,7 +590,7 @@ public final class HttpEnrollmentAuthority {
 				|| !entry.getValue().isAfter(now));
 		if (reservedBindingCount() > MAX_BINDINGS || enrollments.size() > MAX_PENDING_ENROLLMENTS
 				|| revocationMarkers.size() > MAX_REVOCATION_MARKERS
-				|| !revocationGenerations.keySet().equals(revocationMarkers.keySet())
+				|| !revocationGenerations.keySet().containsAll(revocationMarkers.keySet())
 				|| revocationMarkers.values().stream().anyMatch(history -> history.size() != 1)
 				|| revocationGenerations.values().stream().anyMatch(generation -> generation == null || generation <= 0L))
 			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
@@ -658,7 +658,6 @@ public final class HttpEnrollmentAuthority {
 			String candidate = iterator.next();
 			if ((preservedServerId == null || !preservedServerId.equals(candidate)) && !serverStatePresent(candidate)) {
 				iterator.remove();
-				revocationGenerations.remove(candidate);
 				return true;
 			}
 		}
