@@ -29,6 +29,7 @@ final class HttpInboundDeliveryStore {
 	private static final String OWNER_LOCK_SUFFIX = ".lock";
 	private static final String OWNER_GUARD_LOCK = ".http-inbound-owners.lock";
 	private static final Object OWNER_GUARD_MONITOR = new Object();
+	private static final int MAX_OWNER_SIDECARS = 128;
 	private static final int MAX_ENTRIES = HttpTransportProtocol.MAX_QUEUE;
 	private final Path root;
 	private final boolean readOnly;
@@ -69,30 +70,33 @@ final class HttpInboundDeliveryStore {
 			throw new IOException("HTTP inbound delivery parent is unsafe");
 		PrivateFilePermissions.ownerOnlyDirectory(root);
 		Set<String> directories = new TreeSet<>();
-		try (DirectoryStream<Path> entries = Files.newDirectoryStream(root)) {
-			for (Path entry : entries) {
-				String name = entry.getFileName().toString();
-				if (!Files.isSymbolicLink(entry) && Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
-					if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
-						throw new IOException("HTTP inbound delivery directory name is invalid");
-					PrivateFilePermissions.ownerOnlyDirectory(entry);
-					directories.add(name);
-					continue;
-				}
-				if (OWNER_GUARD_LOCK.equals(name) && !Files.isSymbolicLink(entry)
-						&& Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
+		withOwnerGuard(root, () -> {
+			reclaimOrphanSidecars(root);
+			try (DirectoryStream<Path> entries = Files.newDirectoryStream(root)) {
+				for (Path entry : entries) {
+					String name = entry.getFileName().toString();
+					if (!Files.isSymbolicLink(entry) && Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+						if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+							throw new IOException("HTTP inbound delivery directory name is invalid");
+						PrivateFilePermissions.ownerOnlyDirectory(entry);
+						directories.add(name);
+						continue;
+					}
+					if (OWNER_GUARD_LOCK.equals(name) && !Files.isSymbolicLink(entry)
+							&& Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
+						PrivateFilePermissions.ownerOnlyFile(entry);
+						continue;
+					}
+					if (!name.startsWith(OWNER_LOCK_PREFIX) || !name.endsWith(OWNER_LOCK_SUFFIX)
+							|| Files.isSymbolicLink(entry) || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS))
+						throw new IOException("HTTP inbound delivery parent contains an invalid entry");
+					String journal = name.substring(OWNER_LOCK_PREFIX.length(), name.length() - OWNER_LOCK_SUFFIX.length());
+					if (!journal.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+						throw new IOException("HTTP inbound delivery ownership lock name is invalid");
 					PrivateFilePermissions.ownerOnlyFile(entry);
-					continue;
 				}
-				if (!name.startsWith(OWNER_LOCK_PREFIX) || !name.endsWith(OWNER_LOCK_SUFFIX)
-						|| Files.isSymbolicLink(entry) || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS))
-					throw new IOException("HTTP inbound delivery parent contains an invalid entry");
-				String journal = name.substring(OWNER_LOCK_PREFIX.length(), name.length() - OWNER_LOCK_SUFFIX.length());
-				if (!journal.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
-					throw new IOException("HTTP inbound delivery ownership lock name is invalid");
-				PrivateFilePermissions.ownerOnlyFile(entry);
 			}
-		}
+		});
 		return directories;
 	}
 
@@ -386,6 +390,10 @@ final class HttpInboundDeliveryStore {
 	}
 	private void claimOwnership(Path parent, Path sidecar) throws IOException {
 		withOwnerGuard(parent, () -> {
+			reclaimOrphanSidecars(parent);
+			if (!Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+					&& ownershipSidecarCount(parent) >= MAX_OWNER_SIDECARS)
+				throw new IOException("HTTP inbound delivery ownership locks exceed their bound");
 			if (Files.isSymbolicLink(sidecar) || Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
 					&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
 				throw new IOException("HTTP inbound delivery ownership lock is unsafe");
@@ -413,7 +421,10 @@ final class HttpInboundDeliveryStore {
 		if (sidecar == null) throw new IOException("HTTP inbound delivery store ownership has ended");
 		withOwnerGuard(root.getParent(), () -> {
 			releaseOwnershipForRetirement();
-			DurableFiles.deleteIfExists(sidecar);
+			// Ownership has ended and the journal root is durably gone. A cleanup
+			// failure may leave one safe, reusable sidecar, but must not leave the
+			// caller retaining an unusable BackendState that can never retire.
+			try { DurableFiles.deleteIfExists(sidecar); } catch (IOException ignored) { }
 		});
 	}
 	private void releaseOwnershipForRetirement() throws IOException {
@@ -454,6 +465,35 @@ final class HttpInboundDeliveryStore {
 				}
 			}
 		}
+	}
+	private static void reclaimOrphanSidecars(Path parent) throws IOException {
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(parent,
+				OWNER_LOCK_PREFIX + "*" + OWNER_LOCK_SUFFIX)) {
+			for (Path sidecar : entries) {
+				String name = sidecar.getFileName().toString();
+				String journal = name.substring(OWNER_LOCK_PREFIX.length(), name.length() - OWNER_LOCK_SUFFIX.length());
+				if (!journal.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}") || Files.isSymbolicLink(sidecar)
+						|| !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS)) continue;
+				if (Files.exists(parent.resolve(journal), LinkOption.NOFOLLOW_LINKS)) continue;
+				try (FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+					FileLock lock;
+					try { lock = channel.tryLock(); } catch (OverlappingFileLockException owned) { continue; }
+					if (lock == null) continue;
+					try (lock) { }
+				} catch (java.nio.file.NoSuchFileException alreadyRemoved) { continue; }
+				try { DurableFiles.deleteIfExists(sidecar); } catch (IOException cleanupFailure) { }
+			}
+		}
+	}
+	private static int ownershipSidecarCount(Path parent) throws IOException {
+		int count = 0;
+		try (DirectoryStream<Path> entries = Files.newDirectoryStream(parent,
+				OWNER_LOCK_PREFIX + "*" + OWNER_LOCK_SUFFIX)) {
+			for (Path ignored : entries) {
+				if (++count > MAX_OWNER_SIDECARS) break;
+			}
+		}
+		return count;
 	}
 	@FunctionalInterface
 	private interface IoAction { void run() throws IOException; }

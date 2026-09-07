@@ -74,4 +74,21 @@ class HttpInboundRetirementTest {
 		}
 		assertTrue(HttpInboundDeliveryStore.discover(parent).isEmpty());
 	}
+
+	@Test
+	void sidecarCleanupFailureStillCompletesRetirement() throws Exception {
+		Path parent = directory.resolve("incoming");
+		Files.createDirectory(parent);
+		HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(parent, "lobby-1");
+		Path sidecar = parent.resolve(".http-inbound-owner-lobby-1.lock");
+		try (var files = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			files.when(() -> com.bencodez.simpleapi.file.DurableFiles.deleteIfExists(sidecar))
+					.thenThrow(new IOException("injected sidecar cleanup failure"));
+			store.sealAndDeleteIfEmpty();
+		}
+
+		HttpInboundDeliveryStore successor = HttpInboundDeliveryStore.open(parent, "lobby-1");
+		successor.sealAndDeleteIfEmpty();
+	}
 }
