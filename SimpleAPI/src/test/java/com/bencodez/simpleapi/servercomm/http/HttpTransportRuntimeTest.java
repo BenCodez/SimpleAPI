@@ -307,6 +307,28 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void acknowledgedBackendDropsItsEmptyOutgoingIndexes() throws Exception {
+		Path queueRoot = directory.resolve("acknowledged-index-cleanup");
+		try (HttpProxyTransportServer.DurableOutgoingQueue queue = new HttpProxyTransportServer.DurableOutgoingQueue(
+				queueRoot, com.bencodez.simpleapi.file.DurableFiles::forceDirectory)) {
+			HttpProxyTransportServer.BackendState state = new HttpProxyTransportServer.BackendState(
+					"lobby-1", queue, (server, id) -> { });
+			HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(
+					java.util.UUID.randomUUID().toString(), JsonEnvelope.builder("cleanup").build());
+			assertTrue(state.enqueue(delivery));
+			state.acknowledge(java.util.List.of(delivery.id()));
+
+			var quarantinedField = HttpProxyTransportServer.DurableOutgoingQueue.class
+					.getDeclaredField("quarantinedFiles");
+			quarantinedField.setAccessible(true);
+			@SuppressWarnings("unchecked")
+			var quarantined = (java.util.Map<String, java.util.Map<String, Path>>) quarantinedField.get(queue);
+			assertFalse(quarantined.containsKey("lobby-1"),
+					"a deleted backend queue must not retain an empty quarantine index");
+		}
+	}
+
+	@Test
 	void unresolvedOutgoingPublicationDoesNotReportAFalseRejection() throws Exception {
 		AtomicLong forceCalls = new AtomicLong();
 		java.util.concurrent.atomic.AtomicBoolean failForces = new java.util.concurrent.atomic.AtomicBoolean(true);

@@ -988,6 +988,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 					Files.deleteIfExists(directory);
 					directoryForcer.force(root);
 					files.remove(serverId);
+					quarantinedFiles.remove(serverId);
 				} catch (java.nio.file.DirectoryNotEmptyException unexpectedEntry) {
 					// The acknowledged delivery is already durably removed; unrelated/tampered entries
 					// must not make its acknowledgement permanently unprocessable.
