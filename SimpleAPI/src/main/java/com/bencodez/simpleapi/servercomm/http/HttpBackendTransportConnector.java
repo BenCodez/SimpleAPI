@@ -165,6 +165,12 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	/** Performs enrollment network I/O; call this from a connector/setup worker, never a platform main thread. */
 	public static HttpClientCredentialStore.ClientCredential enroll(HttpConnectionCode code, String serverId, Path credentials) throws Exception {
 		if (credentials == null) throw new IllegalArgumentException("Enrollment configuration is invalid");
+		return HttpClientCredentialStore.withEnrollmentLock(credentials,
+				() -> enrollLocked(code, serverId, credentials));
+	}
+
+	private static HttpClientCredentialStore.ClientCredential enrollLocked(
+			HttpConnectionCode code, String serverId, Path credentials) throws Exception {
 		HttpClientCredentialStore.HttpClientProfile expectedProfile = profile(code, serverId);
 		HttpClientCredentialStore.ClientCredential published = HttpClientCredentialStore.recoverPublishedEnrollment(
 				credentials, code, expectedProfile);

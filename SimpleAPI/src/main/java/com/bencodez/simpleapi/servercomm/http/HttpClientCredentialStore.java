@@ -8,16 +8,23 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.net.URI;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import com.bencodez.simpleapi.file.DurableFiles;
 import com.bencodez.simpleapi.file.PrivateFilePermissions;
 
 /** Owner-only persistence for the client certificate bundle returned by enrollment. */
 public final class HttpClientCredentialStore {
+	private static final Map<Path, EnrollmentMonitor> ENROLLMENT_MONITORS = new HashMap<>();
+	private static final String ENROLLMENT_LOCK_FILE = ".http-transport-client-enrollment.lock";
 	private static final String BUNDLE_FILE = "http-transport-client.p12";
 	private static final String PASSWORD_FILE = "http-transport-client-password";
 	private static final String PROFILE_FILE = "http-transport-profile.properties";
@@ -25,6 +32,50 @@ public final class HttpClientCredentialStore {
 	private static final String GENERATIONS_DIRECTORY = "http-transport-client-generations";
 	private static final String CURRENT_FILE = "http-transport-client-current";
 	private HttpClientCredentialStore() { }
+
+	@FunctionalInterface
+	interface EnrollmentOperation<T> { T run() throws Exception; }
+
+	/** Holds one credential-root ownership lock across recovery, remote issuance, and publication. */
+	static <T> T withEnrollmentLock(Path directory, EnrollmentOperation<T> operation) throws Exception {
+		if (operation == null) throw new IllegalArgumentException("Enrollment operation is required");
+		Path root = credentialRoot(directory, true).toRealPath();
+		EnrollmentMonitor monitor = retainEnrollmentMonitor(root);
+		try { synchronized (monitor) {
+			Path sidecar = safe(root.resolve(ENROLLMENT_LOCK_FILE));
+			if (Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+					&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
+				throw new IOException("HTTP credential enrollment lock is unsafe");
+			try (FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.CREATE,
+					StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+				PrivateFilePermissions.ownerOnlyFile(sidecar);
+				try (FileLock ignored = enrollmentLock(channel)) { return operation.run(); }
+			}
+		} } finally { releaseEnrollmentMonitor(root, monitor); }
+	}
+
+	private static EnrollmentMonitor retainEnrollmentMonitor(Path root) {
+		synchronized (ENROLLMENT_MONITORS) {
+			EnrollmentMonitor monitor = ENROLLMENT_MONITORS.computeIfAbsent(root, ignored -> new EnrollmentMonitor());
+			monitor.users++;
+			return monitor;
+		}
+	}
+
+	private static void releaseEnrollmentMonitor(Path root, EnrollmentMonitor monitor) {
+		synchronized (ENROLLMENT_MONITORS) {
+			if (--monitor.users == 0) ENROLLMENT_MONITORS.remove(root, monitor);
+		}
+	}
+
+	private static final class EnrollmentMonitor { private int users; }
+
+	private static FileLock enrollmentLock(FileChannel channel) throws IOException {
+		try { return channel.lock(); }
+		catch (OverlappingFileLockException alreadyOwned) {
+			throw new IOException("HTTP credential enrollment is already in progress", alreadyOwned);
+		}
+	}
 
 	public static void save(Path directory, HttpTlsIdentity.IssuedClientCertificate issued) throws IOException {
 		if (issued == null) throw new IllegalArgumentException("Issued credential is required");

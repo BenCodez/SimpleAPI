@@ -449,10 +449,10 @@ class HttpTransportSecurityTest {
 					.thenThrow(new java.io.IOException("injected authority publication failure"));
 			assertThrows(com.bencodez.simpleapi.file.DurableFiles.PublishedException.class,
 					() -> authority.enroll("lobby-1", targetCode.enrollmentToken()));
+			assertFalse(authority.authenticate("unrelated", unrelated.certificate()),
+					"authentication must fail closed while the published enrollment state is unresolved");
 		}
 
-		assertFalse(authority.authenticate("unrelated", unrelated.certificate()),
-				"authentication must fail closed while the published enrollment state is unresolved");
 		now.set(Instant.parse("2030-01-01T00:06:00Z"));
 		HttpConnectionCode recoveryCode = authority.createConnectionCode("recovery", endpoint, Duration.ofMinutes(5));
 		assertFalse(recoveryCode.enrollmentToken().isEmpty());
