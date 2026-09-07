@@ -242,7 +242,10 @@ public final class HttpClientCredentialStore {
 			throw new IOException("Staged HTTP credential is incomplete");
 		String previous = readCurrentGeneration(directory);
 		writePrivate(safe(directory.resolve(CURRENT_FILE)), staged.name().getBytes(StandardCharsets.US_ASCII));
-		reclaimSupersededGenerations(directory, staged.name(), previous);
+		// CURRENT is the activation commit point. Cleanup is deliberately best effort:
+		// a stale generation must not make a durably activated credential look unconfirmed.
+		try { reclaimSupersededGenerations(directory, staged.name(), previous); }
+		catch (IOException cleanupFailure) { /* retry cleanup during a later activation */ }
 	}
 
 	private static String readCurrentGeneration(Path directory) throws IOException {

@@ -674,6 +674,23 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void activationRemainsUsableWhenStaleGenerationCleanupFails() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("cleanup-proxy"), "localhost");
+		Path client = directory.resolve("cleanup-client");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(60), "C".repeat(43));
+		HttpClientCredentialStore.saveEnrolled(client, code, identity.issueClientCertificate("lobby-1"));
+		Path stale = client.resolve("http-transport-client-generations")
+				.resolve("00000000-0000-0000-0000-000000000000");
+		Files.createDirectories(stale.resolve("unexpected-child"));
+		HttpClientCredentialStore.StagedCredential staged = HttpClientCredentialStore.stageReplacement(client,
+				identity.issueClientCertificate("lobby-1"));
+		assertDoesNotThrow(() -> HttpClientCredentialStore.activateReplacement(client, staged));
+		assertEquals(HttpTransportSecrets.certificatePin(staged.credential().certificate()),
+				HttpTransportSecrets.certificatePin(HttpClientCredentialStore.loadEnrolled(client).credential().certificate()));
+	}
+
+	@Test
 	void enrollmentLockSerializesCredentialMutations() throws Exception {
 		Path client = directory.resolve("lock-client");
 		AtomicInteger active = new AtomicInteger();
