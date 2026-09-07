@@ -44,4 +44,53 @@ class HttpRenewalRateLimitTest {
 		now.set(now.get().plusSeconds(60));
 		assertNotNull(authority.renew("lobby-1", replacement.certificate()));
 	}
+
+	@Test
+	void renewalWindowIsSharedAcrossAuthorities() throws Exception {
+		AtomicReference<Instant> now = new AtomicReference<>(Instant.now());
+		Clock clock = new Clock() {
+			@Override public ZoneId getZone() { return ZoneOffset.UTC; }
+			@Override public Clock withZone(ZoneId zone) { return this; }
+			@Override public Instant instant() { return now.get(); }
+		};
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("shared-identity"), "localhost");
+		Path stateDirectory = directory.resolve("shared-authority");
+		java.nio.file.Files.createDirectory(stateDirectory);
+		Path stateFile = stateDirectory.resolve("http-transport-clients.properties");
+		HttpEnrollmentAuthority first = new HttpEnrollmentAuthority(identity, clock, stateFile);
+		HttpEnrollmentAuthority second = new HttpEnrollmentAuthority(identity, clock, stateFile);
+		URI endpoint = URI.create("https://localhost:8443/");
+		var code = first.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
+		var original = first.enroll("lobby-1", code.enrollmentToken());
+		assertTrue(first.authenticate("lobby-1", original.certificate()));
+
+		first.renew("lobby-1", original.certificate());
+		assertThrows(HttpEnrollmentAuthority.RenewalRateLimitException.class,
+				() -> second.renew("lobby-1", original.certificate()));
+		now.set(now.get().plusSeconds(60));
+		assertNotNull(second.renew("lobby-1", original.certificate()));
+	}
+
+	@Test
+	void revocationRemovesTheDurableRenewalWindow() throws Exception {
+		Instant now = Instant.now();
+		Clock clock = Clock.fixed(now, ZoneOffset.UTC);
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("revoked-identity"), "localhost");
+		Path stateDirectory = directory.resolve("revoked-authority");
+		java.nio.file.Files.createDirectory(stateDirectory);
+		Path stateFile = stateDirectory.resolve("http-transport-clients.properties");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, clock, stateFile);
+		URI endpoint = URI.create("https://localhost:8443/");
+		var firstCode = authority.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
+		var firstCertificate = authority.enroll("lobby-1", firstCode.enrollmentToken());
+		assertTrue(authority.authenticate("lobby-1", firstCertificate.certificate()));
+		authority.renew("lobby-1", firstCertificate.certificate());
+		authority.revoke("lobby-1");
+
+		var secondCode = authority.createConnectionCode("lobby-1", endpoint, Duration.ofMinutes(5));
+		var secondCertificate = authority.enroll("lobby-1", secondCode.enrollmentToken());
+		assertTrue(authority.authenticate("lobby-1", secondCertificate.certificate()));
+		assertNotNull(new HttpEnrollmentAuthority(identity, clock, stateFile)
+				.renew("lobby-1", secondCertificate.certificate()));
+	}
 }

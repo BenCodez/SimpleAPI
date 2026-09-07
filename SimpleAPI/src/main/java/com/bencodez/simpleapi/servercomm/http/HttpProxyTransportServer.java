@@ -55,6 +55,8 @@ import javax.net.ssl.SSLPeerUnverifiedException;
  */
 public final class HttpProxyTransportServer implements AutoCloseable {
 	private static final int MAX_BACKENDS = 128;
+	private static final int SETUP_REQUEST_HEADROOM = 8;
+	private static final int MAX_ADMITTED_REQUESTS = MAX_BACKENDS + SETUP_REQUEST_HEADROOM;
 	private static final long BACKEND_REPLAY_RETENTION_NANOS =
 			TimeUnit.MILLISECONDS.toNanos(HttpTransportProtocol.MAX_CLOCK_SKEW_MILLIS) + 1L;
 	static {
@@ -76,7 +78,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	private final ThreadPoolExecutor handlerExecutor;
 	private final AtomicReference<Thread> handlerWorker = new AtomicReference<>();
 	private final Object closeMonitor = new Object();
-	private final Semaphore admission = new Semaphore(64);
+	private final Semaphore admission = new Semaphore(MAX_ADMITTED_REQUESTS);
 	private final Map<String, BackendState> backends = new HashMap<>();
 	private final DurableOutgoingQueue durableOutgoing;
 	private final Path durableIncomingRoot;
@@ -148,7 +150,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			});
 			// Long polls are blocking by design. Capacity is bounded by admission, while enough workers
 			// remain available for all admitted polls plus setup requests.
-			createdListener = executor("SimpleAPI-HTTP-listener", 72, 72);
+			createdListener = executor("SimpleAPI-HTTP-listener", MAX_ADMITTED_REQUESTS, MAX_ADMITTED_REQUESTS);
 			// The proxy router mutates shared presence, vote, and reward state. A separate
 			// bounded FIFO lane keeps wire order without blocking long-poll workers.
 			createdHandler = executor("SimpleAPI-HTTP-handler", 1,

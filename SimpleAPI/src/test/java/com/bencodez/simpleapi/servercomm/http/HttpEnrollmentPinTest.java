@@ -34,7 +34,11 @@ class HttpEnrollmentPinTest {
 					() -> authority.createConnectionCode("lobby-1", endpoint, lifetime));
 		}
 		HttpConnectionCode minimum = authority.createConnectionCode("lobby-1", endpoint, Duration.ofSeconds(1));
-		org.junit.jupiter.api.Assertions.assertTrue(HttpConnectionCode.parse(minimum.encode()).expiresAt().isAfter(clock.instant()));
+		assertEquals(Instant.parse("2026-09-05T12:00:02Z"),
+				HttpConnectionCode.parse(minimum.encode()).expiresAt());
+		HttpConnectionCode maximum = authority.createConnectionCode("lobby-2", endpoint, Duration.ofMinutes(15));
+		assertEquals(Instant.parse("2026-09-05T12:15:00Z"),
+				HttpConnectionCode.parse(maximum.encode()).expiresAt());
 	}
 
 	@Test

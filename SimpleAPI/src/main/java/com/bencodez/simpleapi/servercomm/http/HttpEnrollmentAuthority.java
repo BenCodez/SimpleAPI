@@ -13,6 +13,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -72,7 +73,13 @@ public final class HttpEnrollmentAuthority {
 		serverId = HttpTlsIdentity.canonicalServerId(serverId);
 		if (lifetime == null || lifetime.compareTo(Duration.ofSeconds(1)) < 0 || lifetime.compareTo(MAX_ENROLLMENT_LIFETIME) > 0)
 			throw new IllegalArgumentException("Enrollment lifetime must be between one second and fifteen minutes");
-		Instant expiresAt = clock.instant().plus(lifetime);
+		Instant now = clock.instant();
+		Instant expiresAt = now.plus(lifetime);
+		if (expiresAt.getNano() != 0) {
+			expiresAt = expiresAt.plusSeconds(1).truncatedTo(ChronoUnit.SECONDS);
+			Instant maximumExpiry = now.plus(MAX_ENROLLMENT_LIFETIME).truncatedTo(ChronoUnit.SECONDS);
+			if (expiresAt.isAfter(maximumExpiry)) expiresAt = maximumExpiry;
+		}
 		String token = HttpTransportSecrets.randomToken();
 		// Validate the complete code before reserving or persisting a pending slot.
 		HttpConnectionCode code = new HttpConnectionCode(serverId, endpoint, identity.serverCertificatePin(),
@@ -188,9 +195,18 @@ public final class HttpEnrollmentAuthority {
 		Instant nextAllowed = renewalNotBefore.get(serverId);
 		if (nextAllowed != null && now.isBefore(nextAllowed)) throw new RenewalRateLimitException();
 		if (!authenticateLocked(serverId, currentCertificate)) throw new IllegalArgumentException("Certificate renewal was rejected");
-		// Bound the limiter by active bindings; failed issuance still consumes the window.
+		// Persist the limiter before certificate generation so failed issuance still consumes
+		// the same window across every authority sharing this state.
 		renewalNotBefore.keySet().retainAll(bindings.keySet());
-		renewalNotBefore.put(serverId, now.plus(MIN_RENEWAL_INTERVAL));
+		Instant previousRenewalNotBefore = renewalNotBefore.put(serverId, now.plus(MIN_RENEWAL_INTERVAL));
+		try { persistState(); rollbackStateAvailable = false; }
+		catch (DurableFiles.PublishedException published) { rollbackStateAvailable = false; throw published; }
+		catch (java.io.IOException failure) {
+			if (previousRenewalNotBefore == null) renewalNotBefore.remove(serverId);
+			else renewalNotBefore.put(serverId, previousRenewalNotBefore);
+			rollbackStateAvailable = true;
+			throw failure;
+		}
 		ClientBinding binding = bindings.get(serverId);
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate(serverId);
 		bindings.put(serverId, new ClientBinding(binding.certificatePin(),
@@ -230,7 +246,9 @@ public final class HttpEnrollmentAuthority {
 		});
 		// Absence is the durable revocation fence: authentication always requires an exact active binding.
 		ClientBinding removedBinding = bindings.remove(serverId);
-		if (removedBinding != null || !removedEnrollments.isEmpty() || revocationRetryRequired) try {
+		Instant removedRenewalNotBefore = renewalNotBefore.remove(serverId);
+		if (removedBinding != null || !removedEnrollments.isEmpty() || removedRenewalNotBefore != null
+				|| revocationRetryRequired) try {
 			persistState();
 			persistenceFailure = false;
 			rollbackStateAvailable = false;
@@ -243,6 +261,7 @@ public final class HttpEnrollmentAuthority {
 			if (!(failure instanceof DurableFiles.PublishedException)) {
 				if (removedBinding != null) bindings.put(serverId, removedBinding);
 				enrollments.putAll(removedEnrollments);
+				if (removedRenewalNotBefore != null) renewalNotBefore.put(serverId, removedRenewalNotBefore);
 				rollbackStateAvailable = true;
 			}
 			persistenceFailure = true;
@@ -303,12 +322,15 @@ public final class HttpEnrollmentAuthority {
 		if (allowDirectoryFailure && Files.isDirectory(stateFile, LinkOption.NOFOLLOW_LINKS)) return;
 		Map<String, Enrollment> previousEnrollments = new HashMap<>(enrollments);
 		Map<String, ClientBinding> previousBindings = new HashMap<>(bindings);
+		Map<String, Instant> previousRenewalNotBefore = new HashMap<>(renewalNotBefore);
 		enrollments.clear();
 		bindings.clear();
+		renewalNotBefore.clear();
 		try { loadState(); }
 		catch (java.io.IOException failure) {
 			enrollments.putAll(previousEnrollments);
 			bindings.putAll(previousBindings);
+			renewalNotBefore.putAll(previousRenewalNotBefore);
 			throw failure;
 		}
 	}
@@ -321,7 +343,8 @@ public final class HttpEnrollmentAuthority {
 		Properties properties = new Properties();
 		try (var input = Files.newInputStream(stateFile, LinkOption.NOFOLLOW_LINKS)) { properties.load(input); }
 		String version = properties.getProperty("version");
-		if (!("1".equals(version) || "2".equals(version) || "3".equals(version) || "4".equals(version)))
+		if (!("1".equals(version) || "2".equals(version) || "3".equals(version) || "4".equals(version)
+				|| "5".equals(version)))
 			throw new java.io.IOException("HTTP enrollment state is invalid");
 		for (String key : properties.stringPropertyNames()) {
 			if (key.startsWith("binding.")) {
@@ -329,7 +352,8 @@ public final class HttpEnrollmentAuthority {
 				serverId = HttpTlsIdentity.canonicalServerId(serverId);
 				String[] value = properties.getProperty(key, "").split(":", -1);
 				if (!((value.length == 2 && "1".equals(version))
-						|| (value.length == 3 && ("2".equals(version) || "3".equals(version) || "4".equals(version))))
+						|| (value.length == 3 && ("2".equals(version) || "3".equals(version)
+								|| "4".equals(version) || "5".equals(version))))
 						|| !value[0].matches("[0-9a-f]{64}"))
 					throw new java.io.IOException("HTTP enrollment state is invalid");
 				String pending = value.length == 3 && !"-".equals(value[1]) ? value[1] : null;
@@ -340,7 +364,8 @@ public final class HttpEnrollmentAuthority {
 					if (bindings.size() >= MAX_BINDINGS) throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 					bindings.put(serverId, new ClientBinding(value[0], pending, false));
 				}
-			} else if (key.startsWith("enrollment.") && ("3".equals(version) || "4".equals(version))) {
+			} else if (key.startsWith("enrollment.")
+					&& ("3".equals(version) || "4".equals(version) || "5".equals(version))) {
 				String lookup = key.substring("enrollment.".length());
 				if (!lookup.matches("[A-Za-z0-9_-]{43}")) throw new java.io.IOException("HTTP enrollment state is invalid");
 				byte[] tokenHash;
@@ -348,7 +373,8 @@ public final class HttpEnrollmentAuthority {
 				catch (IllegalArgumentException invalid) { throw new java.io.IOException("HTTP enrollment state is invalid", invalid); }
 				if (tokenHash.length != 32) throw new java.io.IOException("HTTP enrollment state is invalid");
 				String[] value = properties.getProperty(key, "").split(":", -1);
-				if (!(value.length == 2 && "3".equals(version)) && !(value.length == 3 && "4".equals(version)))
+				if (!(value.length == 2 && "3".equals(version))
+						&& !(value.length == 3 && ("4".equals(version) || "5".equals(version))))
 					throw new java.io.IOException("HTTP enrollment state is invalid");
 				Instant expiresAt;
 				String serverId;
@@ -364,18 +390,43 @@ public final class HttpEnrollmentAuthority {
 						throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 					enrollments.put(lookup, new Enrollment(tokenHash, expiresAt, serverId, pendingPin));
 				}
+			} else if (key.startsWith("renewal.") && "5".equals(version)) {
+				String encodedServer = key.substring("renewal.".length());
+				String serverId;
+				Instant notBefore;
+				try {
+					serverId = HttpTlsIdentity.canonicalServerId(new String(
+							Base64.getUrlDecoder().decode(encodedServer), StandardCharsets.UTF_8));
+					String canonicalEncoding = Base64.getUrlEncoder().withoutPadding().encodeToString(
+							serverId.getBytes(StandardCharsets.UTF_8));
+					if (!canonicalEncoding.equals(encodedServer)) throw new IllegalArgumentException();
+					String value = properties.getProperty(key, "");
+					if (!value.matches("[0-9]{1,19}")) throw new IllegalArgumentException();
+					notBefore = Instant.ofEpochMilli(Long.parseLong(value));
+				} catch (RuntimeException invalid) {
+					throw new java.io.IOException("HTTP enrollment state is invalid", invalid);
+				}
+				if (renewalNotBefore.size() >= MAX_BINDINGS
+						|| renewalNotBefore.putIfAbsent(serverId, notBefore) != null)
+					throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 			} else if (!"version".equals(key)) throw new java.io.IOException("HTTP enrollment state is invalid");
 		}
+		Instant now = clock.instant();
+		renewalNotBefore.entrySet().removeIf(entry -> !bindings.containsKey(entry.getKey())
+				|| !entry.getValue().isAfter(now));
 		if (reservedBindingCount() > MAX_BINDINGS)
 			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 	}
 
 	private synchronized void persistState() throws java.io.IOException {
 		if (stateFile == null) return;
+		Instant now = clock.instant();
+		renewalNotBefore.entrySet().removeIf(entry -> !bindings.containsKey(entry.getKey())
+				|| !entry.getValue().isAfter(now));
 		if (reservedBindingCount() > MAX_BINDINGS || enrollments.size() > MAX_PENDING_ENROLLMENTS)
 			throw new java.io.IOException("HTTP enrollment state exceeds its bound");
 		Properties properties = new Properties();
-		properties.setProperty("version", "4");
+		properties.setProperty("version", "5");
 		for (Map.Entry<String, ClientBinding> entry : bindings.entrySet()) {
 			String key = Base64.getUrlEncoder().withoutPadding().encodeToString(entry.getKey().getBytes(StandardCharsets.UTF_8));
 			properties.setProperty("binding." + key, entry.getValue().certificatePin() + ":"
@@ -388,6 +439,11 @@ public final class HttpEnrollmentAuthority {
 			properties.setProperty("enrollment." + entry.getKey(),
 					entry.getValue().expiresAt().toEpochMilli() + ":" + server + ":"
 							+ (entry.getValue().pendingCertificatePin() == null ? "-" : entry.getValue().pendingCertificatePin()));
+		}
+		for (Map.Entry<String, Instant> entry : renewalNotBefore.entrySet()) {
+			String server = Base64.getUrlEncoder().withoutPadding().encodeToString(
+					entry.getKey().getBytes(StandardCharsets.UTF_8));
+			properties.setProperty("renewal." + server, Long.toString(entry.getValue().toEpochMilli()));
 		}
 		java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
 		properties.store(bytes, "VotingPlugin HTTP transport authority state");
