@@ -126,4 +126,32 @@ class HttpEnrollmentAuthorityOwnershipTest {
 		assertTrue(failed.enroll("history", peer.createConnectionCode("history", endpoint, Duration.ofMinutes(5)).enrollmentToken()) != null,
 				"peer completion of the older revocation must clear the stale failure after a later cycle");
 	}
+
+	@Test
+	void pendingIssuedCertificateCannotMasqueradeAsCompletedRevocation() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pending-fence-identity"), "localhost");
+		Path state = directory.resolve("pending-fence-authority");
+		HttpEnrollmentAuthority failed = new HttpEnrollmentAuthority(identity, state);
+		HttpEnrollmentAuthority peer = new HttpEnrollmentAuthority(identity, state);
+		URI endpoint = URI.create("https://localhost:8443/");
+		HttpConnectionCode pendingCode = failed.createConnectionCode("pending", endpoint, Duration.ofMinutes(5));
+		var pendingCertificate = failed.enroll("pending", pendingCode.enrollmentToken());
+		HttpConnectionCode activeCode = failed.createConnectionCode("active", endpoint, Duration.ofMinutes(5));
+		var activeCertificate = failed.enroll("active", activeCode.enrollmentToken());
+		assertTrue(failed.authenticate("active", activeCertificate.certificate()));
+
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceFile(org.mockito.ArgumentMatchers.any(Path.class)))
+					.thenThrow(new java.io.IOException("injected pending revocation failure"));
+			assertThrows(IllegalStateException.class, () -> failed.revoke("pending"));
+		}
+
+		assertTrue(peer.authenticate("pending", pendingCertificate.certificate()));
+		assertFalse(failed.authenticate("active", activeCertificate.certificate()),
+				"activation of the exact pending certificate must not look like completed revocation");
+		peer.revoke("pending");
+		assertTrue(failed.authenticate("active", activeCertificate.certificate()),
+				"the peer's actual revocation must clear the stale failure fence");
+	}
 }

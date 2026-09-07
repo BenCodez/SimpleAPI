@@ -741,6 +741,8 @@ public final class HttpEnrollmentAuthority {
 				if (binding.certificatePin() != null) pins.add(binding.certificatePin());
 				if (binding.pendingCertificatePin() != null) pins.add(binding.pendingCertificatePin());
 			}
+			for (Enrollment enrollment : removedEnrollments.values())
+				if (enrollment.pendingCertificatePin() != null) pins.add(enrollment.pendingCertificatePin());
 			return new RevocationFence(Set.copyOf(pins), Set.copyOf(removedEnrollments.keySet()), renewalNotBefore);
 		}
 
