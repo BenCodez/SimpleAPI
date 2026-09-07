@@ -35,6 +35,7 @@ class HttpBackendLifecycleRecoveryTest {
 		String id = UUID.randomUUID().toString();
 		connector.get().dispatch(new HttpTransportProtocol.Delivery(id, JsonEnvelope.builder("self-close").build()));
 		assertTrue(callbackReturned.await(2, TimeUnit.SECONDS), "callback-owned close must not drain its own worker");
+		connector.get().close();
 		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
 		HttpInboundDeliveryStore.State state = null;
 		while (System.nanoTime() < deadline) {

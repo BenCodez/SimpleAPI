@@ -91,4 +91,29 @@ class HttpEnrollmentAuthorityOwnershipTest {
 				"a fresh post-revocation enrollment must not obscure the completed revocation");
 		assertTrue(Files.isRegularFile(state.resolve("http-transport-clients.properties")));
 	}
+
+	@Test
+	void preservesAnOlderFailedRevocationAcrossLaterPeerRevocationCycles() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("revocation-history-identity"), "localhost");
+		Path state = directory.resolve("revocation-history-authority");
+		HttpEnrollmentAuthority failed = new HttpEnrollmentAuthority(identity, state);
+		HttpEnrollmentAuthority peer = new HttpEnrollmentAuthority(identity, state);
+		URI endpoint = URI.create("https://localhost:8443/");
+		HttpConnectionCode firstCode = failed.createConnectionCode("history", endpoint, Duration.ofMinutes(5));
+		var firstCertificate = failed.enroll("history", firstCode.enrollmentToken());
+		try (var forces = org.mockito.Mockito.mockStatic(com.bencodez.simpleapi.file.DurableFiles.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS)) {
+			forces.when(() -> com.bencodez.simpleapi.file.DurableFiles.forceFile(org.mockito.ArgumentMatchers.any(Path.class)))
+				.thenThrow(new java.io.IOException("injected first revocation failure"));
+			assertThrows(IllegalStateException.class, () -> failed.revoke("history"));
+		}
+		peer.revoke("history");
+		HttpConnectionCode secondCode = peer.createConnectionCode("history", endpoint, Duration.ofMinutes(5));
+		peer.enroll("history", secondCode.enrollmentToken());
+		peer.revoke("history");
+		assertFalse(failed.authenticate("history", firstCertificate.certificate()),
+				"the stale authority must still reject the first revoked credential");
+		assertTrue(failed.enroll("history", peer.createConnectionCode("history", endpoint, Duration.ofMinutes(5)).enrollmentToken()) != null,
+				"peer completion of the older revocation must clear the stale failure after a later cycle");
+	}
 }
