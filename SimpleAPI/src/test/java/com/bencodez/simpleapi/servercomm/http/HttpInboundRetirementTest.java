@@ -2,6 +2,7 @@ package com.bencodez.simpleapi.servercomm.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -56,5 +57,21 @@ class HttpInboundRetirementTest {
 		}
 		HttpInboundDeliveryStore successor = HttpInboundDeliveryStore.open(parent, "lobby-1");
 		successor.seal();
+	}
+
+	@Test
+	void successfulRetirementReclaimsPerJournalOwnershipSidecars() throws Exception {
+		Path parent = directory.resolve("incoming");
+		Files.createDirectory(parent);
+		for (int index = 0; index < 200; index++) {
+			HttpInboundDeliveryStore store = HttpInboundDeliveryStore.open(parent, "backend-" + index);
+			store.sealAndDeleteIfEmpty();
+		}
+
+		try (var files = Files.list(parent)) {
+			assertEquals(java.util.List.of(".http-inbound-owners.lock"),
+					files.map(path -> path.getFileName().toString()).sorted().toList());
+		}
+		assertTrue(HttpInboundDeliveryStore.discover(parent).isEmpty());
 	}
 }

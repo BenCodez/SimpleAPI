@@ -23,10 +23,12 @@ import java.util.UUID;
 /** Crash-durable state for proxy deliveries around a non-transactional application callback. */
 final class HttpInboundDeliveryStore {
 	private static final String DIRECTORY = "http-transport-inbound-deliveries";
-	// This sidecar is deliberately outside the deletable journal directory. Never remove it:
-	// deleting and recreating a locked file could split ownership across two inodes.
+	// Per-journal sidecars are reclaimed only while holding the stable owners guard, so an
+	// opener cannot race the unlink and acquire a different inode for the same journal.
 	private static final String OWNER_LOCK_PREFIX = ".http-inbound-owner-";
 	private static final String OWNER_LOCK_SUFFIX = ".lock";
+	private static final String OWNER_GUARD_LOCK = ".http-inbound-owners.lock";
+	private static final Object OWNER_GUARD_MONITOR = new Object();
 	private static final int MAX_ENTRIES = HttpTransportProtocol.MAX_QUEUE;
 	private final Path root;
 	private final boolean readOnly;
@@ -39,6 +41,7 @@ final class HttpInboundDeliveryStore {
 	private final Set<String> pendingRunningRollbacks = new HashSet<>();
 	private FileChannel ownershipChannel;
 	private FileLock ownershipLock;
+	private Path ownershipSidecar;
 	private boolean sealed;
 	private boolean retirementRecoveryRequired;
 
@@ -76,6 +79,11 @@ final class HttpInboundDeliveryStore {
 					directories.add(name);
 					continue;
 				}
+				if (OWNER_GUARD_LOCK.equals(name) && !Files.isSymbolicLink(entry)
+						&& Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
+					PrivateFilePermissions.ownerOnlyFile(entry);
+					continue;
+				}
 				if (!name.startsWith(OWNER_LOCK_PREFIX) || !name.endsWith(OWNER_LOCK_SUFFIX)
 						|| Files.isSymbolicLink(entry) || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS))
 					throw new IOException("HTTP inbound delivery parent contains an invalid entry");
@@ -100,7 +108,7 @@ final class HttpInboundDeliveryStore {
 		if (!root.getParent().equals(credentials)) throw new IOException("HTTP inbound delivery directory is invalid");
 		if (!readOnly) {
 			try {
-				claimOwnership(credentials.resolve(OWNER_LOCK_PREFIX + directoryName + OWNER_LOCK_SUFFIX));
+				claimOwnership(credentials, credentials.resolve(OWNER_LOCK_PREFIX + directoryName + OWNER_LOCK_SUFFIX));
 				// Claim before creating or checking the journal root: a retiring owner may be
 				// between its empty check and deletion, and only one owner may cross that boundary.
 				try { Files.createDirectory(root); }
@@ -210,7 +218,8 @@ final class HttpInboundDeliveryStore {
 		retirementRecoveryRequired = true;
 		Files.delete(root);
 		DurableFiles.forceDirectory(parent);
-		seal();
+		retireOwnership();
+		sealed = true;
 	}
 
 	synchronized void remove(String id) throws IOException {
@@ -375,33 +384,79 @@ final class HttpInboundDeliveryStore {
 			retirementRecoveryRequired = false;
 		}
 	}
-	private void claimOwnership(Path sidecar) throws IOException {
-		if (Files.isSymbolicLink(sidecar) || Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
-				&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
-			throw new IOException("HTTP inbound delivery ownership lock is unsafe");
-		FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-				LinkOption.NOFOLLOW_LINKS);
-		try {
-			PrivateFilePermissions.ownerOnlyFile(sidecar);
-			FileLock lock;
-			try { lock = channel.tryLock(); }
-			catch (OverlappingFileLockException alreadyOwned) { throw new IOException("HTTP inbound delivery store is already owned", alreadyOwned); }
-			if (lock == null) throw new IOException("HTTP inbound delivery store is already owned");
-			ownershipChannel = channel;
-			ownershipLock = lock;
-		} catch (IOException | RuntimeException failure) {
-			try { channel.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
-			throw failure;
+	private void claimOwnership(Path parent, Path sidecar) throws IOException {
+		withOwnerGuard(parent, () -> {
+			if (Files.isSymbolicLink(sidecar) || Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+					&& !Files.isRegularFile(sidecar, LinkOption.NOFOLLOW_LINKS))
+				throw new IOException("HTTP inbound delivery ownership lock is unsafe");
+			FileChannel channel = FileChannel.open(sidecar, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+					LinkOption.NOFOLLOW_LINKS);
+			try {
+				PrivateFilePermissions.ownerOnlyFile(sidecar);
+				FileLock lock;
+				try { lock = channel.tryLock(); }
+				catch (OverlappingFileLockException alreadyOwned) {
+					throw new IOException("HTTP inbound delivery store is already owned", alreadyOwned);
+				}
+				if (lock == null) throw new IOException("HTTP inbound delivery store is already owned");
+				ownershipChannel = channel;
+				ownershipLock = lock;
+				ownershipSidecar = sidecar;
+			} catch (IOException | RuntimeException failure) {
+				try { channel.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
+				throw failure;
+			}
+		});
+	}
+	private void retireOwnership() throws IOException {
+		Path sidecar = ownershipSidecar;
+		if (sidecar == null) throw new IOException("HTTP inbound delivery store ownership has ended");
+		withOwnerGuard(root.getParent(), () -> {
+			releaseOwnershipForRetirement();
+			DurableFiles.deleteIfExists(sidecar);
+		});
+	}
+	private void releaseOwnershipForRetirement() throws IOException {
+		FileLock lock = ownershipLock;
+		FileChannel channel = ownershipChannel;
+		ownershipLock = null;
+		ownershipChannel = null;
+		ownershipSidecar = null;
+		IOException failure = null;
+		if (lock != null) try { lock.release(); } catch (IOException releaseFailure) { failure = releaseFailure; }
+		if (channel != null) try { channel.close(); } catch (IOException closeFailure) {
+			if (failure == null) failure = closeFailure;
+			else failure.addSuppressed(closeFailure);
 		}
+		if (failure != null) throw failure;
 	}
 	private void releaseOwnership() {
 		FileLock lock = ownershipLock;
 		FileChannel channel = ownershipChannel;
 		ownershipLock = null;
 		ownershipChannel = null;
+		ownershipSidecar = null;
 		if (lock != null) try { lock.release(); } catch (IOException ignored) { }
 		if (channel != null) try { channel.close(); } catch (IOException ignored) { }
 	}
+	private static void withOwnerGuard(Path parent, IoAction action) throws IOException {
+		synchronized (OWNER_GUARD_MONITOR) {
+			Path guard = parent.resolve(OWNER_GUARD_LOCK);
+			if (Files.isSymbolicLink(guard) || Files.exists(guard, LinkOption.NOFOLLOW_LINKS)
+					&& !Files.isRegularFile(guard, LinkOption.NOFOLLOW_LINKS))
+				throw new IOException("HTTP inbound delivery owners guard is unsafe");
+			try (FileChannel channel = FileChannel.open(guard, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+					LinkOption.NOFOLLOW_LINKS)) {
+				PrivateFilePermissions.ownerOnlyFile(guard);
+				try (FileLock ignored = channel.lock()) { action.run(); }
+				catch (OverlappingFileLockException overlapping) {
+					throw new IOException("HTTP inbound delivery owners guard is already held", overlapping);
+				}
+			}
+		}
+	}
+	@FunctionalInterface
+	private interface IoAction { void run() throws IOException; }
 	private static void move(Path source, Path target) throws IOException {
 		try { Files.move(source, target, StandardCopyOption.ATOMIC_MOVE); }
 		catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(source, target); }
