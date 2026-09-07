@@ -34,15 +34,24 @@ coordinates.
 
 **Do not package both representations of the same classes.** A native application
 uses the shared artifacts and never the full `simpleapi` artifact. A Bukkit
-application uses the full distribution. When a future AdvancedCore common module
-brings shared artifacts transitively into a Bukkit distribution, exclude those
-three dependencies from that edge and satisfy their classes from the aligned full
-SimpleAPI dependency. Keep versions aligned. Existing AdvancedCore/VotingPlugin
-builds do not need this exclusion today because they do not consume the new modules.
+application retains the full distribution. Future AdvancedCore common-module
+integration must choose one representation of each SimpleAPI class in the final
+Bukkit JAR, keep versions aligned, and verify the final shaded artifact's linkage.
+Existing AdvancedCore/VotingPlugin builds do not consume the new thin modules and
+need no dependency changes in this PR.
 
-The thin SQL artifact intentionally uses unrelocated HikariCP. Existing full
-SimpleAPI shading remains unchanged. A native mod packager must package its actual
-runtime dependency graph using the target loader's supported mechanism.
+The thin SQL artifact intentionally uses unrelocated HikariCP, whereas the full
+SimpleAPI distribution already relocates HikariCP. Some existing SQL public
+signatures expose Hikari types. Therefore excluding the thin dependencies in favor
+of the full JAR is not sufficient by itself for common code compiled against those
+signatures: the final Bukkit packaging must relocate the common callers and the
+provided SQL implementations consistently. Prefer JDBC/JDK types at new shared
+boundaries and add a final packaged Bukkit linkage test when making that consumer
+change. This PR does not claim that future mixed packaging is already validated.
+
+A native mod packager must include its actual runtime dependency graph using the
+target loader's supported mechanism. No changes to existing full-JAR shading are
+made here.
 
 ## Native configuration example
 
@@ -149,8 +158,8 @@ Source staging is checked byte-for-byte against the one maintained implementatio
 The same workflow installs the exact candidate in an isolated Maven repository,
 builds pinned AdvancedCore and VotingPlugin fixtures, verifies their dependency
 classpath paths and checks that installed candidate JAR hashes were not replaced.
-It never merges, publishes releases, contacts production, or submits a dependency
-graph on a pull request. Update the fixture SHAs deliberately when testing newer
+It never merges, publishes releases, modifies production services, or submits a
+dependency graph on a pull request. Update the fixture SHAs deliberately when testing newer
 consumer source. SQL tests here cover configuration/linkage, not a live database
 matrix. Live Minecraft/Folia/Forge/Fabric smoke tests remain application-level work.
 
@@ -163,5 +172,7 @@ player, messaging, item, inventory and mixed `ArrayUtils` APIs remain untouched;
 their game operations belong behind adapters during that extraction. Do not replace
 entity-aware scheduling with a generic global-thread executor.
 
-The active HTTP transport PR #73 is deliberately independent. It is not copied or
-reworked here. Its final shared packaging can be added after that transport lands.
+The separate HTTP transport work from PR #73 is not copied or reworked here. It
+merged into main while this change was being validated; the PR merge-ref build
+tests compatibility with it. Packaging that transport as a thin native dependency
+is a separate follow-up, not part of these configuration/data/SQL artifacts.
