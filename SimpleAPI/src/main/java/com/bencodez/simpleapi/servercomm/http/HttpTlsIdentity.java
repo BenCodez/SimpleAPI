@@ -21,6 +21,7 @@ import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.time.Clock;
 import java.time.Duration;
+import java.net.InetAddress;
 import java.util.Date;
 import java.util.Arrays;
 import java.util.Collection;
@@ -47,6 +48,7 @@ import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.util.IPAddress;
 import com.bencodez.simpleapi.file.DurableFiles;
 import com.bencodez.simpleapi.file.PrivateFilePermissions;
 
@@ -405,11 +407,22 @@ public final class HttpTlsIdentity {
 			if (names == null) return false;
 			for (List<?> name : names) {
 				if (name.size() != 2 || !(name.get(1) instanceof String value)) continue;
-				if ((Integer.valueOf(GeneralName.dNSName).equals(name.get(0)) || Integer.valueOf(GeneralName.iPAddress).equals(name.get(0)))
-						&& advertisedHost.equalsIgnoreCase(value)) return true;
+				if (Integer.valueOf(GeneralName.dNSName).equals(name.get(0)) && advertisedHost.equalsIgnoreCase(value)) return true;
+				if (Integer.valueOf(GeneralName.iPAddress).equals(name.get(0)) && sameIpAddress(advertisedHost, value)) return true;
 			}
 			return false;
 		} catch (Exception failure) { return false; }
+	}
+
+	private static boolean sameIpAddress(String first, String second) {
+		if (!isIpLiteral(first) || !isIpLiteral(second)) return false;
+		try {
+			return Arrays.equals(InetAddress.getByName(first).getAddress(), InetAddress.getByName(second).getAddress());
+		} catch (Exception failure) { return false; }
+	}
+
+	private static boolean isIpLiteral(String value) {
+		return IPAddress.isValid(value);
 	}
 
 	private static Path safe(Path file) throws IOException {

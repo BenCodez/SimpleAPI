@@ -46,6 +46,16 @@ class HttpTlsIdentityOwnershipTest {
 	}
 
 	@Test
+	void compressedIpv6ServerNameSurvivesReload() throws Exception {
+		Path identityDirectory = directory.resolve("ipv6-identity");
+		HttpTlsIdentity created = HttpTlsIdentity.loadOrCreate(identityDirectory, "::1");
+		String originalPin = created.serverCertificatePin();
+
+		HttpTlsIdentity reloaded = HttpTlsIdentity.loadOrCreate(identityDirectory, "::1");
+		assertEquals(originalPin, reloaded.serverCertificatePin());
+	}
+
+	@Test
 	void staleInstanceAdoptsAnotherInstancesRenewedServerCertificate() throws Exception {
 		Instant now = Instant.now();
 		Path identityDirectory = directory.resolve("stale-renewal");
