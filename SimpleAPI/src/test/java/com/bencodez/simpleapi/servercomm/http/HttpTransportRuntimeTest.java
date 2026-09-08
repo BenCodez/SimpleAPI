@@ -1422,6 +1422,62 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void pausedBackendDefersCallbackAndDurableFenceUntilActivation() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("paused-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
+		Path clientDirectory = directory.resolve("paused-client");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", java.net.URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300), "D".repeat(43));
+		HttpClientCredentialStore.saveEnrolled(clientDirectory, code, issued);
+		CountDownLatch callback = new CountDownLatch(1);
+		String id = java.util.UUID.randomUUID().toString();
+		try (HttpBackendTransportConnector connector = new HttpBackendTransportConnector(clientDirectory,
+				ignored -> callback.countDown())) {
+			connector.startPaused();
+			connector.dispatch(new HttpTransportProtocol.Delivery(id, JsonEnvelope.builder("vote").build()));
+			assertFalse(callback.await(150, TimeUnit.MILLISECONDS));
+			var inboundField = HttpBackendTransportConnector.class.getDeclaredField("inboundDeliveries");
+			inboundField.setAccessible(true);
+			HttpInboundDeliveryStore store = (HttpInboundDeliveryStore) inboundField.get(connector);
+			assertEquals(null, store.state(id), "publication staging must not create a durable replay fence");
+
+			connector.activateIncoming();
+			assertTrue(callback.await(2, TimeUnit.SECONDS));
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+			while (store.state(id) != HttpInboundDeliveryStore.State.COMPLETED && System.nanoTime() < deadline)
+				Thread.sleep(5);
+			assertEquals(HttpInboundDeliveryStore.State.COMPLETED, store.state(id));
+		}
+	}
+
+	@Test
+	void closingPausedBackendLeavesDeliveryRecoverable() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("paused-close-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
+		Path clientDirectory = directory.resolve("paused-close-client");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", java.net.URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300), "E".repeat(43));
+		HttpClientCredentialStore.saveEnrolled(clientDirectory, code, issued);
+		AtomicInteger callbacks = new AtomicInteger();
+		String id = java.util.UUID.randomUUID().toString();
+		HttpTransportProtocol.Delivery delivery = new HttpTransportProtocol.Delivery(id, JsonEnvelope.builder("vote").build());
+		HttpBackendTransportConnector staged = new HttpBackendTransportConnector(clientDirectory,
+				ignored -> callbacks.incrementAndGet());
+		staged.startPaused();
+		staged.dispatch(delivery);
+		Thread.sleep(150);
+		staged.close();
+		assertEquals(0, callbacks.get());
+
+		try (HttpBackendTransportConnector restarted = new HttpBackendTransportConnector(clientDirectory,
+				ignored -> callbacks.incrementAndGet())) {
+			assertEquals(java.util.List.of(delivery), restarted.accept(java.util.List.of(delivery)),
+					"abandoned staging must leave the proxy delivery replayable");
+			assertTrue(restarted.drainAcknowledgements().isEmpty());
+		}
+	}
+
+	@Test
 	void durableBackendFencePreventsCallbackReplayAfterRestartBeforeAck() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("fence-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
