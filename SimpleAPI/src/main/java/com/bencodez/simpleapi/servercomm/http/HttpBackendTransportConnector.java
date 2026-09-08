@@ -75,6 +75,9 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private volatile Thread callbackWorker;
 	// Guarded by lifecycle. A flush drains the accepted queue but must not admit a new send.
 	private boolean flushingOutgoing;
+	// Guarded by lifecycle. Staged connectors poll normally but must not cross the
+	// durable inbound fence until their application handler has been published.
+	private boolean incomingActive = true;
 	// Guarded by state. Keep admission and queue insertion in the same critical section.
 	private boolean sendAdmissionOpen;
 	private long sequence;
@@ -189,12 +192,34 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	}
 
 	public void start() {
+		start(true);
+	}
+	/**
+	 * Starts normal transport while holding inbound callbacks before their first
+	 * durable journal transition. Call {@link #activateIncoming()} only after the
+	 * application handler backed by this connector has been published.
+	 */
+	public void startPaused() {
+		start(false);
+	}
+	private void start(boolean activateIncoming) {
 		synchronized (lifecycle) {
-			if (closing.get() || flushingOutgoing || running.get()) return;
+			if (closing.get() || flushingOutgoing) return;
+			if (running.get()) {
+				// start() is also the idempotent lifecycle entry point used by callers
+				// that publish their handler after starting a staged connector. Reopen
+				// the barrier and wake callbacks already waiting on it.
+				if (activateIncoming && !incomingActive) {
+					incomingActive = true;
+					lifecycle.notifyAll();
+				}
+				return;
+			}
 			// A timed-out flush can leave the interrupted poller winding down. It still
 			// owns the single long-poll slot until it exits, so a restart must wait for a
 			// later start call rather than creating an overlapping poller.
 			if (poller != null && poller.isAlive()) return;
+			incomingActive = activateIncoming;
 			running.set(true);
 			responseState.cancel();
 			responseState = new ResponseState();
@@ -202,6 +227,14 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			poller = new Thread(this::pollLoop, "SimpleAPI-HTTP-poll");
 			poller.setDaemon(true);
 			poller.start();
+		}
+	}
+	/** Opens the one-way inbound callback barrier for a staged running connector. */
+	public void activateIncoming() {
+		synchronized (lifecycle) {
+			if (closing.get() || !running.get() || incomingActive) return;
+			incomingActive = true;
+			lifecycle.notifyAll();
 		}
 	}
 	/** Waits for one authenticated, protocol-valid transport response. */
@@ -329,6 +362,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				current = poller;
 				if (current != null) current.interrupt();
 			}
+			lifecycle.notifyAll();
 		}
 		if (!alreadyClosing) synchronized (state) { sendAdmissionOpen = false; }
 		if (alreadyClosing) {
@@ -471,6 +505,10 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		Runnable callback = () -> {
 			boolean success = false;
 			try {
+				if (!awaitIncomingActivation()) {
+					completeIncoming(delivery.id(), false);
+					return;
+				}
 				if (inboundDeliveries != null) {
 					if (inboundDeliveries.state(delivery.id()) == null) inboundDeliveries.reserve(delivery.id());
 					inboundDeliveries.markRunning(delivery.id());
@@ -488,6 +526,15 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			completeIncoming(delivery.id(), success);
 		};
 		if (!executeOrdered(callbackExecutor, callback)) completeIncoming(delivery.id(), false);
+	}
+	private boolean awaitIncomingActivation() {
+		boolean interrupted = false;
+		synchronized (lifecycle) {
+			while (!incomingActive && !closing.get()) try { lifecycle.wait(); }
+			catch (InterruptedException stopRequested) { interrupted = true; break; }
+			if (interrupted) Thread.currentThread().interrupt();
+			return !interrupted && incomingActive && !closing.get();
+		}
 	}
 	void completeIncoming(String id, boolean success) { synchronized (state) {
 		processing.remove(id);
