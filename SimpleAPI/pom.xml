@@ -19,6 +19,7 @@
         <bouncycastle.version>1.85</bouncycastle.version>
     </properties>
     <build>
+        <finalName>${project.name}</finalName>
         <sourceDirectory>src/main/java</sourceDirectory>
         <pluginManagement>
             <plugins>
@@ -68,14 +69,63 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.5.0</version>
-                <configuration>
-                    <finalName>${project.name}</finalName>
-                </configuration>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.4</version>
+                <executions>
+                    <execution>
+                        <id>shared-library</id>
+                        <phase>package</phase>
+                        <goals><goal>jar</goal></goals>
+                        <configuration>
+                            <classifier>shared</classifier>
+                            <includes>
+                            <include>com/bencodez/simpleapi/core/**</include>
+                            <include>com/bencodez/simpleapi/file/config/*.class</include>
+                            <include>com/bencodez/simpleapi/file/config/configurate/*.class</include>
+                            <include>com/bencodez/simpleapi/file/annotation/AnnotationBinder*.class</include>
+                            <include>com/bencodez/simpleapi/file/annotation/ConfigData*.class</include>
+                            <include>com/bencodez/simpleapi/time/ParsedDuration*.class</include>
+                            <include>com/bencodez/simpleapi/debug/DebugLevel.class</include>
+                            <include>com/bencodez/simpleapi/sql/Column.class</include>
+                            <include>com/bencodez/simpleapi/sql/DataType.class</include>
+                            <include>com/bencodez/simpleapi/sql/data/*.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/AbstractSqlTable*.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/ConnectionManager*.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/DbType.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/MySQL*.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfig.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfigView.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/queries/*.class</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>shared-library-sources</id>
+                        <phase>package</phase>
+                        <goals><goal>jar</goal></goals>
+                        <configuration>
+                            <classifier>shared-sources</classifier>
+                            <classesDirectory>${project.build.sourceDirectory}</classesDirectory>
+                            <includes>
+                            <include>com/bencodez/simpleapi/core/**</include>
+                            <include>com/bencodez/simpleapi/file/config/*.java</include>
+                            <include>com/bencodez/simpleapi/file/config/configurate/*.java</include>
+                            <include>com/bencodez/simpleapi/file/annotation/AnnotationBinder.java</include>
+                            <include>com/bencodez/simpleapi/file/annotation/ConfigData*.java</include>
+                            <include>com/bencodez/simpleapi/time/ParsedDuration.java</include>
+                            <include>com/bencodez/simpleapi/debug/DebugLevel.java</include>
+                            <include>com/bencodez/simpleapi/sql/Column.java</include>
+                            <include>com/bencodez/simpleapi/sql/DataType.java</include>
+                            <include>com/bencodez/simpleapi/sql/data/*.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/AbstractSqlTable.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/ConnectionManager.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/DbType.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/MySQL.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfig.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfigView.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/queries/*.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -120,6 +170,32 @@
                                 </excludes>
                             </artifactSet>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.4</version>
+                <executions>
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <excludes><exclude>**/SharedArtifactTest.java</exclude></excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>shared-artifact-test</id>
+                        <phase>package</phase>
+                        <goals><goal>test</goal></goals>
+                        <configuration>
+                            <includes><include>**/SharedArtifactTest.java</include></includes>
+                            <reportsDirectory>${project.build.directory}/shared-artifact-reports</reportsDirectory>
+                            <systemPropertyVariables>
+                                <simpleapi.sharedJar>${project.build.directory}/${project.build.finalName}-shared.jar</simpleapi.sharedJar>
+                                <simpleapi.fullJar>${project.build.directory}/${project.build.finalName}.jar</simpleapi.fullJar>
+                            </systemPropertyVariables>
                         </configuration>
                     </execution>
                 </executions>

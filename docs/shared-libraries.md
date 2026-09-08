@@ -1,190 +1,174 @@
-# Shared SimpleAPI libraries
+# One SimpleAPI project, shared and platform packages
 
-This follows the configuration binding foundation in PR #75. It adds buildable,
-separately publishable, Bukkit-free artifacts and production configuration I/O.
-It does not port VotingPlugin or AdvancedCore, and does not change their releases.
+SimpleAPI has one Maven project: `SimpleAPI/pom.xml`. There is no root aggregator,
+parent project, child module or generated-source staging. Use the existing project
+in your IDE and the existing build command. No additional workflow is required.
 
-## Artifacts
+## Source layout
 
-| Artifact | Contents | Runtime dependencies |
+```text
+SimpleAPI/
+  pom.xml
+  src/main/java/com/bencodez/simpleapi/
+    core/config/   # Annotation binding, Configurate reads, YAML documents
+    core/sql/      # Shared database configuration
+    bukkit/config/ # Native Bukkit configuration/annotation adapters
+    file/...       # Compatibility APIs and legacy facades
+    sql/...        # Existing public data/JDBC APIs
+    ...            # Existing APIs remain in their published packages
+  src/test/java/   # All former module tests live in the ordinary test tree
+```
+
+New platform-neutral implementations belong in `core`; Bukkit integration belongs
+in `bukkit`. Future implemented Forge/Fabric/proxy adapters can use sibling
+packages. Empty loader projects or pretend loader implementations are not added.
+
+This is an incremental package migration, not a breaking rename of the public API.
+Existing annotation types, `ConfigView`, document/editor/snapshot contracts,
+`ParsedDuration`, SQL/value types and unrelated utilities retain their original
+fully-qualified names. The legacy annotation binder, YAML/Configurate adapters,
+MySQL configuration adapter and Bukkit configuration entry points delegate to the
+new implementation packages. Section identity and covariant legacy return types
+are preserved. Each migrated algorithm has one maintained implementation.
+
+## Outputs from one POM
+
+```sh
+# From the repository root; unchanged for existing consumers and CI
+mvn -B -f SimpleAPI/pom.xml clean package
+```
+
+The build produces:
+
+| Local file | Maven artifact | Contents |
 | --- | --- | --- |
-| `com.bencodez:simpleapi-core` | Existing annotation binder and annotation types, `ConfigView`, duration support, debug enum, SQL data values/columns; new document/editor/snapshot contracts | JDK 21 only |
-| `com.bencodez:simpleapi-configurate` | `ConfigurateConfigView` and `YamlConfigDocument` | Core and Configurate YAML 4.2.0 |
-| `com.bencodez:simpleapi-sql` | Existing JDBC/Hikari connection management, MySQL wrapper, abstract tables, queries and configuration model; new `MysqlConfigView` | Core and HikariCP 7.0.2 |
-| `com.bencodez:simpleapi` | Existing full Bukkit/proxy distribution, including the shared classes | Existing dependency set, unchanged |
+| `SimpleAPI/target/SimpleAPI.jar` | `com.bencodez:simpleapi:<version>` | Existing full Bukkit/proxy distribution, with unchanged dependency scopes and relocations |
+| `SimpleAPI/target/SimpleAPI-shared.jar` | `com.bencodez:simpleapi:<version>:shared` | Platform-neutral classes and required legacy neutral APIs, unshaded |
+| `SimpleAPI/target/SimpleAPI-shared-sources.jar` | Classifier `shared-sources` | Matching maintained source files |
 
-The new modules currently use version `1.0.2-SNAPSHOT`, aligned with SimpleAPI.
-They are libraries, not independently installed server mods. SQL drivers are still
-selected/provided by the consuming application; publishing the SQL module does not
-silently add a JDBC driver or change any existing database behavior/schema.
+The attached JAR executions select compiled classes directly. They do not copy
+sources to a second project or reimplement the library. Core code must not reference
+Bukkit, proxy, Minecraft or mod-loader APIs. The shared class allow-list intentionally
+excludes the legacy Bukkit-facing `AnnotationHandler`, `BukkitConfigView`, SQLite
+plugin wrappers, player/item/GUI APIs and full platform entry points.
 
-### One maintained implementation, two packaging targets
+The former `simpleapi-parent`, `simpleapi-core`, `simpleapi-configurate` and
+`simpleapi-sql` coordinates are no longer built. A consumer using those experimental
+module coordinates must switch to the shared classifier and its explicit dependencies.
+Existing full `simpleapi` consumers do not need to change their coordinates/imports.
+Previously published artifacts, if any, are not deleted from a repository by this change.
 
-All implementation source stays under `SimpleAPI/src/main/java`, including the
-new APIs. The shared module POMs stage explicit allow-lists into their own
-`target/generated-sources/shared` directories. This is generated build input,
-not a maintained source fork. Their javac source paths never include the rest of
-the Bukkit tree. Source JARs contain the staged implementation as well.
+## Native dependency configuration
 
-This layout deliberately preserves the old standalone build, source packages,
-shading, and artifact coordinates while making the same implementation available
-to native loaders. No existing class body, public signature, or legacy POM is
-changed. Full distribution users can use the new APIs without adding new Maven
-coordinates.
+A classifier shares its project's POM; it does **not** have a smaller independent
+transitive dependency graph. Native consumers must exclude the full distribution's
+transitives, then explicitly declare the shared dependencies they use. For Maven:
 
-**Do not package both representations of the same classes.** A native application
-uses the shared artifacts and never the full `simpleapi` artifact. A Bukkit
-application retains the full distribution. Future AdvancedCore common-module
-integration must choose one representation of each SimpleAPI class in the final
-Bukkit JAR, keep versions aligned, and verify the final shaded artifact's linkage.
-Existing AdvancedCore/VotingPlugin builds do not consume the new thin modules and
-need no dependency changes in this PR.
+```xml
+<dependency>
+  <groupId>com.bencodez</groupId>
+  <artifactId>simpleapi</artifactId>
+  <version>${simpleapi.version}</version>
+  <classifier>shared</classifier>
+  <exclusions>
+    <exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion>
+  </exclusions>
+</dependency>
+<dependency>
+  <groupId>org.spongepowered</groupId>
+  <artifactId>configurate-yaml</artifactId>
+  <version>${configurate.version}</version>
+</dependency>
+<dependency>
+  <groupId>com.zaxxer</groupId>
+  <artifactId>HikariCP</artifactId>
+  <version>${hikari.version}</version>
+</dependency>
+```
 
-The thin SQL artifact intentionally uses unrelocated HikariCP, whereas the full
-SimpleAPI distribution already relocates HikariCP. Some existing SQL public
-signatures expose Hikari types. Therefore excluding the thin dependencies in favor
-of the full JAR is not sufficient by itself for common code compiled against those
-signatures: the final Bukkit packaging must relocate the common callers and the
-provided SQL implementations consistently. Prefer JDBC/JDK types at new shared
-boundaries and add a final packaged Bukkit linkage test when making that consumer
-change. This PR does not claim that future mixed packaging is already validated.
+Set these version properties to the versions selected by the SimpleAPI POM being
+consumed. Configurate/Hikari supply their own runtime dependencies. JDBC drivers
+remain the application's responsibility. Consumers using only the binder/value
+APIs need neither Configurate nor Hikari; the full shared surface/linkage check uses
+both. A Gradle consumer can disable transitives on the classified dependency and
+add the same required runtime libraries explicitly.
 
-A native mod packager must include its actual runtime dependency graph using the
-target loader's supported mechanism. No changes to existing full-JAR shading are
-made here.
+Do not include both the full and shared SimpleAPI representations in the same
+native runtime. The existing full JAR still relocates HikariCP; the thin shared JAR
+does not. Future mixed AdvancedCore common/Bukkit packaging must align relocations
+of callers and implementations and test the final JAR. Exclusions alone do not
+prove the mixed SQL signatures compatible. Prefer JDBC/JDK types at new boundaries.
 
-## Native configuration example
+## Configuration use and guarantees
+
+New code may import `com.bencodez.simpleapi.core.config.AnnotationBinder`,
+`ConfigurateConfigView`, and `YamlConfigDocument`. Their existing public contract
+and annotation types remain in the legacy neutral packages. Existing Bukkit code
+can continue using `com.bencodez.simpleapi.file.annotation.AnnotationHandler` or
+use the new `com.bencodez.simpleapi.bukkit.config.AnnotationHandler` entry point.
 
 ```java
 Path directory = Path.of("config", "votingplugin");
-Files.createDirectories(directory); // explicit application-owned setup
+Files.createDirectories(directory); // Explicit application-owned setup
 ConfigDocument document = YamlConfigDocument.open(directory.resolve("VoteSites.yml"));
 ConfigSnapshot before = document.snapshot();
 ConfigSnapshot after = document.update(before.revision(), edit -> {
     edit.set("PointsOnVote", 1);
     edit.set("Rewards.Commands", List.of("give player minecraft:diamond"));
-    edit.setAt(Map.of("ServiceSite", "example.site"), "VoteSites", "example.site");
 });
 new AnnotationBinder().load(after.view(), options);
 ```
 
-Shared section-annotated fields use `ConfigView`. Existing Bukkit callers keep
-using `AnnotationHandler` and receive native `ConfigurationSection` fields as in
-PR #75. The old API has no new overloads or altered coercion rules.
+All file methods are synchronous; run I/O away from game/entity threads. Open and
+reload do not create files/parents. Missing files produce an empty snapshot;
+invalid files throw and failed reloads retain the last good in-memory state.
+Updates edit a detached copy, check revisions, bound serialized bytes, write and
+force a temporary sibling, then use atomic replacement with no truncate fallback.
+Target symlinks are rejected; POSIX mode bits are retained and new files default to
+owner read/write. Editors are callback/thread-scoped and snapshots are detached.
 
-`ConfigurateConfigView` reads numeric and boolean scalars strictly, matching the
-Bukkit getter rules rather than converting arbitrary strings to numbers/bools.
-String/integer lists preserve the legacy element conversions and empty-list
-annotation fallbacks. It supports a selectable path separator and literal key
-segments through `at(String...)`. Numeric YAML keys remain addressable as strings;
-ambiguous string representations are rejected by document validation.
+Default byte limit is 1 MiB, configurable up to 16 MiB. Tree limits are 64 levels
+and 100,000 nodes. These existing semantics are unchanged by package consolidation.
+This API is for trusted administrator-owned local files, not hostile YAML uploads.
+The parent directory and cross-process writer ownership belong to the application.
+Observed external edits are rejected, but the final revision check/rename is not a
+cross-process compare-and-swap. Inline formatting/comments, non-POSIX ACLs, file
+ownership and directory-entry power-loss durability are not guaranteed.
 
-Getter and annotation defaults work. Bukkit's mutable configuration-default tree,
-section `toString()` output, and Bukkit-serialized item/player objects are not
-emulated. Parse-format-specific behavior is not claimed to be a lossless Bukkit
-YAML migration. Port native object representations in the owning platform adapter.
+Getter/annotation defaults, strict scalar reads and legacy list conversions are
+supported. Bukkit default-tree overlays and native serialized Bukkit items are not
+emulated. Literal-key access remains available on Configurate views. This packaging
+change does not add the broader reward configuration or SQLite extraction work.
 
-## Document safety and ownership
+## Validation
 
-All methods are synchronous: call file operations on an I/O worker, not a game or
-entity thread. `open` and `reload` never create a file or parent directory. Missing
-files produce an empty snapshot with revision `missing`; invalid/unreadable files
-throw. A failed reload retains the last-good in-memory configuration.
+All previous module tests have moved into `SimpleAPI/src/test/java`; existing
+headless/duration tests are reused instead of duplicated. Tests that need an absent
+Bukkit classpath explicitly create an isolated classloader rather than assuming
+that Bukkit is absent from the ordinary single-project test runtime.
 
-An update takes an expected revision and edits a private copy. Callback/validation
-failure discards that copy. The editor is limited to its callback thread and cannot
-write after the callback. Input collections and returned snapshots are detached
-from future document state. Edits accept ordinary scalar/list/string-keyed-map
-values, not native server objects or cyclic graphs.
+The normal package command runs the full unit suite, including real Bukkit/core
+configuration parity and legacy package compatibility. After packaging/shading,
+`SharedArtifactTest` checks the actual shared/source/full JARs, rejects platform
+references in shared class files, links selected classes using only the shared JAR
+and native dependencies, and runs the configuration/binder/SQL smoke fixture there.
+Runtime dependency locations are taken from Maven's resolved classpath, not pinned
+version paths. Reports are under `target/surefire-reports` and
+`target/shared-artifact-reports`. Normal `-DskipTests` behavior is unchanged.
 
-The writer checks the expected revision and current disk content, bounds serialized
-bytes, writes a temporary sibling file, forces its contents, and atomically replaces
-the target. There is no truncate-in-place or non-atomic replacement fallback. Target
-symlinks and non-regular files are rejected. Existing POSIX permission bits are
-retained; new POSIX files are owner-read/write only. Temporary files are cleaned up.
+There is no extra GitHub workflow, cross-repository checkout, pinned downstream
+commit, production access or remote publication in these tests. AdvancedCore and
+VotingPlugin compatibility builds remain deliberate checks for API/release work.
+No live-server or live-database coverage is implied by the headless tests.
 
-Default size limit: 1 MiB (explicitly configurable from 1 byte to 16 MiB). Parsed/
-edited trees are limited to 64 levels and 100,000 nodes. UTF-8 decoding reports
-malformed input instead of silently replacing bytes.
-
-This is for administrator-owned local files. Parent directories must be trusted.
-The caller must own cross-process writes: revision checks detect observed external
-edits, but an unrelated process can race the final check/rename. This is not a
-filesystem compare-and-swap, database transaction, or hostile YAML upload validator.
-Parsing uses Configurate's YAML parser policies. Inline comments/formatting, file
-ownership/non-POSIX ACLs and directory-entry power-loss durability are not promised.
-Do not wire this directly to an untrusted network editor without the application's
-path, authentication, YAML-complexity, revision and secret-masking controls.
-
-## Building and publishing
-
-Existing command and distribution remain available:
+## Install and publication
 
 ```sh
-mvn -B -f SimpleAPI/pom.xml package
+mvn -B -f SimpleAPI/pom.xml clean install
 ```
 
-Build/test/install all artifacts, including the full legacy distribution:
-
-```sh
-mvn -B clean install
-```
-
-Build only shared modules and the parent (no server APIs needed):
-
-```sh
-mvn -B -pl simpleapi-core,simpleapi-configurate,simpleapi-sql -am clean install
-```
-
-A release operator can publish the new artifacts and their parent using existing
-Nexus credentials. CI does not run this command:
-
-```sh
-mvn -B -Pdeploy-shared -pl simpleapi-core,simpleapi-configurate,simpleapi-sql -am deploy
-```
-
-Existing Jenkins/legacy publication remains untouched; it will not automatically
-publish the new coordinates until its operator adds the shared publication step.
-Keep all four artifacts' versions aligned when releasing.
-
-## Verification
-
-No additional shared-library GitHub Actions workflow is included. The existing
-`maven.yml` remains unchanged and runs `mvn -B -f SimpleAPI/pom.xml package`;
-it does not build or test the sibling shared modules. Run their tests explicitly
-using the root or shared-module build commands above.
-
-The packaged-artifact probes remain available for manual validation. From the
-repository root with JDK 21, Maven and Python 3 available, run:
-
-```sh
-mvn -B -ntp clean install
-mvn -B -ntp -nsu -pl simpleapi-core,simpleapi-configurate,simpleapi-sql -am org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/runtime-deps
-mvn -B -ntp -nsu -f SimpleAPI/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dmdep.outputFile=target/compatibility-classpath.txt
-python3 tools/verify-shared-artifacts.py
-```
-
-These commands install artifacts only into the local Maven repository, not a
-remote repository. The probes check packaged shared-class boundaries, compile
-and run a native consumer against the JARs, compare Bukkit/shared configuration
-behavior, and check source staging against the maintained implementation.
-
-Cross-repository builds remain an explicit check for significant API changes or
-release preparation, not an automatic dependency of every SimpleAPI PR. The
-initial downstream validation results are recorded in PR #76 as historical
-verification. SQL tests here cover configuration/linkage, not a live database
-matrix. Live Minecraft/Folia/Forge/Fabric smoke tests remain application-level work.
-
-## What remains for the platform port
-
-SimpleAPI's reusable configuration/duration/data/SQL layer is now packaged for
-consumption without Bukkit. AdvancedCore still needs its own shared runtime and
-platform-specific execution boundaries. The existing Bukkit/Folia scheduler,
-player, messaging, item, inventory and mixed `ArrayUtils` APIs remain untouched;
-their game operations belong behind adapters during that extraction. Do not replace
-entity-aware scheduling with a generic global-thread executor.
-
-The separate HTTP transport work from PR #73 is not copied or reworked here. It
-merged into main while this change was being validated; the initial PR integration
-build included it. Packaging that transport as a thin native dependency is a
-separate follow-up, not part of these configuration/data/SQL artifacts.
+Installs the full, shared and shared-source artifacts under the same project
+version. Existing deployment profiles/configuration remain unchanged; attached
+artifacts are available to the existing publishing lifecycle. This change does not
+invoke deployment or claim the new classifier is already on Nexus. There is no
+separate parent or module publication step to maintain.
