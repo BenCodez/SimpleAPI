@@ -149,17 +149,25 @@ Keep all four artifacts' versions aligned when releasing.
 
 ## Verification
 
-`shared-libraries.yml` builds the shared and full artifacts on JDK 21, runs the
-existing headless/duration tests and new configuration tests, checks packaged JAR
-class boundaries, and compiles a consumer against packaged JARs (not target/classes).
-A separate probe compares actual Bukkit scalar/list and SQL configuration behavior.
-Source staging is checked byte-for-byte against the one maintained implementation.
+No additional shared-library GitHub Actions workflow is included. The existing
+`maven.yml` remains unchanged and runs `mvn -B -f SimpleAPI/pom.xml package`;
+it does not build or test the sibling shared modules. Run their tests explicitly
+using the root or shared-module build commands above.
 
-The workflow validates only this repository. It does not check out AdvancedCore
-or VotingPlugin, pin their commits, or assume particular plugin artifact versions.
-Maven installs the current reactor artifacts into the runner's local cache solely
-for these checks; nothing is published remotely. The temporary feature-branch
-push trigger is removed, avoiding duplicate push/PR runs for that branch.
+The packaged-artifact probes remain available for manual validation. From the
+repository root with JDK 21, Maven and Python 3 available, run:
+
+```sh
+mvn -B -ntp clean install
+mvn -B -ntp -nsu -pl simpleapi-core,simpleapi-configurate,simpleapi-sql -am org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/runtime-deps
+mvn -B -ntp -nsu -f SimpleAPI/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dmdep.outputFile=target/compatibility-classpath.txt
+python3 tools/verify-shared-artifacts.py
+```
+
+These commands install artifacts only into the local Maven repository, not a
+remote repository. The probes check packaged shared-class boundaries, compile
+and run a native consumer against the JARs, compare Bukkit/shared configuration
+behavior, and check source staging against the maintained implementation.
 
 Cross-repository builds remain an explicit check for significant API changes or
 release preparation, not an automatic dependency of every SimpleAPI PR. The
@@ -177,6 +185,6 @@ their game operations belong behind adapters during that extraction. Do not repl
 entity-aware scheduling with a generic global-thread executor.
 
 The separate HTTP transport work from PR #73 is not copied or reworked here. It
-merged into main while this change was being validated; the PR merge-ref build
-tests compatibility with it. Packaging that transport as a thin native dependency
-is a separate follow-up, not part of these configuration/data/SQL artifacts.
+merged into main while this change was being validated; the initial PR integration
+build included it. Packaging that transport as a thin native dependency is a
+separate follow-up, not part of these configuration/data/SQL artifacts.
