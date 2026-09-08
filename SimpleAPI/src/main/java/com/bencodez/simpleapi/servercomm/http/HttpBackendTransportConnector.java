@@ -204,7 +204,17 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	}
 	private void start(boolean activateIncoming) {
 		synchronized (lifecycle) {
-			if (closing.get() || flushingOutgoing || running.get()) return;
+			if (closing.get() || flushingOutgoing) return;
+			if (running.get()) {
+				// start() is also the idempotent lifecycle entry point used by callers
+				// that publish their handler after starting a staged connector. Reopen
+				// the barrier and wake callbacks already waiting on it.
+				if (activateIncoming && !incomingActive) {
+					incomingActive = true;
+					lifecycle.notifyAll();
+				}
+				return;
+			}
 			// A timed-out flush can leave the interrupted poller winding down. It still
 			// owns the single long-poll slot until it exits, so a restart must wait for a
 			// later start call rather than creating an overlapping poller.

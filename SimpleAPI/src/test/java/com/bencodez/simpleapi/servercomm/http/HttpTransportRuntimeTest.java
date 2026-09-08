@@ -1451,6 +1451,29 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void restartingPausedBackendWithStartReleasesWaitingCallbacks() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("paused-start-proxy"), "localhost");
+		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
+		Path clientDirectory = directory.resolve("paused-start-client");
+		HttpConnectionCode code = new HttpConnectionCode("lobby-1", java.net.URI.create("https://localhost:8443/"),
+				identity.serverCertificatePin(), identity.caCertificatePin(), Instant.now().plusSeconds(300), "F".repeat(43));
+		HttpClientCredentialStore.saveEnrolled(clientDirectory, code, issued);
+		CountDownLatch callback = new CountDownLatch(1);
+		try (HttpBackendTransportConnector connector = new HttpBackendTransportConnector(clientDirectory,
+				ignored -> callback.countDown())) {
+			connector.startPaused();
+			connector.dispatch(new HttpTransportProtocol.Delivery(java.util.UUID.randomUUID().toString(),
+					JsonEnvelope.builder("vote").build()));
+			assertFalse(callback.await(150, TimeUnit.MILLISECONDS));
+
+			// start() remains idempotent for the poller but must reopen a barrier
+			// left by startPaused(), including callbacks already waiting on it.
+			connector.start();
+			assertTrue(callback.await(2, TimeUnit.SECONDS));
+		}
+	}
+
+	@Test
 	void closingPausedBackendLeavesDeliveryRecoverable() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("paused-close-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
