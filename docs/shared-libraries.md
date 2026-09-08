@@ -155,12 +155,16 @@ class boundaries, and compiles a consumer against packaged JARs (not target/clas
 A separate probe compares actual Bukkit scalar/list and SQL configuration behavior.
 Source staging is checked byte-for-byte against the one maintained implementation.
 
-The same workflow installs the exact candidate in an isolated Maven repository,
-builds pinned AdvancedCore and VotingPlugin fixtures, verifies their dependency
-classpath paths and checks that installed candidate JAR hashes were not replaced.
-It never merges, publishes releases, modifies production services, or submits a
-dependency graph on a pull request. Update the fixture SHAs deliberately when testing newer
-consumer source. SQL tests here cover configuration/linkage, not a live database
+The workflow validates only this repository. It does not check out AdvancedCore
+or VotingPlugin, pin their commits, or assume particular plugin artifact versions.
+Maven installs the current reactor artifacts into the runner's local cache solely
+for these checks; nothing is published remotely. The temporary feature-branch
+push trigger is removed, avoiding duplicate push/PR runs for that branch.
+
+Cross-repository builds remain an explicit check for significant API changes or
+release preparation, not an automatic dependency of every SimpleAPI PR. The
+initial downstream validation results are recorded in PR #76 as historical
+verification. SQL tests here cover configuration/linkage, not a live database
 matrix. Live Minecraft/Folia/Forge/Fabric smoke tests remain application-level work.
 
 ## What remains for the platform port
