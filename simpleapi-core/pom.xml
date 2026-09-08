@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.bencodez</groupId><artifactId>simpleapi-parent</artifactId><version>1.0.2-SNAPSHOT</version></parent>
+  <artifactId>simpleapi-core</artifactId>
+  <name>simpleapi-core</name>
+  <dependencies>
+    <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><optional>true</optional></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId></dependency>
+
+  </dependencies>
+  <build><plugins>
+    <!-- Stage only the explicit allow-list. Do NOT add the entire Bukkit source tree to javac's sourcepath. -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-resources-plugin</artifactId><executions>
+      <execution><id>stage-existing-shared-sources</id><phase>generate-sources</phase><goals><goal>copy-resources</goal></goals><configuration>
+        <outputDirectory>${project.build.directory}/generated-sources/shared</outputDirectory>
+        <resources><resource><directory>${project.basedir}/../SimpleAPI/src/main/java</directory><filtering>false</filtering><includes>
+              <include>com/bencodez/simpleapi/file/config/*.java</include>
+              <include>com/bencodez/simpleapi/file/annotation/AnnotationBinder.java</include>
+              <include>com/bencodez/simpleapi/file/annotation/ConfigData*.java</include>
+              <include>com/bencodez/simpleapi/time/ParsedDuration.java</include>
+              <include>com/bencodez/simpleapi/debug/DebugLevel.java</include>
+              <include>com/bencodez/simpleapi/sql/Column.java</include>
+              <include>com/bencodez/simpleapi/sql/DataType.java</include>
+              <include>com/bencodez/simpleapi/sql/data/*.java</include>
+        </includes></resource></resources>
+      </configuration></execution>
+        <execution><id>stage-existing-headless-tests</id><phase>generate-test-sources</phase><goals><goal>copy-resources</goal></goals><configuration>
+          <outputDirectory>${project.build.directory}/generated-test-sources/shared</outputDirectory>
+          <resources><resource><directory>${project.basedir}/../SimpleAPI/src/test/java</directory><filtering>false</filtering><includes>
+              <include>com/bencodez/simpleapi/tests/ParsedDurationTest.java</include>
+              <include>com/bencodez/simpleapi/tests/file/config/AnnotationBinderHeadlessTest.java</include>
+              <include>com/bencodez/simpleapi/tests/file/config/HeadlessBindingFixture.java</include>
+          </includes></resource></resources>
+        </configuration></execution>
+    </executions></plugin>
+    <plugin><groupId>org.codehaus.mojo</groupId><artifactId>build-helper-maven-plugin</artifactId><executions>
+      <execution><id>existing-shared-sources</id><phase>generate-sources</phase><goals><goal>add-source</goal></goals><configuration>
+        <sources><source>${project.build.directory}/generated-sources/shared</source></sources>
+      </configuration></execution>
+        <execution><id>existing-headless-tests</id><phase>generate-test-sources</phase><goals><goal>add-test-source</goal></goals><configuration>
+          <sources><source>${project.build.directory}/generated-test-sources/shared</source></sources>
+        </configuration></execution>
+    </executions></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-source-plugin</artifactId><executions>
+      <execution><id>sources</id><phase>package</phase><goals><goal>jar-no-fork</goal></goals></execution>
+    </executions></plugin>
+  </plugins></build>
+</project>
