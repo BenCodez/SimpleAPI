@@ -46,6 +46,11 @@ class PlainConfigValuesTest {
         assertThrows(IllegalArgumentException.class, () -> PlainConfigValues.copy(Map.of(new Object(), 1)));
     }
 
+    @Test void classifiesCopyableCharactersAsStringScalars() {
+        assertEquals(StructuredConfigView.Kind.STRING, PlainConfigValues.kind('x'));
+        assertEquals('x', PlainConfigValues.copy('x'));
+    }
+
     @Test void unwrapsAdapterNodesUnderTheSameCycleAndDepthChecks() {
         var root = new Node(); root.value = Map.of("nested", new Node(List.of(1, 2)));
         assertEquals(Map.of("nested", List.of(1, 2)), PlainConfigValues.copy(root, PlainConfigValuesTest::unwrap));

@@ -20,7 +20,7 @@ public final class PlainConfigValues {
 
     public static StructuredConfigView.Kind kind(Object value) {
         if (value == null) return StructuredConfigView.Kind.MISSING;
-        if (value instanceof String) return StructuredConfigView.Kind.STRING;
+        if (value instanceof String || value instanceof Character) return StructuredConfigView.Kind.STRING;
         if (value instanceof Boolean) return StructuredConfigView.Kind.BOOLEAN;
         if (value instanceof Number && supportedNumber(value)) return StructuredConfigView.Kind.NUMBER;
         if (value instanceof List<?>) return StructuredConfigView.Kind.LIST;
