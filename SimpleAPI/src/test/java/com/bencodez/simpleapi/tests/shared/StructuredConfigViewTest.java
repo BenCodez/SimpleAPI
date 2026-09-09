@@ -84,6 +84,100 @@ class StructuredConfigViewTest {
         assertEquals(Set.of("Console"), view.at("COMMANDS").getKeys(false));
     }
 
+    @Test void caseInsensitiveReadsTraverseRawBukkitMaps() {
+        var nativeConfig = new MemoryConfiguration();
+        Map<String, Object> rawReward = new LinkedHashMap<>();
+        rawReward.put("Commands", List.of("say voted"));
+        rawReward.put("Amount", 3);
+        rawReward.put("NativeSibling", new Object());
+        var nestedSection = new MemoryConfiguration();
+        nestedSection.set("Value", "native");
+        rawReward.put("NativeSection", nestedSection);
+        nativeConfig.set("Rewards", rawReward);
+        var view = new CaseInsensitiveConfigView(new BukkitStructuredConfigView(nativeConfig));
+
+        assertEquals(Kind.MAP, view.kind("rewards"));
+        assertEquals(Kind.LIST, view.kind("REWARDS.commands"));
+        assertEquals(List.of("say voted"), view.getStringList("rewards.COMMANDS"));
+        assertEquals(3, view.getInt("Rewards.amount", -1));
+        assertEquals(Set.of("Commands", "Amount", "NativeSibling", "NativeSection"),
+                view.structuredAt("REWARDS").getKeys(false));
+        assertEquals(List.of("say voted"), view.structuredAt("rewards").getStringList("commands"));
+        StructuredConfigView rawView = new BukkitStructuredConfigView(nativeConfig).structuredAt("Rewards");
+        assertEquals("native", rawView.getString("NativeSection.Value", "missing"));
+        assertEquals(Map.of("Value", "native"), rawView.valueAt("NativeSection"));
+        assertTrue(rawView.getKeys(true).contains("NativeSection.Value"));
+        assertNull(view.at("rewards"));
+        assertNull(view.getConfigurationSection("rewards"));
+        assertEquals(Kind.SECTION, view.kind("rewards.nativesection"));
+        assertEquals("native", view.getString("rewards.nativesection.value", "missing"));
+        assertNotNull(view.getConfigurationSection("rewards.nativesection"));
+    }
+
+    @Test void caseInsensitiveRawMapTraversalUsesScalarKeyStringForms() {
+        var nativeConfig = new MemoryConfiguration();
+        nativeConfig.set("Rewards", Map.of(10, Map.of("Commands", List.of("say ten"))));
+        var view = new CaseInsensitiveConfigView(new BukkitStructuredConfigView(nativeConfig));
+        var direct = new BukkitStructuredConfigView(nativeConfig);
+
+        assertEquals(Kind.MAP, view.kind("rewards.10"));
+        assertEquals(List.of("say ten"), view.getStringList("REWARDS.10.commands"));
+        assertEquals(Kind.MAP, direct.kindAt("Rewards", "10"));
+        assertEquals(Map.of("Commands", List.of("say ten")), direct.valueAt("Rewards", "10"));
+
+        Map<Object, Object> ambiguous = new LinkedHashMap<>();
+        ambiguous.put(10, Map.of("Commands", List.of("first")));
+        ambiguous.put("10", Map.of("Commands", List.of("second")));
+        nativeConfig.set("Ambiguous", ambiguous);
+        assertThrows(IllegalArgumentException.class, () -> view.kind("ambiguous.10"));
+        assertThrows(IllegalArgumentException.class, () -> direct.kindAt("Ambiguous", "10"));
+    }
+
+    @Test void deepRawMapKeyEnumerationRejectsCyclesAndExcessiveDepth() {
+        var nativeConfig = new MemoryConfiguration();
+        Map<String, Object> cyclic = new LinkedHashMap<>();
+        cyclic.put("self", cyclic);
+        nativeConfig.set("Cyclic", cyclic);
+        var view = new BukkitStructuredConfigView(nativeConfig);
+        assertThrows(IllegalArgumentException.class, () -> view.structuredAt("Cyclic").getKeys(true));
+
+        Map<String, Object> root = new LinkedHashMap<>();
+        Map<String, Object> current = root;
+        for (int depth = 0; depth < 66; depth++) {
+            Map<String, Object> child = new LinkedHashMap<>();
+            current.put("child", child);
+            current = child;
+        }
+        nativeConfig.set("Deep", root);
+        assertThrows(IllegalArgumentException.class, () -> view.structuredAt("Deep").getKeys(true));
+    }
+
+    @Test void rawMapViewsRemainLiveAfterCreation() {
+        var nativeConfig = new MemoryConfiguration();
+        Map<String, Object> rewards = new LinkedHashMap<>();
+        rewards.put("Commands", List.of("say first"));
+        nativeConfig.set("Rewards", rewards);
+        StructuredConfigView view = new BukkitStructuredConfigView(nativeConfig).structuredAt("Rewards");
+
+        rewards.remove("Commands");
+        rewards.put("Points", 4);
+
+        assertFalse(view.contains("Commands"));
+        assertNull(view.valueAt("Commands"));
+        assertEquals(4, view.getInt("Points", -1));
+        assertEquals(Set.of("Points"), view.getKeys(false));
+    }
+
+    @Test void rawMapViewConstructionRejectsOversizedMapsBeforeCopyingThem() {
+        var nativeConfig = new MemoryConfiguration();
+        Map<String, Object> oversized = new LinkedHashMap<>();
+        for (int index = 0; index <= 100_000; index++) oversized.put("key" + index, index);
+        nativeConfig.set("Oversized", oversized);
+
+        var view = new BukkitStructuredConfigView(nativeConfig);
+        assertThrows(IllegalArgumentException.class, () -> view.structuredAt("Oversized"));
+    }
+
     @Test void literalKeysWorkWithoutChangingPathSeparators() {
         var node = BasicConfigurationNode.root();
         node.node("Sites", "example.site", "Commands").raw(List.of("say voted"));

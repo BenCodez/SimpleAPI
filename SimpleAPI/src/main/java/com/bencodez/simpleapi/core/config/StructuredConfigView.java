@@ -26,6 +26,13 @@ public interface StructuredConfigView extends ConfigView {
     /** Section lookup using literal keys, including keys containing dots. */
     StructuredConfigView at(String... keys);
 
+    /**
+     * Literal-key structured traversal. Unlike {@link #at(String...)}, adapters
+     * may return a view for a plain mapping as well as a native section, without
+     * exporting the whole intermediate value.
+     */
+    default StructuredConfigView structuredAt(String... keys) { return at(keys); }
+
     @Override
     StructuredConfigView getConfigurationSection(String path);
 

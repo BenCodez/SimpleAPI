@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 import com.bencodez.simpleapi.core.config.PlainConfigValues;
+import com.bencodez.simpleapi.core.config.StructuredConfigView;
 
 class PlainConfigValuesTest {
     @Test void copiesNestedPlainValuesAndNullListEntries() {
@@ -41,6 +42,7 @@ class PlainConfigValuesTest {
         var keys = new LinkedHashMap<Object, Object>(); keys.put(1, "one"); keys.put("1", "other");
         assertThrows(IllegalArgumentException.class, () -> PlainConfigValues.copy(keys));
         assertThrows(IllegalArgumentException.class, () -> PlainConfigValues.copy(new AtomicInteger(1)));
+        assertEquals(StructuredConfigView.Kind.OTHER, PlainConfigValues.kind(new AtomicInteger(1)));
         assertThrows(IllegalArgumentException.class, () -> PlainConfigValues.copy(Map.of(new Object(), 1)));
     }
 

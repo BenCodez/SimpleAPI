@@ -41,13 +41,18 @@ public final class CaseInsensitiveConfigView implements StructuredConfigView {
             }
             if (actual == null) return null;
             if (index == keys.length - 1) return new Resolved(current, actual);
-            current = current.at(actual);
+            StructuredConfigView child = childAt(current, actual);
+            current = child;
             if (current == null) return null;
         }
         throw new AssertionError("Unreachable key traversal");
     }
 
     private static String path(Resolved value) { return value.key() == null ? "" : value.key(); }
+
+    private StructuredConfigView childAt(StructuredConfigView current, String key) {
+        return current.structuredAt(key);
+    }
 
     @Override public Kind kind(String path) { return kindAt(split(path)); }
     @Override public Kind kindAt(String... keys) {
@@ -67,7 +72,15 @@ public final class CaseInsensitiveConfigView implements StructuredConfigView {
         StructuredConfigView child = value.key() == null ? value.parent() : value.parent().at(value.key());
         return child == null ? null : new CaseInsensitiveConfigView(child, separator);
     }
-    @Override public CaseInsensitiveConfigView getConfigurationSection(String path) { return at(split(path)); }
+    @Override public CaseInsensitiveConfigView structuredAt(String... keys) {
+        Resolved value = resolve(keys);
+        if (value == null) return null;
+        StructuredConfigView child = value.key() == null ? value.parent() : childAt(value.parent(), value.key());
+        return child == null ? null : new CaseInsensitiveConfigView(child, separator);
+    }
+    @Override public CaseInsensitiveConfigView getConfigurationSection(String path) {
+        return isConfigurationSection(path) ? at(split(path)) : null;
+    }
     @Override public boolean isConfigurationSection(String path) { return kind(path) == Kind.SECTION; }
     @Override public boolean contains(String path) {
         Resolved value = resolve(split(path));

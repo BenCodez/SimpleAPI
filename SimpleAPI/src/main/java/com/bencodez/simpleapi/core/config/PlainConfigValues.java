@@ -22,7 +22,7 @@ public final class PlainConfigValues {
         if (value == null) return StructuredConfigView.Kind.MISSING;
         if (value instanceof String) return StructuredConfigView.Kind.STRING;
         if (value instanceof Boolean) return StructuredConfigView.Kind.BOOLEAN;
-        if (value instanceof Number) return StructuredConfigView.Kind.NUMBER;
+        if (value instanceof Number && supportedNumber(value)) return StructuredConfigView.Kind.NUMBER;
         if (value instanceof List<?>) return StructuredConfigView.Kind.LIST;
         if (value instanceof Map<?, ?>) return StructuredConfigView.Kind.MAP;
         return StructuredConfigView.Kind.OTHER;
@@ -85,7 +85,11 @@ public final class PlainConfigValues {
 
     private static boolean scalar(Object value) {
         return value instanceof String || value instanceof Boolean || value instanceof Character
-                || value instanceof Byte || value instanceof Short || value instanceof Integer
+                || supportedNumber(value);
+    }
+
+    private static boolean supportedNumber(Object value) {
+        return value instanceof Byte || value instanceof Short || value instanceof Integer
                 || value instanceof Long || value instanceof Float || value instanceof Double
                 || value instanceof BigInteger || value instanceof BigDecimal;
     }
