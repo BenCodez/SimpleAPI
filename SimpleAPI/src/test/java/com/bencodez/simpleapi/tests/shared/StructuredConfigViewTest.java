@@ -1,6 +1,8 @@
 package com.bencodez.simpleapi.tests.shared;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -131,6 +133,21 @@ class StructuredConfigViewTest {
         nativeConfig.set("Ambiguous", ambiguous);
         assertThrows(IllegalArgumentException.class, () -> view.kind("ambiguous.10"));
         assertThrows(IllegalArgumentException.class, () -> direct.kindAt("Ambiguous", "10"));
+    }
+
+    @Test void rawMapChildrenRemainUsableWhenTheBukkitSectionHasNoRoot() {
+        var detached = mock(org.bukkit.configuration.ConfigurationSection.class);
+        Map<String, Object> child = Map.of("Value", 7);
+        when(detached.getValues(false)).thenReturn(Map.of("Child", child));
+        when(detached.getDefaultSection()).thenReturn(null);
+        when(detached.getRoot()).thenReturn(null);
+
+        StructuredConfigView view = new BukkitStructuredConfigView(detached);
+        StructuredConfigView rawChild = view.structuredAt("Child");
+
+        assertNotNull(rawChild);
+        assertEquals(7, rawChild.getInt("Value", -1));
+        assertEquals(Map.of("Value", 7), rawChild.valueAt());
     }
 
     @Test void deepRawMapKeyEnumerationRejectsCyclesAndExcessiveDepth() {

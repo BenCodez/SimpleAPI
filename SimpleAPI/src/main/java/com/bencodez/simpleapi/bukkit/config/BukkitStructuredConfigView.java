@@ -194,7 +194,9 @@ public final class BukkitStructuredConfigView extends BukkitConfigView implement
         Object value = literal(keys);
         if (value instanceof ConfigurationSection section) return sectionView(section);
         if (value instanceof Map<?, ?> map) {
-            return new RawMapView(map, getSection().getRoot().options().pathSeparator());
+            ConfigurationSection section = getSection();
+            org.bukkit.configuration.Configuration root = section.getRoot();
+            return new RawMapView(map, root == null ? '.' : root.options().pathSeparator());
         }
         return null;
     }
