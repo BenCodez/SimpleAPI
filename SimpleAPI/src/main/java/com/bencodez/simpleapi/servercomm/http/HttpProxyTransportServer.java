@@ -258,6 +258,33 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		return false;
 	}
 
+	/**
+	 * Returns whether a stopped server's durable outgoing directory contains any
+	 * delivery state. This is intentionally conservative: an unexpected entry is
+	 * reported as pending so callers do not switch transports and strand data
+	 * before the normal queue loader can validate or recover it.
+	 */
+	public static boolean hasPersistedDeliveries(Path outgoingDirectory) throws IOException {
+		if (outgoingDirectory == null) throw new IllegalArgumentException("HTTP outgoing queue directory is required");
+		Path root = outgoingDirectory.toAbsolutePath().normalize();
+		if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) return false;
+		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
+			throw new IOException("HTTP outgoing queue directory is invalid");
+		int backendCount = 0;
+		try (DirectoryStream<Path> backends = Files.newDirectoryStream(root)) {
+			for (Path backend : backends) {
+				if (Files.isSymbolicLink(backend) || !Files.isDirectory(backend, LinkOption.NOFOLLOW_LINKS))
+					throw new IOException("HTTP outgoing queue contains an invalid entry");
+				if (++backendCount > MAX_BACKENDS)
+					throw new IOException("HTTP outgoing queue exceeds its backend bound");
+				try (DirectoryStream<Path> entries = Files.newDirectoryStream(backend)) {
+					if (entries.iterator().hasNext()) return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	private boolean send(String serverId, String deliveryId, JsonEnvelope envelope, boolean generatedId) {
 		if (closed || serverId == null || envelope == null) return false;
 		try {

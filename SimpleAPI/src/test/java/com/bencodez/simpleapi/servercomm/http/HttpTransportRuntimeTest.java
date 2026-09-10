@@ -58,6 +58,16 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void persistedDeliveryStateCanBeCheckedBeforeServerStartup() throws Exception {
+		Path outgoing = directory.resolve("stopped-outgoing");
+		assertFalse(HttpProxyTransportServer.hasPersistedDeliveries(outgoing));
+		Files.createDirectories(outgoing.resolve("lobby-1"));
+		assertFalse(HttpProxyTransportServer.hasPersistedDeliveries(outgoing));
+		Files.writeString(outgoing.resolve("lobby-1").resolve(".pending-delivery.json"), "pending");
+		assertTrue(HttpProxyTransportServer.hasPersistedDeliveries(outgoing));
+	}
+
+	@Test
 	void endpointHelperSupportsIpv6Literals() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("ipv6-proxy"), "::1");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("ipv6-authority"));
