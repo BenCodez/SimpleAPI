@@ -68,6 +68,15 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void inaccessiblePersistedDeliveryLocationIsNotReportedAsAbsent() throws Exception {
+		Path nonDirectoryParent = directory.resolve("queue-parent-file");
+		Files.writeString(nonDirectoryParent, "not a directory");
+
+		assertThrows(java.io.IOException.class,
+				() -> HttpProxyTransportServer.hasPersistedDeliveries(nonDirectoryParent.resolve("outgoing")));
+	}
+
+	@Test
 	void endpointHelperSupportsIpv6Literals() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("ipv6-proxy"), "::1");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("ipv6-authority"));

@@ -267,8 +267,14 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	public static boolean hasPersistedDeliveries(Path outgoingDirectory) throws IOException {
 		if (outgoingDirectory == null) throw new IllegalArgumentException("HTTP outgoing queue directory is required");
 		Path root = outgoingDirectory.toAbsolutePath().normalize();
-		if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) return false;
-		if (Files.isSymbolicLink(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))
+		java.nio.file.attribute.BasicFileAttributes rootAttributes;
+		try {
+			rootAttributes = Files.readAttributes(root, java.nio.file.attribute.BasicFileAttributes.class,
+					LinkOption.NOFOLLOW_LINKS);
+		} catch (java.nio.file.NoSuchFileException absent) {
+			return false;
+		}
+		if (rootAttributes.isSymbolicLink() || !rootAttributes.isDirectory())
 			throw new IOException("HTTP outgoing queue directory is invalid");
 		int backendCount = 0;
 		try (DirectoryStream<Path> backends = Files.newDirectoryStream(root)) {
