@@ -129,6 +129,13 @@ not claims that every subsystem exists or must be redesigned.
 - For dependency/build changes, inspect scopes, Java release requirements,
   annotation processing, shaded relocations, packaged resources, and classpath
   conflicts. Re-read the current POM rather than assuming another project's setup.
+- Preserve the current single-project layout. Review the packaged full and `shared`
+  JARs: neutral classes must not link platform APIs through signatures, annotations,
+  superclasses, initializers, services, or reflection, and legacy compatibility
+  facades must remain source/binary compatible unless a migration is authorized.
+- For configuration changes, test case-insensitive and literal-key traversal,
+  supported-value classification, nested raw maps, copy isolation, bounds/cycles,
+  and null-safe detached or rootless sections across neutral and Bukkit adapters.
 
 ### Concurrency, resources, and lifecycle
 
