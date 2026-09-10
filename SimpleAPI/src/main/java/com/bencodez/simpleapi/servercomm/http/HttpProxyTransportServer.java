@@ -242,6 +242,22 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		return send(serverId, deliveryId, envelope, false);
 	}
 
+	/**
+	 * Returns whether this server still owns any durable proxy-to-backend
+	 * delivery, including a publication whose durability is awaiting a same-ID
+	 * retry. Callers can use this before retiring the HTTP transport so accepted
+	 * work is not stranded solely because another transport was configured.
+	 */
+	public boolean hasPendingDeliveries() {
+		if (durableOutgoing != null) return durableOutgoing.hasPendingDeliveries();
+		synchronized (backends) {
+			for (BackendState backend : backends.values()) {
+				if (backend.hasPendingOutgoing()) return true;
+			}
+		}
+		return false;
+	}
+
 	private boolean send(String serverId, String deliveryId, JsonEnvelope envelope, boolean generatedId) {
 		if (closed || serverId == null || envelope == null) return false;
 		try {
@@ -563,6 +579,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized void restore(Collection<HttpTransportProtocol.Delivery> deliveries) {
 			for (HttpTransportProtocol.Delivery delivery : deliveries) outgoing.put(delivery.id(), delivery);
 		}
+		private synchronized boolean hasPendingOutgoing() { return !outgoing.isEmpty(); }
 		private boolean beginPoll(String requestedSession) { synchronized (this) { if (retired || activePoll) return false; activePoll = true; touch(); return true; } }
 		private void endPoll() { synchronized (this) { activePoll = false; touch(); notifyAll(); } }
 		boolean beginPollForTest() { return beginPoll("test"); }
@@ -939,6 +956,16 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			requireOwnership();
 			Map<String, Path> quarantined = quarantinedFiles.get(serverId);
 			return quarantined != null && !quarantined.isEmpty();
+		}
+
+		synchronized boolean hasPendingDeliveries() {
+			for (Map<String, Path> serverFiles : files.values()) {
+				if (!serverFiles.isEmpty()) return true;
+			}
+			for (Map<String, Path> quarantined : quarantinedFiles.values()) {
+				if (!quarantined.isEmpty()) return true;
+			}
+			return false;
 		}
 
 		/** Deletes only a validated, observed-empty backend directory and makes its removal durable. */

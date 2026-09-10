@@ -41,6 +41,23 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	void pendingDeliveryStateTracksDurableQueueUntilAcknowledgement() throws Exception {
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pending-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("pending-authority"));
+		try (HttpProxyTransportServer server = new HttpProxyTransportServer(new InetSocketAddress("localhost", 0),
+				identity, authority, directory.resolve("pending-outgoing"), ignored -> { })) {
+			assertFalse(server.hasPendingDeliveries());
+			String deliveryId = java.util.UUID.randomUUID().toString();
+			assertTrue(server.send("lobby-1", deliveryId, JsonEnvelope.builder("ordinary").build()));
+			assertTrue(server.hasPendingDeliveries());
+
+			server.backendStateForTest("lobby-1").acknowledge(java.util.List.of(deliveryId));
+
+			assertFalse(server.hasPendingDeliveries());
+		}
+	}
+
+	@Test
 	void endpointHelperSupportsIpv6Literals() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("ipv6-proxy"), "::1");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("ipv6-authority"));
@@ -275,6 +292,8 @@ class HttpTransportRuntimeTest {
 				JsonEnvelope.builder("durable").build());
 
 		assertFalse(state.enqueue(delivery), "post-publication failure must not confirm durable acceptance");
+		assertTrue(queue.hasPendingDeliveries(),
+				"an ambiguous published file must keep the HTTP transport retained");
 		assertTrue(state.await("lobby-1", java.util.UUID.randomUUID().toString(), 0).messages().isEmpty(),
 				"an uncertain publication must remain hidden until its durability retry succeeds");
 		assertEquals(1L, countRegularFiles(queueRoot));
