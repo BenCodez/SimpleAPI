@@ -18,7 +18,7 @@ Confirm current CI and POM settings before relying on these commands. Verify tha
 - `com.bencodez.simpleapi.core` contains platform-independent implementations.
 - Platform adapters belong under packages such as `com.bencodez.simpleapi.bukkit`; future Forge/Fabric/other adapters must remain isolated from core.
 - The full `simpleapi` artifact preserves existing consumers and public package names.
-- The `shared` classifier exposes only the explicitly selected neutral API and dependencies.
+- The `shared` classifier JAR contains only the explicitly selected neutral API. Because a classifier shares the project's ordinary POM, native consumers must exclude its transitives and explicitly declare the neutral dependencies they use, as documented in `docs/shared-libraries.md`.
 - Compatibility facades in older package names are intentional. Do not remove, relocate, or narrow them without an explicit migration and downstream verification.
 - Previously removed experimental coordinates such as `simpleapi-parent`, `simpleapi-core`, `simpleapi-configurate`, and `simpleapi-sql` are not current build modules.
 
