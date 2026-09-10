@@ -242,6 +242,55 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		return send(serverId, deliveryId, envelope, false);
 	}
 
+	/**
+	 * Returns whether this server still owns any durable proxy-to-backend
+	 * delivery, including a publication whose durability is awaiting a same-ID
+	 * retry. Callers can use this before retiring the HTTP transport so accepted
+	 * work is not stranded solely because another transport was configured.
+	 */
+	public boolean hasPendingDeliveries() {
+		if (durableOutgoing != null) return durableOutgoing.hasPendingDeliveries();
+		synchronized (backends) {
+			for (BackendState backend : backends.values()) {
+				if (backend.hasPendingOutgoing()) return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Returns whether a stopped server's durable outgoing directory contains any
+	 * delivery state. This is intentionally conservative: an unexpected entry is
+	 * reported as pending so callers do not switch transports and strand data
+	 * before the normal queue loader can validate or recover it.
+	 */
+	public static boolean hasPersistedDeliveries(Path outgoingDirectory) throws IOException {
+		if (outgoingDirectory == null) throw new IllegalArgumentException("HTTP outgoing queue directory is required");
+		Path root = outgoingDirectory.toAbsolutePath().normalize();
+		java.nio.file.attribute.BasicFileAttributes rootAttributes;
+		try {
+			rootAttributes = Files.readAttributes(root, java.nio.file.attribute.BasicFileAttributes.class,
+					LinkOption.NOFOLLOW_LINKS);
+		} catch (java.nio.file.NoSuchFileException absent) {
+			return false;
+		}
+		if (rootAttributes.isSymbolicLink() || !rootAttributes.isDirectory())
+			throw new IOException("HTTP outgoing queue directory is invalid");
+		int backendCount = 0;
+		try (DirectoryStream<Path> backends = Files.newDirectoryStream(root)) {
+			for (Path backend : backends) {
+				if (Files.isSymbolicLink(backend) || !Files.isDirectory(backend, LinkOption.NOFOLLOW_LINKS))
+					throw new IOException("HTTP outgoing queue contains an invalid entry");
+				if (++backendCount > MAX_BACKENDS)
+					throw new IOException("HTTP outgoing queue exceeds its backend bound");
+				try (DirectoryStream<Path> entries = Files.newDirectoryStream(backend)) {
+					if (entries.iterator().hasNext()) return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	private boolean send(String serverId, String deliveryId, JsonEnvelope envelope, boolean generatedId) {
 		if (closed || serverId == null || envelope == null) return false;
 		try {
@@ -563,6 +612,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		private synchronized void restore(Collection<HttpTransportProtocol.Delivery> deliveries) {
 			for (HttpTransportProtocol.Delivery delivery : deliveries) outgoing.put(delivery.id(), delivery);
 		}
+		private synchronized boolean hasPendingOutgoing() { return !outgoing.isEmpty(); }
 		private boolean beginPoll(String requestedSession) { synchronized (this) { if (retired || activePoll) return false; activePoll = true; touch(); return true; } }
 		private void endPoll() { synchronized (this) { activePoll = false; touch(); notifyAll(); } }
 		boolean beginPollForTest() { return beginPoll("test"); }
@@ -939,6 +989,16 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			requireOwnership();
 			Map<String, Path> quarantined = quarantinedFiles.get(serverId);
 			return quarantined != null && !quarantined.isEmpty();
+		}
+
+		synchronized boolean hasPendingDeliveries() {
+			for (Map<String, Path> serverFiles : files.values()) {
+				if (!serverFiles.isEmpty()) return true;
+			}
+			for (Map<String, Path> quarantined : quarantinedFiles.values()) {
+				if (!quarantined.isEmpty()) return true;
+			}
+			return false;
 		}
 
 		/** Deletes only a validated, observed-empty backend directory and makes its removal durable. */
