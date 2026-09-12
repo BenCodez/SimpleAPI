@@ -4,16 +4,23 @@
 `shared-sources` classifiers, dependency scopes, and public APIs are unchanged.
 There are no additional modules or runtime downloads.
 
+The `thin` classifier contains the complete, unshaded SimpleAPI classes and
+resources but no embedded third-party classes. It exists for trusted downstream
+projects that immediately shade SimpleAPI while explicitly controlling the
+ordinary POM's transitive dependencies. It is not a standalone replacement for
+the full artifact. In particular, a consumer of HTTP/TLS APIs must still supply
+the declared Bouncy Castle libraries. Normal external consumers should continue
+to use the self-contained main artifact.
+
 The HTTP transport uses Bouncy Castle for its private CA and certificates.
 Do not remove those dependencies, switch them to `provided`, strip provider
 mappings, or enable broad `minimizeJar` without packaged-runtime validation.
 Providers load some implementation classes reflectively.
 
-The full shaded artifact is not a multi-release JAR. Its BC-specific shade
-filter omits `META-INF/versions/**`, which that artifact cannot select, while
-retaining all base BC classes and resources. Other dependencies are not filtered
-by this rule. This is a conservative reduction of redundant payload, not removal
-of the crypto provider or the entire HTTP dependency cost.
+The full shaded artifact is not a multi-release JAR. Its shade filter omits
+`META-INF/versions/**`, which that artifact cannot select, while retaining base
+classes and resources. This is a conservative reduction of unreachable payload,
+not removal of the crypto provider or the entire HTTP dependency cost.
 
 Java only selects versioned classes when the final manifest declares
 `Multi-Release: true`. If that contract changes, revisit this filter and the
@@ -31,8 +38,9 @@ git diff --check
 
 The package phase runs `FullArtifactTest` after shading, followed by the existing
 shared-classpath tests. It verifies the non-multi-release manifest, absence of
-versioned BC payload, and preservation of every base `org/bouncycastle/` entry
-from the three resolved BC libraries. It prints the final JAR size and the
+all unreachable versioned payload, preservation of every base
+`org/bouncycastle/` entry from the three resolved BC libraries, and the thin
+artifact's no-embedded-dependencies contract. It prints the final JAR size and the
 compressed upstream payload omitted. That payload counter is not an exact
 before/after distribution size: shading/recompression and ZIP overhead differ.
 To measure the exact reduction, compare clean baseline and candidate builds with
