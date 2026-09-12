@@ -23,7 +23,7 @@ import com.bencodez.simpleapi.servercomm.http.PackagedTlsSmoke;
 public class FullArtifactTest {
     @TempDir Path temporary;
 
-    @Test void retainsBaseCryptoClassesWithoutUnusedVersionedPayload() throws Exception {
+    @Test void retainsBaseCryptoClassesWithoutUnusableVersionedPayload() throws Exception {
         Path full = fullJar();
         long removedEntries = 0;
         long removedCompressedBytes = 0;
@@ -35,8 +35,8 @@ public class FullArtifactTest {
                     "Revisit the BC filter before making the full artifact multi-release");
             String classPath = output.getManifest().getMainAttributes().getValue(Attributes.Name.CLASS_PATH);
             assertTrue(classPath == null || classPath.isBlank(), "Smoke test must not load external manifest dependencies");
-            assertFalse(output.stream().anyMatch(entry -> entry.getName().startsWith("META-INF/versions/")
-                    && entry.getName().contains("/org/bouncycastle/")), "Unused versioned BC payload is still bundled");
+            assertFalse(output.stream().anyMatch(entry -> entry.getName().startsWith("META-INF/versions/")),
+                    "A non-multi-release artifact must not bundle unreachable versioned implementations");
 
             // Resolve all three original libraries from Maven, without a pinned version or ~/.m2 path.
             for (Class<?> anchor : List.of(BouncyCastleProvider.class, X509CertificateHolder.class, ContentInfo.class)) {
@@ -60,6 +60,21 @@ public class FullArtifactTest {
         System.out.printf("Full artifact: %,d bytes; retained %,d base BC entries; omitted %,d versioned entries "
                 + "(%,d compressed bytes in upstream dependency JARs)%n",
                 Files.size(full), retainedEntries, removedEntries, removedCompressedBytes);
+    }
+
+    @Test void thinArtifactContainsProjectClassesWithoutEmbeddedDependencies() throws Exception {
+        Path thin = thinJar();
+        try (JarFile artifact = new JarFile(thin.toFile())) {
+            assertNotNull(artifact.getEntry("com/bencodez/simpleapi/servercomm/http/HttpTlsIdentity.class"),
+                    "Thin artifact must preserve the complete SimpleAPI API");
+            assertNotNull(artifact.getEntry("com/bencodez/simpleapi/scheduler/BukkitScheduler.class"));
+            assertNull(artifact.getEntry("org/bouncycastle/jce/provider/BouncyCastleProvider.class"));
+            assertNull(artifact.getEntry("com/zaxxer/hikari/HikariDataSource.class"));
+            assertNull(artifact.getEntry("redis/clients/jedis/Jedis.class"));
+            assertNull(artifact.getEntry("org/spongepowered/configurate/ConfigurationNode.class"));
+            assertFalse(artifact.stream().anyMatch(entry -> entry.getName().startsWith("META-INF/versions/")));
+        }
+        System.out.printf("Thin artifact: %,d bytes (project classes only)%n", Files.size(thin));
     }
 
     @Test void packagedTlsWorksWithoutMavenDependencies() throws Exception {
@@ -103,5 +118,13 @@ public class FullArtifactTest {
         Path full = Path.of(value).toAbsolutePath().normalize();
         assertTrue(Files.isRegularFile(full), "Missing packaged full artifact: " + full);
         return full;
+    }
+
+    private static Path thinJar() {
+        String value = System.getProperty("simpleapi.thinJar");
+        assertNotNull(value, "Run this test through the Maven package lifecycle");
+        Path thin = Path.of(value).toAbsolutePath().normalize();
+        assertTrue(Files.isRegularFile(thin), "Missing packaged thin artifact: " + thin);
+        return thin;
     }
 }

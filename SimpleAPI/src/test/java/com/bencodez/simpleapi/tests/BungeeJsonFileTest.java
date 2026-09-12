@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.io.TempDir;
 
 import com.bencodez.simpleapi.file.BungeeJsonFile;
 import com.google.gson.JsonObject;
@@ -24,9 +26,9 @@ public class BungeeJsonFileTest {
 	private BungeeJsonFile bungeeJsonFile;
 
 	@BeforeAll
-	public void setup() {
+	public void setup(@TempDir Path temporary) {
 		// Create a temporary file for testing
-		testFile = new File("test.json");
+		testFile = temporary.resolve("test.json").toFile();
 		bungeeJsonFile = new BungeeJsonFile(testFile);
 	}
 

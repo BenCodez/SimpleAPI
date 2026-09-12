@@ -98,6 +98,14 @@
                         </configuration>
                     </execution>
                     <execution>
+                        <id>thin-library</id>
+                        <phase>package</phase>
+                        <goals><goal>jar</goal></goals>
+                        <configuration>
+                            <classifier>thin</classifier>
+                        </configuration>
+                    </execution>
+                    <execution>
                         <id>shared-library-sources</id>
                         <phase>package</phase>
                         <goals><goal>jar</goal></goals>
@@ -149,14 +157,8 @@
                                         <exclude>META-INF/*.SF</exclude>
                                         <exclude>META-INF/*.DSA</exclude>
                                         <exclude>META-INF/*.RSA</exclude>
-                                    </excludes>
-                                </filter>
-                                <!-- The full artifact is not a multi-release JAR. Keep every
-                                     base BC class (including reflective provider mappings), but
-                                     do not ship versioned implementations it cannot select. -->
-                                <filter>
-                                    <artifact>org.bouncycastle:*</artifact>
-                                    <excludes>
+                                        <!-- The final artifact deliberately is not multi-release,
+                                             so these implementations are unreachable. -->
                                         <exclude>META-INF/versions/**</exclude>
                                     </excludes>
                                 </filter>
@@ -206,6 +208,7 @@
                             <reportsDirectory>${project.build.directory}/full-artifact-reports</reportsDirectory>
                             <systemPropertyVariables>
                                 <simpleapi.fullJar>${project.build.directory}/${project.build.finalName}.jar</simpleapi.fullJar>
+                                <simpleapi.thinJar>${project.build.directory}/${project.build.finalName}-thin.jar</simpleapi.thinJar>
                             </systemPropertyVariables>
                         </configuration>
                     </execution>
