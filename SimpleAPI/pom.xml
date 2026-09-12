@@ -98,14 +98,6 @@
                         </configuration>
                     </execution>
                     <execution>
-                        <id>thin-library</id>
-                        <phase>package</phase>
-                        <goals><goal>jar</goal></goals>
-                        <configuration>
-                            <classifier>thin</classifier>
-                        </configuration>
-                    </execution>
-                    <execution>
                         <id>shared-library-sources</id>
                         <phase>package</phase>
                         <goals><goal>jar</goal></goals>
@@ -208,7 +200,6 @@
                             <reportsDirectory>${project.build.directory}/full-artifact-reports</reportsDirectory>
                             <systemPropertyVariables>
                                 <simpleapi.fullJar>${project.build.directory}/${project.build.finalName}.jar</simpleapi.fullJar>
-                                <simpleapi.thinJar>${project.build.directory}/${project.build.finalName}-thin.jar</simpleapi.thinJar>
                             </systemPropertyVariables>
                         </configuration>
                     </execution>
