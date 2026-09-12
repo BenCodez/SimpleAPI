@@ -151,6 +151,15 @@
                                         <exclude>META-INF/*.RSA</exclude>
                                     </excludes>
                                 </filter>
+                                <!-- The full artifact is not a multi-release JAR. Keep every
+                                     base BC class (including reflective provider mappings), but
+                                     do not ship versioned implementations it cannot select. -->
+                                <filter>
+                                    <artifact>org.bouncycastle:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
                             </filters>
                             <relocations>
                                 <relocation>
@@ -182,7 +191,22 @@
                     <execution>
                         <id>default-test</id>
                         <configuration>
-                            <excludes><exclude>**/SharedArtifactTest.java</exclude></excludes>
+                            <excludes>
+                                <exclude>**/SharedArtifactTest.java</exclude>
+                                <exclude>**/FullArtifactTest.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>full-artifact-test</id>
+                        <phase>package</phase>
+                        <goals><goal>test</goal></goals>
+                        <configuration>
+                            <includes><include>**/FullArtifactTest.java</include></includes>
+                            <reportsDirectory>${project.build.directory}/full-artifact-reports</reportsDirectory>
+                            <systemPropertyVariables>
+                                <simpleapi.fullJar>${project.build.directory}/${project.build.finalName}.jar</simpleapi.fullJar>
+                            </systemPropertyVariables>
                         </configuration>
                     </execution>
                     <execution>
