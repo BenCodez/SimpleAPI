@@ -62,21 +62,6 @@ public class FullArtifactTest {
                 Files.size(full), retainedEntries, removedEntries, removedCompressedBytes);
     }
 
-    @Test void thinArtifactContainsProjectClassesWithoutEmbeddedDependencies() throws Exception {
-        Path thin = thinJar();
-        try (JarFile artifact = new JarFile(thin.toFile())) {
-            assertNotNull(artifact.getEntry("com/bencodez/simpleapi/servercomm/http/HttpTlsIdentity.class"),
-                    "Thin artifact must preserve the complete SimpleAPI API");
-            assertNotNull(artifact.getEntry("com/bencodez/simpleapi/scheduler/BukkitScheduler.class"));
-            assertNull(artifact.getEntry("org/bouncycastle/jce/provider/BouncyCastleProvider.class"));
-            assertNull(artifact.getEntry("com/zaxxer/hikari/HikariDataSource.class"));
-            assertNull(artifact.getEntry("redis/clients/jedis/Jedis.class"));
-            assertNull(artifact.getEntry("org/spongepowered/configurate/ConfigurationNode.class"));
-            assertFalse(artifact.stream().anyMatch(entry -> entry.getName().startsWith("META-INF/versions/")));
-        }
-        System.out.printf("Thin artifact: %,d bytes (project classes only)%n", Files.size(thin));
-    }
-
     @Test void packagedTlsWorksWithoutMavenDependencies() throws Exception {
         Path full = fullJar();
         String fixtureName = PackagedTlsSmoke.class.getName();
@@ -120,11 +105,4 @@ public class FullArtifactTest {
         return full;
     }
 
-    private static Path thinJar() {
-        String value = System.getProperty("simpleapi.thinJar");
-        assertNotNull(value, "Run this test through the Maven package lifecycle");
-        Path thin = Path.of(value).toAbsolutePath().normalize();
-        assertTrue(Files.isRegularFile(thin), "Missing packaged thin artifact: " + thin);
-        return thin;
-    }
 }

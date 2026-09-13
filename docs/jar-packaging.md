@@ -4,14 +4,6 @@
 `shared-sources` classifiers, dependency scopes, and public APIs are unchanged.
 There are no additional modules or runtime downloads.
 
-The `thin` classifier contains the complete, unshaded SimpleAPI classes and
-resources but no embedded third-party classes. It exists for trusted downstream
-projects that immediately shade SimpleAPI while explicitly controlling the
-ordinary POM's transitive dependencies. It is not a standalone replacement for
-the full artifact. In particular, a consumer of HTTP/TLS APIs must still supply
-the declared Bouncy Castle libraries. Normal external consumers should continue
-to use the self-contained main artifact.
-
 The HTTP transport uses Bouncy Castle for its private CA and certificates.
 Do not remove those dependencies, switch them to `provided`, strip provider
 mappings, or enable broad `minimizeJar` without packaged-runtime validation.
@@ -38,9 +30,8 @@ git diff --check
 
 The package phase runs `FullArtifactTest` after shading, followed by the existing
 shared-classpath tests. It verifies the non-multi-release manifest, absence of
-all unreachable versioned payload, preservation of every base
-`org/bouncycastle/` entry from the three resolved BC libraries, and the thin
-artifact's no-embedded-dependencies contract. It prints the final JAR size and the
+all unreachable versioned payload and preservation of every base
+`org/bouncycastle/` entry from the three resolved BC libraries. It prints the final JAR size and the
 compressed upstream payload omitted. That payload counter is not an exact
 before/after distribution size: shading/recompression and ZIP overhead differ.
 To measure the exact reduction, compare clean baseline and candidate builds with
