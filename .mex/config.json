@@ -1,0 +1,10 @@
+{
+  "setupMode": "code-repo",
+  "aiTools": [
+    "codex"
+  ],
+  "scaffold_id": "431db8a0-3dcc-4612-ba15-cff117202b87",
+  "scaffold_name": "SimpleAPI",
+  "origin": null,
+  "upstream": null
+}
