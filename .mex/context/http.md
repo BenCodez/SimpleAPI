@@ -5,7 +5,7 @@ triggers: [HTTP, pending, delivery, TLS]
 last_updated: 2026-09-20
 mex:
   id: mx_01M307GHE519QFPZ260EC82CG8
-  type: constraint
+  type: component
   status: promoted
   revision: 1
   title: http
