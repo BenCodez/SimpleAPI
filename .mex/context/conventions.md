@@ -13,4 +13,4 @@ mex:
 
 # Rule ownership
 
-`/root/dev/AGENTS.md`, `docs/shared-libraries.md`, and the relevant package tests own development and artifact contracts. MEX records rationale and non-obvious traps, not generic Java/Maven rules.
+Root `AGENTS.md`, `docs/shared-libraries.md`, and the relevant package tests own development and artifact contracts. MEX records rationale and non-obvious traps, not generic Java/Maven rules.
