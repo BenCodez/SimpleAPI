@@ -5,7 +5,7 @@ triggers: [Java, Maven, Bukkit, proxy]
 last_updated: 2026-09-20
 mex:
   id: mx_01M307GHE6NDAPVZKKZ8ECR1JP
-  type: fact
+  type: guide
   status: promoted
   revision: 1
   title: stack
