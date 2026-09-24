@@ -42,9 +42,10 @@ final class JdkX509CertificateGenerator {
 		if (subjectAlternativeName != null) {
 			byte tag;
 			byte[] value;
-			if (server && isIpLiteral(subjectAlternativeName)) {
+			byte[] ipAddress = server ? parseIpLiteral(subjectAlternativeName) : null;
+			if (ipAddress != null) {
 				tag = (byte) 0x87;
-				value = InetAddress.getByName(subjectAlternativeName).getAddress();
+				value = ipAddress;
 			} else {
 				if (server && (subjectAlternativeName.indexOf(':') >= 0
 						|| subjectAlternativeName.matches("(?:\\d{1,3}\\.){3}\\d{1,3}")))
@@ -73,20 +74,35 @@ final class JdkX509CertificateGenerator {
 	}
 
 	static boolean isIpLiteral(String value) {
-		if (value == null || value.isEmpty()) return false;
+		return parseIpLiteral(value) != null;
+	}
+
+	private static byte[] parseIpLiteral(String value) {
+		if (value == null || value.isEmpty()) return null;
 		if (value.indexOf(':') >= 0) {
-			if (!value.matches("[0-9A-Fa-f:.]+")) return false;
-			try { return InetAddress.getByName(value).getAddress().length == 16; }
-			catch (Exception invalid) { return false; }
+			if (!value.matches("[0-9A-Fa-f:.]+")) return null;
+			try {
+				byte[] parsed = InetAddress.getByName(value).getAddress();
+				if (parsed.length == 16) return parsed;
+				if (parsed.length == 4) {
+					byte[] mapped = new byte[16];
+					mapped[10] = (byte) 0xff;
+					mapped[11] = (byte) 0xff;
+					System.arraycopy(parsed, 0, mapped, 12, parsed.length);
+					return mapped;
+				}
+				return null;
+			} catch (Exception invalid) { return null; }
 		}
 		String[] parts = value.split("\\.", -1);
-		if (parts.length != 4) return false;
+		if (parts.length != 4) return null;
 		for (String part : parts) {
-			if (part.isEmpty() || part.length() > 3 || !part.chars().allMatch(Character::isDigit)) return false;
-			try { if (Integer.parseInt(part) > 255) return false; }
-			catch (NumberFormatException invalid) { return false; }
+			if (part.isEmpty() || part.length() > 3 || !part.chars().allMatch(Character::isDigit)) return null;
+			try { if (Integer.parseInt(part) > 255) return null; }
+			catch (NumberFormatException invalid) { return null; }
 		}
-		return true;
+		try { return InetAddress.getByName(value).getAddress(); }
+		catch (Exception invalid) { return null; }
 	}
 
 	private static byte[] extension(String id, boolean critical, byte[] value) {

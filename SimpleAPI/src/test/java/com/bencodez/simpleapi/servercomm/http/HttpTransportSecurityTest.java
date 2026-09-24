@@ -69,6 +69,17 @@ class HttpTransportSecurityTest {
 	}
 
 	@Test
+	void tlsIdentityAcceptsIpv4MappedIpv6AlternativeNames() {
+		assertTrue(JdkX509CertificateGenerator.isIpLiteral("::ffff:192.0.2.1"));
+		assertTrue(JdkX509CertificateGenerator.isIpLiteral("::ffff:c000:201"));
+		assertTrue(JdkX509CertificateGenerator.isIpLiteral("0:0:0:0:0:ffff:c000:201"));
+		assertDoesNotThrow(() -> HttpTlsIdentity.loadOrCreate(directory.resolve("mapped-ipv6-dotted"),
+				"::ffff:192.0.2.1"));
+		assertDoesNotThrow(() -> HttpTlsIdentity.loadOrCreate(directory.resolve("mapped-ipv6-hex"),
+				"::ffff:c000:201"));
+	}
+
+	@Test
 	void backendResponseReaderRejectsBodiesBeyondTheWireLimit() throws Exception {
 		byte[] maximum = new byte[HttpTransportProtocol.MAX_BODY_BYTES];
 		assertEquals(maximum.length, HttpBackendTransportConnector.readLimited(
