@@ -1,7 +1,6 @@
 package com.bencodez.simpleapi.servercomm.http;
 
 import java.io.IOException;
-import java.math.BigInteger;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
@@ -15,14 +14,12 @@ import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.Principal;
-import java.security.Security;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.time.Clock;
 import java.time.Duration;
 import java.net.InetAddress;
-import java.util.Date;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -33,22 +30,6 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509ExtendedKeyManager;
-import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.asn1.x509.BasicConstraints;
-import org.bouncycastle.asn1.x509.Extension;
-import org.bouncycastle.asn1.x509.GeneralName;
-import org.bouncycastle.asn1.x509.GeneralNames;
-import org.bouncycastle.asn1.x509.KeyUsage;
-import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
-import org.bouncycastle.asn1.x509.KeyPurposeId;
-import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.cert.X509v3CertificateBuilder;
-import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
-import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
-import org.bouncycastle.util.IPAddress;
 import com.bencodez.simpleapi.file.DurableFiles;
 import com.bencodez.simpleapi.file.PrivateFilePermissions;
 
@@ -146,7 +127,6 @@ public final class HttpTlsIdentity {
 					throw new IOException("HTTP TLS identity files are invalid");
 				boolean caRenewed = needsCaRenewal(caCertificate, clock);
 				if (caRenewed) {
-					ensureBouncyCastle();
 					KeyPair caPair = new KeyPair(caCertificate.getPublicKey(), caKey);
 					caCertificate = certificate("CN=VotingPlugin HTTP private CA", caPair, null, null,
 							CertificateRole.CA, null, clock.instant());
@@ -156,7 +136,6 @@ public final class HttpTlsIdentity {
 					writeStore(caFile, ca, password);
 				}
 				if (caRenewed || !hasServerName(serverCertificate, advertisedHost) || needsRenewal(serverCertificate, clock)) {
-					ensureBouncyCastle();
 					KeyPair serverPair = keyPair();
 					serverCertificate = certificate("CN=" + certificateName(advertisedHost), serverPair, caCertificate, caKey,
 							CertificateRole.SERVER, advertisedHost, clock.instant());
@@ -177,7 +156,6 @@ public final class HttpTlsIdentity {
 		if (persistentTransportState)
 			throw new IOException("HTTP TLS identity files are missing");
 		if (!initializing) writeInitializationMarker(initializingFile);
-		ensureBouncyCastle();
 		char[] password = HttpTransportSecrets.randomToken().toCharArray();
 		try {
 			KeyPair caPair = keyPair();
@@ -265,7 +243,6 @@ public final class HttpTlsIdentity {
 		serverCertificate = persistedServer;
 		renewCa = needsCaRenewal(caCertificate, clock);
 		if (!renewCa && !needsRenewal(serverCertificate, clock)) return;
-		ensureBouncyCastle();
 		X509Certificate replacementCa = caCertificate;
 		if (renewCa) {
 			KeyPair caPair = new KeyPair(caCertificate.getPublicKey(), caKey);
@@ -297,7 +274,6 @@ public final class HttpTlsIdentity {
 	IssuedClientCertificate issueClientCertificate(String serverId, Instant issuedAt) throws Exception {
 		serverId = canonicalServerId(serverId);
 		if (issuedAt == null) throw new IllegalArgumentException("Certificate issuance time is required");
-		ensureBouncyCastle();
 		KeyPair pair = keyPair();
 		X509Certificate certificate = certificate("CN=" + serverId, pair, caCertificate, caKey, CertificateRole.CLIENT,
 				"urn:votingplugin:http-backend:" + serverId, issuedAt);
@@ -334,12 +310,12 @@ public final class HttpTlsIdentity {
 		try {
 			List<String> usage = certificate.getExtendedKeyUsage();
 			boolean[] keyUsage = certificate.getKeyUsage();
-			if (usage == null || !usage.contains(KeyPurposeId.id_kp_clientAuth.getId()) || keyUsage == null || !keyUsage[0]) return false;
+			if (usage == null || !usage.contains("1.3.6.1.5.5.7.3.2") || keyUsage == null || !keyUsage[0]) return false;
 			String expectedUri = "urn:votingplugin:http-backend:" + canonicalServerId(expectedServerId);
 			Collection<List<?>> names = certificate.getSubjectAlternativeNames();
 			if (names == null) return false;
 			for (List<?> name : names) {
-				if (name.size() == 2 && Integer.valueOf(GeneralName.uniformResourceIdentifier).equals(name.get(0))
+				if (name.size() == 2 && Integer.valueOf(6).equals(name.get(0))
 						&& expectedUri.equals(name.get(1))) return true;
 			}
 			return false;
@@ -363,30 +339,8 @@ public final class HttpTlsIdentity {
 
 	private static X509Certificate certificate(String subject, KeyPair subjectKey, X509Certificate issuer, PrivateKey issuerKey,
 			CertificateRole role, String subjectAlternativeName, Instant now) throws Exception {
-		X500Name issuerName = issuer == null ? new X500Name(subject) : new X500Name(issuer.getSubjectX500Principal().getName());
-		X509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(issuerName,
-				new BigInteger(160, new java.security.SecureRandom()).setBit(159), Date.from(now.minusSeconds(300)),
-				Date.from(now.plusSeconds(role == CertificateRole.CA ? 315360000L : 31536000L)), new X500Name(subject), subjectKey.getPublic());
-		builder.addExtension(Extension.basicConstraints, true, new BasicConstraints(role == CertificateRole.CA));
-		builder.addExtension(Extension.keyUsage, true, new KeyUsage(role == CertificateRole.CA ? KeyUsage.keyCertSign | KeyUsage.cRLSign
-				: KeyUsage.digitalSignature));
-		if (role == CertificateRole.SERVER) builder.addExtension(Extension.extendedKeyUsage, false,
-				new ExtendedKeyUsage(KeyPurposeId.id_kp_serverAuth));
-		if (role == CertificateRole.CLIENT) builder.addExtension(Extension.extendedKeyUsage, false,
-				new ExtendedKeyUsage(KeyPurposeId.id_kp_clientAuth));
-		if (role == CertificateRole.SERVER && subjectAlternativeName != null) {
-			GeneralName name;
-			if (subjectAlternativeName.matches("(?:\\d{1,3}\\.){3}\\d{1,3}") || subjectAlternativeName.indexOf(':') >= 0)
-				name = new GeneralName(GeneralName.iPAddress, subjectAlternativeName);
-			else name = new GeneralName(GeneralName.dNSName, subjectAlternativeName);
-			builder.addExtension(Extension.subjectAlternativeName, false, new GeneralNames(name));
-		}
-		if (role == CertificateRole.CLIENT) builder.addExtension(Extension.subjectAlternativeName, false,
-				new GeneralNames(new GeneralName(GeneralName.uniformResourceIdentifier, subjectAlternativeName)));
-		ContentSigner signer = new JcaContentSignerBuilder("SHA256withECDSA").setProvider("BC")
-				.build(issuerKey == null ? subjectKey.getPrivate() : issuerKey);
-		X509CertificateHolder holder = builder.build(signer);
-		return new JcaX509CertificateConverter().setProvider("BC").getCertificate(holder);
+		return JdkX509CertificateGenerator.create(subject, subjectKey, issuer, issuerKey, role == CertificateRole.CA,
+				role == CertificateRole.SERVER, subjectAlternativeName, now);
 	}
 
 	static boolean needsRenewal(X509Certificate certificate, Clock clock) {
@@ -397,9 +351,6 @@ public final class HttpTlsIdentity {
 		return certificate == null || !certificate.getNotAfter().toInstant().isAfter(clock.instant().plus(CA_RENEW_BEFORE));
 	}
 
-	private static void ensureBouncyCastle() {
-		if (Security.getProvider("BC") == null) Security.addProvider(new BouncyCastleProvider());
-	}
 
 	private static String certificateName(String host) {
 		return host.replaceAll("[^A-Za-z0-9 ._-]", "_");
@@ -411,8 +362,8 @@ public final class HttpTlsIdentity {
 			if (names == null) return false;
 			for (List<?> name : names) {
 				if (name.size() != 2 || !(name.get(1) instanceof String value)) continue;
-				if (Integer.valueOf(GeneralName.dNSName).equals(name.get(0)) && advertisedHost.equalsIgnoreCase(value)) return true;
-				if (Integer.valueOf(GeneralName.iPAddress).equals(name.get(0)) && sameIpAddress(advertisedHost, value)) return true;
+				if (Integer.valueOf(2).equals(name.get(0)) && advertisedHost.equalsIgnoreCase(value)) return true;
+				if (Integer.valueOf(7).equals(name.get(0)) && sameIpAddress(advertisedHost, value)) return true;
 			}
 			return false;
 		} catch (Exception failure) { return false; }
@@ -426,7 +377,7 @@ public final class HttpTlsIdentity {
 	}
 
 	private static boolean isIpLiteral(String value) {
-		return IPAddress.isValid(value);
+		return JdkX509CertificateGenerator.isIpLiteral(value);
 	}
 
 	private static Path safe(Path file) throws IOException {

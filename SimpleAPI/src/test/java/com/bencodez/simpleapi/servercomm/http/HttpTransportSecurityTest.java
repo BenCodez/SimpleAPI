@@ -59,6 +59,16 @@ class HttpTransportSecurityTest {
 	@TempDir Path directory;
 
 	@Test
+	void tlsIdentityRejectsInvalidIpAndNonAsciiAlternativeNames() {
+		assertThrows(IllegalArgumentException.class,
+				() -> HttpTlsIdentity.loadOrCreate(directory.resolve("invalid-ip"), "999.1.1.1"));
+		assertThrows(IllegalArgumentException.class,
+				() -> HttpTlsIdentity.loadOrCreate(directory.resolve("invalid-ipv6"), "not:an:ip"));
+		assertThrows(IllegalArgumentException.class,
+				() -> HttpTlsIdentity.loadOrCreate(directory.resolve("non-ascii"), "tést.example"));
+	}
+
+	@Test
 	void backendResponseReaderRejectsBodiesBeyondTheWireLimit() throws Exception {
 		byte[] maximum = new byte[HttpTransportProtocol.MAX_BODY_BYTES];
 		assertEquals(maximum.length, HttpBackendTransportConnector.readLimited(
