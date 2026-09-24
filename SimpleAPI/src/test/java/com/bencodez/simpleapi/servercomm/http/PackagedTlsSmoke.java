@@ -6,7 +6,6 @@ import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
-import java.security.Security;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
@@ -32,8 +31,6 @@ public final class PackagedTlsSmoke {
         Path full = Path.of(args[1]);
         requireFromJar(HttpTlsIdentity.class, full);
         HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(state.resolve("trusted"), "127.0.0.1");
-        require(Security.getProvider("BC") != null, "BC provider was not registered");
-        requireFromJar(Security.getProvider("BC").getClass(), full);
         X509Certificate ca = identity.caCertificate();
         X509Certificate server = identity.serverCertificate();
         ca.verify(ca.getPublicKey());

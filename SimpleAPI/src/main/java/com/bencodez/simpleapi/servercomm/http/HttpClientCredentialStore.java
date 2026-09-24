@@ -451,7 +451,7 @@ public final class HttpClientCredentialStore {
 			credential.certificate().verify(credential.caCertificate().getPublicKey());
 			java.util.List<String> usage = credential.certificate().getExtendedKeyUsage();
 			boolean[] keyUsage = credential.certificate().getKeyUsage();
-			if (usage == null || !usage.contains(org.bouncycastle.asn1.x509.KeyPurposeId.id_kp_clientAuth.getId())
+			if (usage == null || !usage.contains("1.3.6.1.5.5.7.3.2")
 					|| keyUsage == null || !keyUsage[0]) return false;
 			String expected = "urn:votingplugin:http-backend:" + profile.serverId();
 			var names = credential.certificate().getSubjectAlternativeNames();

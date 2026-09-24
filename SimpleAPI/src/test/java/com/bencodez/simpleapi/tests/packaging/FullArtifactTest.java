@@ -6,14 +6,10 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.Attributes;
 import java.util.jar.JarFile;
 
-import org.bouncycastle.asn1.cms.ContentInfo;
-import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,43 +19,16 @@ import com.bencodez.simpleapi.servercomm.http.PackagedTlsSmoke;
 public class FullArtifactTest {
     @TempDir Path temporary;
 
-    @Test void retainsBaseCryptoClassesWithoutUnusableVersionedPayload() throws Exception {
+    @Test void omitsExternalCryptoProvider() throws Exception {
         Path full = fullJar();
-        long removedEntries = 0;
-        long removedCompressedBytes = 0;
-        long retainedEntries = 0;
         try (JarFile output = new JarFile(full.toFile())) {
             assertNotNull(output.getManifest(), "Full artifact must have a manifest");
-            assertFalse(Boolean.parseBoolean(output.getManifest().getMainAttributes()
-                    .getValue(Attributes.Name.MULTI_RELEASE)),
-                    "Revisit the BC filter before making the full artifact multi-release");
             String classPath = output.getManifest().getMainAttributes().getValue(Attributes.Name.CLASS_PATH);
             assertTrue(classPath == null || classPath.isBlank(), "Smoke test must not load external manifest dependencies");
-            assertFalse(output.stream().anyMatch(entry -> entry.getName().startsWith("META-INF/versions/")),
-                    "A non-multi-release artifact must not bundle unreachable versioned implementations");
-
-            // Resolve all three original libraries from Maven, without a pinned version or ~/.m2 path.
-            for (Class<?> anchor : List.of(BouncyCastleProvider.class, X509CertificateHolder.class, ContentInfo.class)) {
-                Path source = Path.of(anchor.getProtectionDomain().getCodeSource().getLocation().toURI());
-                assertFalse(Files.isSameFile(source, full), "Expected Maven's original dependency for comparison");
-                try (JarFile dependency = new JarFile(source.toFile())) {
-                    for (var entry : dependency.stream().filter(entry -> !entry.isDirectory()).toList()) {
-                        if (entry.getName().startsWith("META-INF/versions/")) {
-                            removedEntries++;
-                            removedCompressedBytes += entry.getCompressedSize();
-                        } else if (entry.getName().startsWith("org/bouncycastle/")) {
-                            assertNotNull(output.getEntry(entry.getName()), "Lost base dependency entry: " + entry.getName());
-                            retainedEntries++;
-                        }
-                    }
-                }
-            }
+            assertFalse(output.stream().anyMatch(entry -> entry.getName().startsWith("org/bouncycastle/")),
+                    "The JDK-only TLS implementation must not package Bouncy Castle");
         }
-        assertTrue(retainedEntries > 0, "No base crypto entries were checked");
-        // This is input ZIP payload, not an invented before/after output-JAR size.
-        System.out.printf("Full artifact: %,d bytes; retained %,d base BC entries; omitted %,d versioned entries "
-                + "(%,d compressed bytes in upstream dependency JARs)%n",
-                Files.size(full), retainedEntries, removedEntries, removedCompressedBytes);
+        System.out.printf("Full artifact: %,d bytes; no external crypto provider packaged%n", Files.size(full));
     }
 
     @Test void packagedTlsWorksWithoutMavenDependencies() throws Exception {
