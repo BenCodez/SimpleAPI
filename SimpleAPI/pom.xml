@@ -348,7 +348,7 @@
         <dependency>
             <groupId>io.github.projectunified</groupId>
             <artifactId>uni-dialog-spigot</artifactId>
-            <version>1.5.0</version>
+            <version>1.6.0</version>
         </dependency>
     </dependencies>
     <profiles>
