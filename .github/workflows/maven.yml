@@ -10,16 +10,16 @@ on:
     branches: [ "main" ]
 
 permissions:
-  contents: write   # required for dependency submission
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -28,10 +28,18 @@ jobs:
       - name: Build with Maven
         run: mvn -B -f SimpleAPI/pom.xml package
 
-      # Only run dependency graph submission on push (not pull_request)
-      - name: Submit Dependency Snapshot
-        if: github.event_name == 'push'
-        uses: advanced-security/maven-dependency-submission-action@v5
+  # Dependency submission needs write access, so keep it out of the build job.
+  submit-dependency-snapshot:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          directory: SimpleAPI   # path to pom.xml
-          # optional: maven-args: "-DskipTests"
+          persist-credentials: false
+
+      - name: Submit Dependency Snapshot
+        uses: advanced-security/maven-dependency-submission-action@b275d12641ac2d2108b2cbb7598b154ad2f2cee8 # v5.0.0
+        with:
+          directory: SimpleAPI
