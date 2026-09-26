@@ -24,6 +24,19 @@ Confirm current CI and POM settings before relying on these commands. Verify tha
 
 Core and the shared artifact must not link Bukkit, BungeeCord, Velocity, Minecraft, Forge, Fabric, NeoForge, or other loader-specific classes. Test the packaged JAR, not only source imports: signatures, annotations, superclass references, static initializers, service descriptors, and reflective loading can leak platform dependencies.
 
+## Compatibility-first change policy
+
+Compatibility is the default acceptance criterion for every new feature, refactor, fix, and dependency change, not only for explicitly compatibility-related work. Unless the task explicitly authorizes a breaking change:
+
+- Existing downstream consumers must continue to compile and run without source, configuration, dependency, or deployment changes.
+- Preserve public and de-facto APIs, package/class names, constructors, overloads, reflection targets, service descriptors, artifact/classifier names, shading/relocation behavior, and runtime semantics used by existing consumers.
+- New configuration must be additive: existing files remain valid, absent new keys use safe defaults that preserve prior behavior, and users are not required to regenerate or manually edit configuration.
+- Existing serialized data and persisted state must remain readable. Required migrations must be automatic, idempotent, and safe across restart/retry; do not require users to delete or recreate data.
+- Optional new platform/integration support must not make existing Bukkit or neutral consumers install new dependencies, change startup, or coordinate upgrades.
+- When a compatibility-preserving implementation is not practical, stop and surface the compatibility impact before implementing a breaking path unless the request explicitly permits it.
+
+For any change that can affect consumers, add or update regression coverage for the old behavior as well as the new behavior.
+
 ## API and configuration compatibility
 
 Treat public signatures, constructors, overloads, generic types, return values, exceptions, callback threading, configuration shapes, and serialized data as compatibility surfaces.
