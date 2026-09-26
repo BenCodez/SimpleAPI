@@ -89,6 +89,7 @@
                             <include>com/bencodez/simpleapi/sql/mysql/AbstractSqlTable*.class</include>
                             <include>com/bencodez/simpleapi/sql/mysql/ConnectionManager*.class</include>
                             <include>com/bencodez/simpleapi/sql/mysql/DbType.class</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/PostgreSqlTlsMode.class</include>
                             <include>com/bencodez/simpleapi/sql/mysql/MySQL*.class</include>
                             <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfig.class</include>
                             <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfigView.class</include>
@@ -117,6 +118,7 @@
                             <include>com/bencodez/simpleapi/sql/mysql/AbstractSqlTable.java</include>
                             <include>com/bencodez/simpleapi/sql/mysql/ConnectionManager.java</include>
                             <include>com/bencodez/simpleapi/sql/mysql/DbType.java</include>
+                            <include>com/bencodez/simpleapi/sql/mysql/PostgreSqlTlsMode.java</include>
                             <include>com/bencodez/simpleapi/sql/mysql/MySQL.java</include>
                             <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfig.java</include>
                             <include>com/bencodez/simpleapi/sql/mysql/config/MysqlConfigView.java</include>

@@ -1,10 +1,11 @@
 package com.bencodez.simpleapi.core.sql;
 
-import com.bencodez.simpleapi.sql.mysql.config.MysqlConfig;
-
 import java.util.Objects;
+
 import com.bencodez.simpleapi.file.config.ConfigView;
 import com.bencodez.simpleapi.sql.mysql.DbType;
+import com.bencodez.simpleapi.sql.mysql.PostgreSqlTlsMode;
+import com.bencodez.simpleapi.sql.mysql.config.MysqlConfig;
 
 /** Platform-neutral snapshot of the existing MySQL section keys and defaults. */
 public class MysqlConfigView extends MysqlConfig {
@@ -31,6 +32,7 @@ public class MysqlConfigView extends MysqlConfig {
                 : section.getBoolean("UseMariaDB", false) ? DbType.MARIADB : DbType.MYSQL);
         setDriver(section.getString("Driver", ""));
         setUseSSL(section.getBoolean("UseSSL", false));
+        setPostgreSqlTlsMode(PostgreSqlTlsMode.fromString(section.getString("PostgreSqlTlsMode", "LEGACY")));
         setPublicKeyRetrieval(section.getBoolean("PublicKeyRetrieval", false));
         setUseMariaDB(section.getBoolean("UseMariaDB", false));
         setLine(section.getString("Line", ""));

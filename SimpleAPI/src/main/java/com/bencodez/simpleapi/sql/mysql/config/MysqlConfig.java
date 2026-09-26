@@ -1,6 +1,9 @@
 package com.bencodez.simpleapi.sql.mysql.config;
 
+import java.util.Objects;
+
 import com.bencodez.simpleapi.sql.mysql.DbType;
+import com.bencodez.simpleapi.sql.mysql.PostgreSqlTlsMode;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -81,6 +84,13 @@ public class MysqlConfig {
 	@Getter
 	@Setter
 	private boolean useSSL;
+
+	@Getter
+	private PostgreSqlTlsMode postgreSqlTlsMode = PostgreSqlTlsMode.LEGACY;
+
+	public void setPostgreSqlTlsMode(PostgreSqlTlsMode mode) {
+		postgreSqlTlsMode = Objects.requireNonNull(mode, "mode");
+	}
 
 	@Getter
 	@Setter

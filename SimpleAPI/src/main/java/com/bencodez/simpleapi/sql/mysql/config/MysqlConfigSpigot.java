@@ -3,6 +3,7 @@ package com.bencodez.simpleapi.sql.mysql.config;
 import org.bukkit.configuration.ConfigurationSection;
 
 import com.bencodez.simpleapi.sql.mysql.DbType;
+import com.bencodez.simpleapi.sql.mysql.PostgreSqlTlsMode;
 
 public class MysqlConfigSpigot extends MysqlConfig {
 
@@ -49,6 +50,7 @@ public class MysqlConfigSpigot extends MysqlConfig {
 
 		// --- Driver / Behavior Options ---
 		setUseSSL(section.getBoolean("UseSSL", false));
+		setPostgreSqlTlsMode(PostgreSqlTlsMode.fromString(section.getString("PostgreSqlTlsMode", "LEGACY")));
 		setPublicKeyRetrieval(section.getBoolean("PublicKeyRetrieval", false));
 		setUseMariaDB(section.getBoolean("UseMariaDB", false));
 
