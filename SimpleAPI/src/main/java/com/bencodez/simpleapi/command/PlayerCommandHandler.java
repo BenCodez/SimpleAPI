@@ -30,7 +30,7 @@ public abstract class PlayerCommandHandler extends CommandHandler {
 
 	public PlayerCommandHandler(JavaPlugin plugin, String[] args, String perm, String helpMessage, boolean allowConsole,
 			boolean forceConsole) {
-		super(plugin, args, perm, helpMessage, allowConsole);
+		super(plugin, args, perm, helpMessage, allowConsole, forceConsole);
 		figureOutPlayerArg();
 	}
 
