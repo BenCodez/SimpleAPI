@@ -54,6 +54,7 @@ public abstract class MySQL {
 		} else {
 			connectionManager.setDbType(config.isUseMariaDB() ? DbType.MARIADB : DbType.MYSQL);
 		}
+		connectionManager.setPostgreSqlTlsMode(config.getPostgreSqlTlsMode());
 
 		String driver = config.getDriver();
 		if (driver != null && !driver.isEmpty()) {

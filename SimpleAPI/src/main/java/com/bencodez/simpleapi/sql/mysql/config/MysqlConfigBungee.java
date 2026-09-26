@@ -1,6 +1,7 @@
 package com.bencodez.simpleapi.sql.mysql.config;
 
 import com.bencodez.simpleapi.sql.mysql.DbType;
+import com.bencodez.simpleapi.sql.mysql.PostgreSqlTlsMode;
 
 import net.md_5.bungee.config.Configuration;
 
@@ -50,6 +51,7 @@ public class MysqlConfigBungee extends MysqlConfig {
 
 		// --- Driver / Behavior Options ---
 		setUseSSL(section.getBoolean("UseSSL", false));
+		setPostgreSqlTlsMode(PostgreSqlTlsMode.fromString(section.getString("PostgreSqlTlsMode", "LEGACY")));
 		setPublicKeyRetrieval(section.getBoolean("PublicKeyRetrieval", false));
 		setUseMariaDB(section.getBoolean("UseMariaDB", false));
 

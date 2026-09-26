@@ -1,7 +1,11 @@
 package com.bencodez.simpleapi.sql.mysql;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Locale;
+import java.util.Objects;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -80,6 +84,13 @@ public class ConnectionManager {
 	@Getter
 	@Setter
 	private boolean useSSL = false;
+
+	@Getter
+	private PostgreSqlTlsMode postgreSqlTlsMode = PostgreSqlTlsMode.LEGACY;
+
+	public void setPostgreSqlTlsMode(PostgreSqlTlsMode mode) {
+		postgreSqlTlsMode = Objects.requireNonNull(mode, "mode");
+	}
 
 	/**
 	 * Legacy flag still supported; only used if dbType isn't explicitly set.
@@ -207,7 +218,7 @@ public class ConnectionManager {
 		}
 	}
 
-	private String buildJdbcUrl(String driverClassName) {
+	String buildJdbcUrl(String driverClassName) {
 		String extra = (str == null ? "" : str);
 
 		// Postgres
@@ -216,10 +227,17 @@ public class ConnectionManager {
 
 			// Defaults:
 			// - reWriteBatchedInserts improves batch perf
-			// - sslmode if useSSL
+			// - absent explicit mode preserves the legacy UseSSL behavior
 			String defaults = "reWriteBatchedInserts=true";
-			if (useSSL) {
+			if (postgreSqlTlsMode == PostgreSqlTlsMode.LEGACY && useSSL) {
 				defaults += "&sslmode=require";
+			} else if (postgreSqlTlsMode != PostgreSqlTlsMode.LEGACY) {
+				rejectConflictingPostgreSqlTlsOptions(extra);
+				defaults += "&sslmode=" + postgreSqlTlsMode.getJdbcValue();
+				if (postgreSqlTlsMode == PostgreSqlTlsMode.REQUIRE
+						|| postgreSqlTlsMode == PostgreSqlTlsMode.VERIFY_FULL) {
+					defaults += "&gssEncMode=disable";
+				}
 			}
 
 			if (extra.isEmpty()) {
@@ -240,6 +258,9 @@ public class ConnectionManager {
 		}
 
 		// MySQL / MariaDB
+		if (postgreSqlTlsMode != PostgreSqlTlsMode.LEGACY) {
+			throw new IllegalArgumentException("PostgreSqlTlsMode applies only to PostgreSQL connections");
+		}
 		boolean maria = (dbType == DbType.MARIADB) || "org.mariadb.jdbc.Driver".equals(driverClassName);
 		String base = maria ? String.format("jdbc:mariadb://%s:%s/%s", host, port, database)
 				: String.format("jdbc:mysql://%s:%s/%s", host, port, database);
@@ -248,6 +269,24 @@ public class ConnectionManager {
 				+ "&useDynamicCharsetInfo=false" + "&allowPublicKeyRetrieval=" + publicKeyRetrieval
 				+ "&tcpKeepAlive=true" + "&connectTimeout=10000" + "&socketTimeout=30000" + "&serverTimezone=UTC"
 				+ extra;
+	}
+
+	private void rejectConflictingPostgreSqlTlsOptions(String extra) {
+		String options = extra.startsWith("?") || extra.startsWith("&") ? extra.substring(1) : extra;
+		for (String parameter : options.split("&", -1)) {
+			String rawKey = parameter.split("=", 2)[0];
+			String key;
+			try {
+				key = URLDecoder.decode(rawKey, StandardCharsets.UTF_8).trim().toLowerCase(Locale.ROOT);
+			} catch (IllegalArgumentException ex) {
+				throw new IllegalArgumentException("Invalid encoded parameter name in PostgreSQL Line", ex);
+			}
+			if (key.equals("sslmode") || key.equals("ssl") || key.equals("sslfactory")
+					|| key.equals("sslhostnameverifier")
+					|| (postgreSqlTlsMode != PostgreSqlTlsMode.DISABLE && key.equals("gssencmode"))) {
+				throw new IllegalArgumentException("PostgreSqlTlsMode conflicts with a TLS parameter in Line");
+			}
+		}
 	}
 
 	// --- Pool Configuration ---

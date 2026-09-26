@@ -4,6 +4,7 @@ import org.spongepowered.configurate.ConfigurationNode;
 
 import com.bencodez.simpleapi.file.velocity.VelocityYMLFile;
 import com.bencodez.simpleapi.sql.mysql.DbType;
+import com.bencodez.simpleapi.sql.mysql.PostgreSqlTlsMode;
 
 public class MysqlConfigVelocity extends MysqlConfig {
 
@@ -59,6 +60,8 @@ public class MysqlConfigVelocity extends MysqlConfig {
 
 		// --- Driver / Behavior Options ---
 		setUseSSL(config.getBoolean(node(config, prePath, "UseSSL"), false));
+		setPostgreSqlTlsMode(PostgreSqlTlsMode.fromString(
+				config.getString(node(config, prePath, "PostgreSqlTlsMode"), "LEGACY")));
 		setPublicKeyRetrieval(config.getBoolean(node(config, prePath, "PublicKeyRetrieval"), false));
 		setUseMariaDB(config.getBoolean(node(config, prePath, "UseMariaDB"), false));
 
