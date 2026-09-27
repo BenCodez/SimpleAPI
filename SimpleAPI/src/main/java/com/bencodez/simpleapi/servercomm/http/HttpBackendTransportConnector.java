@@ -22,6 +22,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -50,6 +51,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	private volatile HttpClientCredentialStore.HttpClientProfile profile;
 	private final String serverId;
 	private final Consumer<JsonEnvelope> onEnvelope;
+	private final HttpEnvelopeWireCodec wireCodec;
 	private volatile HttpClient client;
 	private volatile HttpClientCredentialStore.ClientCredential credential;
 	private final Path credentialDirectory;
@@ -105,14 +107,23 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 
 	private HttpBackendTransportConnector(HttpClientCredentialStore.EnrolledClient enrolled, Consumer<JsonEnvelope> onEnvelope,
 			Path credentialDirectory) throws Exception {
-		this(enrolled == null ? null : enrolled.profile(), enrolled == null ? null : enrolled.credential(), onEnvelope, credentialDirectory);
+		this(enrolled == null ? null : enrolled.profile(), enrolled == null ? null : enrolled.credential(), onEnvelope,
+				credentialDirectory, HttpEnvelopeWireCodec.identity());
 	}
 
 	private HttpBackendTransportConnector(HttpClientCredentialStore.HttpClientProfile profile,
 			HttpClientCredentialStore.ClientCredential credential, Consumer<JsonEnvelope> onEnvelope, Path credentialDirectory) throws Exception {
-		if (profile == null || credential == null || onEnvelope == null) throw new IllegalArgumentException("HTTP backend transport configuration is invalid");
+		this(profile, credential, onEnvelope, credentialDirectory, HttpEnvelopeWireCodec.identity());
+	}
+
+	private HttpBackendTransportConnector(HttpClientCredentialStore.HttpClientProfile profile,
+			HttpClientCredentialStore.ClientCredential credential, Consumer<JsonEnvelope> onEnvelope, Path credentialDirectory,
+			HttpEnvelopeWireCodec wireCodec) throws Exception {
+		if (profile == null || credential == null || onEnvelope == null || wireCodec == null)
+			throw new IllegalArgumentException("HTTP backend transport configuration is invalid");
 		if (!matchesCredential(profile, credential)) throw new IllegalArgumentException("HTTP client certificate does not match transport profile");
 		this.profile = profile; this.serverId = profile.serverId(); this.onEnvelope = onEnvelope;
+		this.wireCodec = HttpEnvelopeWireCodec.serialized(wireCodec);
 		this.credential = credential;
 		this.credentialDirectory = credentialDirectory;
 		HttpInboundDeliveryStore loadedInbound = null, loadedAcknowledgements = null;
@@ -163,6 +174,21 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	/** Starts normal transport using only the persisted certificate and non-secret profile. */
 	public HttpBackendTransportConnector(Path credentials, Consumer<JsonEnvelope> onEnvelope) throws Exception {
 		this(HttpClientCredentialStore.loadEnrolled(credentials), onEnvelope, credentials);
+	}
+
+	/**
+	 * Starts normal transport with a codec applied only at the HTTP wire boundary. Queued semantic
+	 * envelopes remain independent of the codec's current key or policy.
+	 */
+	public HttpBackendTransportConnector(Path credentials, Consumer<JsonEnvelope> onEnvelope,
+			HttpEnvelopeWireCodec wireCodec) throws Exception {
+		this(HttpClientCredentialStore.loadEnrolled(credentials), onEnvelope, credentials, wireCodec);
+	}
+
+	private HttpBackendTransportConnector(HttpClientCredentialStore.EnrolledClient enrolled,
+			Consumer<JsonEnvelope> onEnvelope, Path credentialDirectory, HttpEnvelopeWireCodec wireCodec) throws Exception {
+		this(enrolled == null ? null : enrolled.profile(), enrolled == null ? null : enrolled.credential(), onEnvelope,
+				credentialDirectory, wireCodec);
 	}
 
 	/** Performs enrollment network I/O; call this from a connector/setup worker, never a platform main thread. */
@@ -252,8 +278,13 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 	 */
 	public boolean send(JsonEnvelope envelope) {
 		if (envelope == null) return false;
-		try { HttpTransportProtocol.validateEnvelope(envelope); }
-		catch (IllegalArgumentException invalid) { return false; }
+		try {
+			HttpTransportProtocol.validateEnvelope(envelope);
+			JsonEnvelope encoded = wireCodec.encode(envelope);
+			if (encoded == null) throw new IllegalArgumentException("HTTP wire codec returned no envelope");
+			HttpTransportProtocol.validateEnvelope(encoded);
+		}
+		catch (RuntimeException invalid) { return false; }
 		synchronized (state) {
 			if (!sendAdmissionOpen || !running.get()) return false;
 			if (outgoing.size() >= HttpTransportProtocol.MAX_QUEUE) return false;
@@ -279,8 +310,16 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 				acks = first(acknowledgements);
 				ackConfirmations = first(acknowledgementConfirmations);
 				requestSequence = sequence++;
+				List<HttpTransportProtocol.Delivery> encoded = new java.util.ArrayList<>(
+						Math.min(outgoing.size(), HttpTransportProtocol.MAX_BATCH));
+				for (HttpTransportProtocol.Delivery delivery : outgoing.values()) {
+					if (encoded.size() == HttpTransportProtocol.MAX_BATCH) break;
+					JsonEnvelope envelope = Objects.requireNonNull(wireCodec.encode(delivery.envelope()), "encoded envelope");
+					HttpTransportProtocol.validateEnvelope(envelope);
+					encoded.add(new HttpTransportProtocol.Delivery(delivery.id(), envelope));
+				}
 				messages = HttpTransportProtocol.fittingMessages(serverId, session, requestSequence, acks,
-						ackConfirmations, outgoing.values());
+						ackConfirmations, encoded);
 				for (int index = 0; index < acks.size(); index++) acknowledgements.removeFirst();
 				for (int index = 0; index < ackConfirmations.size(); index++) acknowledgementConfirmations.removeFirst();
 			}
@@ -292,6 +331,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			HttpTransportProtocol.Packet packet = HttpTransportProtocol.parsePacket(response.body());
 			if (!serverId.equals(packet.server()) || !session.equals(packet.session()) || packet.sequence() != requestSequence) return false;
 			if (!acks.equals(packet.ackConfirmations())) return false;
+			packet = decodePacket(packet);
 			confirmAcknowledgements(packet.ackConfirmations());
 			acknowledgementsConfirmed = true;
 			if (!confirmSentAcknowledgementConfirmations(ackConfirmations)) return false;
@@ -311,6 +351,16 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (!acknowledgementsConfirmed) requeue(acknowledgements, acks);
 			if (!confirmationsConfirmed) requeue(acknowledgementConfirmations, ackConfirmations);
 		}
+	}
+	private HttpTransportProtocol.Packet decodePacket(HttpTransportProtocol.Packet packet) {
+		List<HttpTransportProtocol.Delivery> decoded = new java.util.ArrayList<>(packet.messages().size());
+		for (HttpTransportProtocol.Delivery delivery : packet.messages()) {
+			JsonEnvelope envelope = Objects.requireNonNull(wireCodec.decode(delivery.envelope()), "decoded envelope");
+			HttpTransportProtocol.validateEnvelope(envelope);
+			decoded.add(new HttpTransportProtocol.Delivery(delivery.id(), envelope));
+		}
+		return new HttpTransportProtocol.Packet(packet.server(), packet.session(), packet.sequence(), packet.acks(),
+				packet.ackConfirmations(), decoded);
 	}
 	/** Stops normal polling and gives already-queued outbound messages a bounded final delivery attempt. */
 	public boolean flushOutgoing(long deadlineNanos) {

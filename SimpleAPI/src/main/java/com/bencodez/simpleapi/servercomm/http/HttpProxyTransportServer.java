@@ -84,6 +84,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	private final Path durableIncomingRoot;
 	private final Consumer<ReceivedEnvelope> onEnvelope;
 	private final DeliveryAcknowledgement onAcknowledged;
+	private final HttpEnvelopeWireCodec wireCodec;
 	private final LongSupplier nanoTime;
 	private volatile boolean closed;
 	private boolean closeFinalizing, closeFinalized;
@@ -91,7 +92,8 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 	/** In-memory constructor for tests; production callers must supply a durable state directory. */
 	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
 			Consumer<ReceivedEnvelope> onEnvelope) throws Exception {
-		this(bind, identity, authority, null, onEnvelope, (serverId, deliveryId) -> { }, System::nanoTime);
+		this(bind, identity, authority, null, onEnvelope, (serverId, deliveryId) -> { },
+				HttpEnvelopeWireCodec.identity(), System::nanoTime);
 	}
 
 	public HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
@@ -103,17 +105,37 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			Path outgoingDirectory, Consumer<ReceivedEnvelope> onEnvelope,
 			DeliveryAcknowledgement onAcknowledged) throws Exception {
 		this(bind, identity, authority, Objects.requireNonNull(outgoingDirectory, "outgoingDirectory is required"),
-				onEnvelope, onAcknowledged, System::nanoTime);
+				onEnvelope, onAcknowledged, HttpEnvelopeWireCodec.identity(), System::nanoTime);
+	}
+
+	/**
+	 * Creates a durable transport whose queues retain semantic envelopes while the supplied codec
+	 * is applied independently to every HTTP transmission and receipt.
+	 */
+	public HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
+			Path outgoingDirectory, Consumer<ReceivedEnvelope> onEnvelope,
+			DeliveryAcknowledgement onAcknowledged, HttpEnvelopeWireCodec wireCodec) throws Exception {
+		this(bind, identity, authority, Objects.requireNonNull(outgoingDirectory, "outgoingDirectory is required"),
+				onEnvelope, onAcknowledged, wireCodec, System::nanoTime);
 	}
 
 	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
 			Path outgoingDirectory, Consumer<ReceivedEnvelope> onEnvelope,
 			DeliveryAcknowledgement onAcknowledged, LongSupplier nanoTime) throws Exception {
+		this(bind, identity, authority, outgoingDirectory, onEnvelope, onAcknowledged,
+				HttpEnvelopeWireCodec.identity(), nanoTime);
+	}
+
+	HttpProxyTransportServer(InetSocketAddress bind, HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
+			Path outgoingDirectory, Consumer<ReceivedEnvelope> onEnvelope,
+			DeliveryAcknowledgement onAcknowledged, HttpEnvelopeWireCodec wireCodec, LongSupplier nanoTime) throws Exception {
 		if (bind == null || identity == null || authority == null || onEnvelope == null || onAcknowledged == null)
 			throw new IllegalArgumentException("HTTP transport configuration is required");
-		if (nanoTime == null) throw new IllegalArgumentException("HTTP transport clock is required");
+		if (wireCodec == null || nanoTime == null) throw new IllegalArgumentException("HTTP transport codec and clock are required");
 		this.identity = identity; this.authority = authority; this.onEnvelope = onEnvelope;
-		this.onAcknowledged = onAcknowledged; this.nanoTime = nanoTime;
+		this.onAcknowledged = onAcknowledged;
+		this.wireCodec = HttpEnvelopeWireCodec.serialized(wireCodec);
+		this.nanoTime = nanoTime;
 		durableOutgoing = outgoingDirectory == null ? null : new DurableOutgoingQueue(outgoingDirectory);
 		HttpsServer createdServer = null;
 		ThreadPoolExecutor createdListener = null, createdHandler = null;
@@ -138,6 +160,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			}
 			if (durableOutgoing != null) for (Map.Entry<String, List<HttpTransportProtocol.Delivery>> pending
 					: durableOutgoing.load().entrySet()) {
+				for (HttpTransportProtocol.Delivery delivery : pending.getValue()) validateForWire(delivery.envelope());
 				BackendState state = backendState(pending.getKey());
 				state.restore(pending.getValue());
 			}
@@ -297,8 +320,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			serverId = HttpTlsIdentity.canonicalServerId(serverId);
 			HttpTransportProtocol.validId(deliveryId);
 			HttpTransportProtocol.validateEnvelope(envelope);
+			validateForWire(envelope);
 		}
-		catch (IllegalArgumentException invalid) { return false; }
+		catch (RuntimeException invalid) { return false; }
 		BackendState backend;
 		final String canonicalServerId = serverId;
 		try { backend = backendState(canonicalServerId); }
@@ -309,6 +333,11 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			if (generatedId) throw new DeliveryRetryException(deliveryId, indeterminate);
 			throw indeterminate;
 		}
+	}
+	private void validateForWire(JsonEnvelope envelope) {
+		JsonEnvelope encoded = wireCodec.encode(envelope);
+		if (encoded == null) throw new IllegalArgumentException("HTTP wire codec returned no envelope");
+		HttpTransportProtocol.validateEnvelope(encoded);
 	}
 
 	@Override public void close() {
@@ -400,15 +429,17 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		if (bodyError != 0) { reply(exchange, bodyError, new byte[0]); return; }
 		if (!admission.tryAcquire()) { reply(exchange, 429, new byte[0]); return; }
 		try {
-			HttpTransportProtocol.Packet packet = HttpTransportProtocol.parsePacket(read(exchange.getRequestBody(), HttpTransportProtocol.MAX_BODY_BYTES));
+			HttpTransportProtocol.Packet packet = HttpTransportProtocol.parsePacket(
+					read(exchange.getRequestBody(), HttpTransportProtocol.MAX_BODY_BYTES));
 			X509Certificate certificate = peerCertificate(exchange);
 			if (certificate == null || !authority.authenticate(packet.server(), certificate)) { reply(exchange, 401, new byte[0]); return; }
+			packet = decodePacket(packet);
 			BackendState backend;
 			backend = backendState(packet.server());
 			if (!backend.beginPoll(packet.session())) { reply(exchange, 409, new byte[0]); return; }
 			try {
 				handlePacket(packet, backend);
-				Response response = backend.await(packet.server(), packet.session(), packet.sequence(), packet.acks());
+				Response response = backend.await(packet.server(), packet.session(), packet.sequence(), packet.acks(), wireCodec);
 				reply(exchange, 200, HttpTransportProtocol.response(packet.server(), packet.session(), packet.sequence(),
 						response.acks(), packet.acks(), response.messages()));
 			} finally { backend.endPoll(); }
@@ -428,6 +459,16 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		backend.acknowledge(packet.acks());
 		synchronized (backend) { accepted = backend.acceptIncoming(packet.messages()); }
 		for (HttpTransportProtocol.Delivery delivery : accepted) dispatch(packet.server(), backend, delivery);
+	}
+	private HttpTransportProtocol.Packet decodePacket(HttpTransportProtocol.Packet packet) {
+		List<HttpTransportProtocol.Delivery> decoded = new java.util.ArrayList<>(packet.messages().size());
+		for (HttpTransportProtocol.Delivery delivery : packet.messages()) {
+			JsonEnvelope envelope = Objects.requireNonNull(wireCodec.decode(delivery.envelope()), "decoded envelope");
+			HttpTransportProtocol.validateEnvelope(envelope);
+			decoded.add(new HttpTransportProtocol.Delivery(delivery.id(), envelope));
+		}
+		return new HttpTransportProtocol.Packet(packet.server(), packet.session(), packet.sequence(), packet.acks(),
+				packet.ackConfirmations(), decoded);
 	}
 	private void dispatch(String serverId, BackendState backend, HttpTransportProtocol.Delivery delivery) {
 		Runnable callback = () -> {
@@ -718,6 +759,11 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 		}
 		synchronized Response await(String serverId, String requestedSession, long requestedSequence,
 				Collection<String> ackConfirmations) {
+			return await(serverId, requestedSession, requestedSequence, ackConfirmations,
+					HttpEnvelopeWireCodec.identity());
+		}
+		synchronized Response await(String serverId, String requestedSession, long requestedSequence,
+				Collection<String> ackConfirmations, HttpEnvelopeWireCodec wireCodec) {
 			long deadline = System.nanoTime() + LONG_POLL.toNanos();
 			while (acknowledgements.isEmpty() && !hasUndelivered()) {
 				long retryRemaining = nanosUntilRedelivery(nanoTime.getAsLong());
@@ -726,15 +772,26 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 				long wait = Math.min(requestRemaining, retryRemaining);
 				try { TimeUnit.NANOSECONDS.timedWait(this, wait); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
 			}
-			List<String> acks = new java.util.ArrayList<>(); while (!acknowledgements.isEmpty() && acks.size() < HttpTransportProtocol.MAX_BATCH) acks.add(acknowledgements.remove());
+			List<String> acks = new java.util.ArrayList<>();
+			for (String acknowledgement : acknowledgements) {
+				if (acks.size() == HttpTransportProtocol.MAX_BATCH) break;
+				acks.add(acknowledgement);
+			}
 			List<HttpTransportProtocol.Delivery> candidates = new java.util.ArrayList<>();
 			long now = nanoTime.getAsLong();
 			if (hasUndelivered() || redeliveryDue(now)) for (HttpTransportProtocol.Delivery delivery : outgoing.values()) {
 				if (!deliveredAtNanos.containsKey(delivery.id()) || redeliveryDue(delivery.id(), now)) candidates.add(delivery);
 				if (candidates.size() == HttpTransportProtocol.MAX_BATCH) break;
 			}
+			List<HttpTransportProtocol.Delivery> encoded = new java.util.ArrayList<>(candidates.size());
+			for (HttpTransportProtocol.Delivery delivery : candidates) {
+				JsonEnvelope envelope = Objects.requireNonNull(wireCodec.encode(delivery.envelope()), "encoded envelope");
+				HttpTransportProtocol.validateEnvelope(envelope);
+				encoded.add(new HttpTransportProtocol.Delivery(delivery.id(), envelope));
+			}
 			List<HttpTransportProtocol.Delivery> messages = HttpTransportProtocol.fittingMessages(serverId, requestedSession,
-					requestedSequence, acks, ackConfirmations, candidates);
+					requestedSequence, acks, ackConfirmations, encoded);
+			for (int index = 0; index < acks.size(); index++) acknowledgements.remove();
 			long deliveredAt = nanoTime.getAsLong();
 			for (HttpTransportProtocol.Delivery delivery : messages) deliveredAtNanos.put(delivery.id(), deliveredAt);
 			return new Response(acks, messages);
