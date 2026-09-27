@@ -32,6 +32,7 @@ class BuildInputPinningTest {
 	void ordinaryBuildHasNoWriteScopedDependencySubmission() throws IOException {
 		String workflow = Files.readString(Path.of("..", ".github", "workflows", "maven.yml"));
 
+		assertTrue(Pattern.compile("(?m)^permissions:\\R  contents: read$").matcher(workflow).find());
 		assertFalse(workflow.contains("contents: write"));
 		assertFalse(workflow.contains("maven-dependency-submission-action"));
 	}
