@@ -2,7 +2,7 @@ name: Deploy Javadoc
 
 on:
   release:
-    types: [published]
+    types: [published, released]
 
 permissions:
   contents: read
@@ -38,7 +38,8 @@ jobs:
             exit 0
           fi
 
-          tag_commit="$(git rev-parse --verify "refs/tags/${TAG_NAME}^{commit}")"
+          git fetch --no-tags origin "refs/tags/${TAG_NAME}:refs/tags/release"
+          tag_commit="$(git rev-parse --verify 'refs/tags/release^{commit}')"
           if git merge-base --is-ancestor "$tag_commit" origin/main; then
             echo "eligible=true" >> "$GITHUB_OUTPUT"
             echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
@@ -75,7 +76,9 @@ jobs:
 
   deploy:
     needs: [verify-release, build]
-    if: needs.verify-release.outputs.eligible == 'true'
+    if: >-
+      needs.verify-release.outputs.eligible == 'true' &&
+      needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
