@@ -23,6 +23,8 @@ class BuildInputPinningTest {
 		assertTrue(workflow.contains("types: [published, released]"));
 		assertTrue(verificationJob.contains("git merge-base --is-ancestor \"$tag_commit\" origin/main"));
 		assertFalse(workflow.contains("target_commitish"));
+		assertTrue(verificationJob.contains("FETCH_HEAD^{commit}"));
+		assertFalse(verificationJob.contains("refs/tags/release"));
 		assertTrue(buildJob.contains("ref: ${{ needs.verify-release.outputs.commit }}"));
 		assertTrue(buildJob.contains("path: SimpleAPI/target/reports/apidocs"));
 		assertTrue(deployJob.contains("needs.build.result == 'success'"));
