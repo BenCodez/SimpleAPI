@@ -284,7 +284,7 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 			if (encoded == null) throw new IllegalArgumentException("HTTP wire codec returned no envelope");
 			HttpTransportProtocol.validateEnvelope(encoded);
 		}
-		catch (IllegalArgumentException invalid) { return false; }
+		catch (RuntimeException invalid) { return false; }
 		synchronized (state) {
 			if (!sendAdmissionOpen || !running.get()) return false;
 			if (outgoing.size() >= HttpTransportProtocol.MAX_QUEUE) return false;

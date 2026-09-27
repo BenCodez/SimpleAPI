@@ -322,7 +322,7 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			HttpTransportProtocol.validateEnvelope(envelope);
 			validateForWire(envelope);
 		}
-		catch (IllegalArgumentException invalid) { return false; }
+		catch (RuntimeException invalid) { return false; }
 		BackendState backend;
 		final String canonicalServerId = serverId;
 		try { backend = backendState(canonicalServerId); }

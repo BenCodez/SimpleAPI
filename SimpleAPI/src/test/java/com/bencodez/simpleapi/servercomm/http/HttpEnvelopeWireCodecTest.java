@@ -182,6 +182,34 @@ class HttpEnvelopeWireCodecTest {
 		}
 	}
 
+	@Test
+	void uncheckedCodecRejectionReturnsFalseAtBothSendBoundaries() throws Exception {
+		HttpEnvelopeWireCodec rejecting = new HttpEnvelopeWireCodec() {
+			@Override public JsonEnvelope encode(JsonEnvelope envelope) {
+				throw new IllegalStateException("codec rejected envelope");
+			}
+
+			@Override public JsonEnvelope decode(JsonEnvelope envelope) { return envelope; }
+		};
+		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("rejecting-proxy"), "localhost");
+		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("rejecting-authority"));
+		try (HttpProxyTransportServer server = server(identity, authority, directory.resolve("rejecting-outgoing"),
+				rejecting, ignored -> { })) {
+			assertFalse(server.send("backend-a", UUID.randomUUID().toString(), JsonEnvelope.builder("test").build()));
+			server.start();
+			HttpConnectionCode code = authority.createConnectionCode("backend-a", server.endpoint("localhost"),
+					Duration.ofMinutes(5));
+			Path credentials = directory.resolve("rejecting-client");
+			HttpBackendTransportConnector.enroll(code, "backend-a", credentials);
+			try (HttpBackendTransportConnector connector = new HttpBackendTransportConnector(credentials,
+					ignored -> { }, rejecting)) {
+				connector.start();
+				assertTrue(connector.awaitFirstResponse(System.nanoTime() + TimeUnit.SECONDS.toNanos(8)));
+				assertFalse(connector.send(JsonEnvelope.builder("test").build()));
+			}
+		}
+	}
+
 	private static HttpProxyTransportServer server(HttpTlsIdentity identity, HttpEnrollmentAuthority authority,
 			Path outgoing, HttpEnvelopeWireCodec codec,
 			java.util.function.Consumer<HttpProxyTransportServer.ReceivedEnvelope> consumer) throws Exception {
