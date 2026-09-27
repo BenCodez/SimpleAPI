@@ -1,5 +1,7 @@
 package com.bencodez.simpleapi.servercomm.http;
 
+import java.util.Objects;
+
 import com.bencodez.simpleapi.servercomm.codec.JsonEnvelope;
 
 /**
@@ -20,6 +22,12 @@ public interface HttpEnvelopeWireCodec {
 		return Identity.INSTANCE;
 	}
 
+	/** Serializes a codec shared by concurrent HTTP sessions. */
+	static HttpEnvelopeWireCodec serialized(HttpEnvelopeWireCodec codec) {
+		Objects.requireNonNull(codec, "wireCodec");
+		return codec == Identity.INSTANCE ? codec : new Serialized(codec);
+	}
+
 	final class Identity implements HttpEnvelopeWireCodec {
 		private static final Identity INSTANCE = new Identity();
 
@@ -28,5 +36,27 @@ public interface HttpEnvelopeWireCodec {
 		@Override public JsonEnvelope encode(JsonEnvelope envelope) { return envelope; }
 
 		@Override public JsonEnvelope decode(JsonEnvelope envelope) { return envelope; }
+	}
+
+	final class Serialized implements HttpEnvelopeWireCodec {
+		private final HttpEnvelopeWireCodec delegate;
+
+		private Serialized(HttpEnvelopeWireCodec delegate) {
+			this.delegate = delegate;
+		}
+
+		@Override
+		public JsonEnvelope encode(JsonEnvelope envelope) {
+			synchronized (delegate) {
+				return delegate.encode(envelope);
+			}
+		}
+
+		@Override
+		public JsonEnvelope decode(JsonEnvelope envelope) {
+			synchronized (delegate) {
+				return delegate.decode(envelope);
+			}
+		}
 	}
 }

@@ -122,7 +122,8 @@ public final class HttpBackendTransportConnector implements AutoCloseable {
 		if (profile == null || credential == null || onEnvelope == null || wireCodec == null)
 			throw new IllegalArgumentException("HTTP backend transport configuration is invalid");
 		if (!matchesCredential(profile, credential)) throw new IllegalArgumentException("HTTP client certificate does not match transport profile");
-		this.profile = profile; this.serverId = profile.serverId(); this.onEnvelope = onEnvelope; this.wireCodec = wireCodec;
+		this.profile = profile; this.serverId = profile.serverId(); this.onEnvelope = onEnvelope;
+		this.wireCodec = HttpEnvelopeWireCodec.serialized(wireCodec);
 		this.credential = credential;
 		this.credentialDirectory = credentialDirectory;
 		HttpInboundDeliveryStore loadedInbound = null, loadedAcknowledgements = null;

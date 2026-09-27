@@ -13,13 +13,68 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class HttpEnvelopeWireCodecTest {
 	@TempDir Path directory;
+
+	@Test
+	void serializedWrappersCoordinateConcurrentAccessToOneCodec() throws Exception {
+		CountDownLatch firstEntered = new CountDownLatch(1);
+		CountDownLatch releaseFirst = new CountDownLatch(1);
+		AtomicInteger active = new AtomicInteger();
+		AtomicInteger maximumActive = new AtomicInteger();
+		HttpEnvelopeWireCodec delegate = new HttpEnvelopeWireCodec() {
+			private JsonEnvelope apply(JsonEnvelope envelope) {
+				int current = active.incrementAndGet();
+				maximumActive.accumulateAndGet(current, Math::max);
+				try {
+					if (current == 1) {
+						firstEntered.countDown();
+						assertTrue(releaseFirst.await(5, TimeUnit.SECONDS));
+					}
+					return envelope;
+				} catch (InterruptedException interrupted) {
+					Thread.currentThread().interrupt();
+					throw new IllegalStateException(interrupted);
+				} finally {
+					active.decrementAndGet();
+				}
+			}
+
+			@Override public JsonEnvelope encode(JsonEnvelope envelope) { return apply(envelope); }
+			@Override public JsonEnvelope decode(JsonEnvelope envelope) { return apply(envelope); }
+		};
+		HttpEnvelopeWireCodec first = HttpEnvelopeWireCodec.serialized(delegate);
+		HttpEnvelopeWireCodec second = HttpEnvelopeWireCodec.serialized(delegate);
+		JsonEnvelope envelope = JsonEnvelope.builder("test").build();
+		var executor = Executors.newFixedThreadPool(2);
+		try {
+			var firstCall = executor.submit(() -> first.encode(envelope));
+			assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
+			CountDownLatch secondAttempted = new CountDownLatch(1);
+			var secondCall = executor.submit(() -> {
+				secondAttempted.countDown();
+				return second.decode(envelope);
+			});
+			assertTrue(secondAttempted.await(5, TimeUnit.SECONDS));
+			assertThrows(java.util.concurrent.TimeoutException.class,
+					() -> secondCall.get(100, TimeUnit.MILLISECONDS));
+			assertEquals(1, maximumActive.get());
+			releaseFirst.countDown();
+			assertEquals(envelope, firstCall.get(5, TimeUnit.SECONDS));
+			assertEquals(envelope, secondCall.get(5, TimeUnit.SECONDS));
+			assertEquals(1, maximumActive.get());
+		} finally {
+			releaseFirst.countDown();
+			executor.shutdownNow();
+		}
+	}
 
 	@Test
 	void durableProxyQueueKeepsSemanticEnvelopeAcrossCodecChange() throws Exception {

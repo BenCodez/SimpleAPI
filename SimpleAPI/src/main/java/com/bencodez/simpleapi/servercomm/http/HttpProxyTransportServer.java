@@ -133,7 +133,9 @@ public final class HttpProxyTransportServer implements AutoCloseable {
 			throw new IllegalArgumentException("HTTP transport configuration is required");
 		if (wireCodec == null || nanoTime == null) throw new IllegalArgumentException("HTTP transport codec and clock are required");
 		this.identity = identity; this.authority = authority; this.onEnvelope = onEnvelope;
-		this.onAcknowledged = onAcknowledged; this.wireCodec = wireCodec; this.nanoTime = nanoTime;
+		this.onAcknowledged = onAcknowledged;
+		this.wireCodec = HttpEnvelopeWireCodec.serialized(wireCodec);
+		this.nanoTime = nanoTime;
 		durableOutgoing = outgoingDirectory == null ? null : new DurableOutgoingQueue(outgoingDirectory);
 		HttpsServer createdServer = null;
 		ThreadPoolExecutor createdListener = null, createdHandler = null;
