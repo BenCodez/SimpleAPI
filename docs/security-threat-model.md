@@ -39,6 +39,20 @@ A malicious installed plugin already shares the JVM and can usually bypass Simpl
 
 Security review should focus on benign consumers passing lower-trust data into a helper whose contract suggests safe handling, or on helpers directly used by exposed higher layers.
 
+### Remote peers and on-path network observers
+
+Choosing a host, broker, database, or socket endpoint is an operator decision, but that does **not** make the selected remote peer, DNS/network path, or other hosts/tenants able to observe or modify traffic trusted. Treat an on-path observer and a compromised/malicious remote service as lower-trust actors unless the selected transport provides and successfully verifies the required confidentiality and peer/message authentication.
+
+Review the guarantee transport by transport:
+
+- HTTP transport is the strong authenticated case: private-CA TLS, certificate/hostname/pin checks, enrolled peer identity, bounded protocol messages, and replay/delivery state should protect against passive and active network observers when those checks succeed.
+- Redis supports optional TLS. The constructor defaults to `ssl=false`; username/password authentication over plaintext does not protect credentials or payloads from an on-path observer. When TLS is enabled, hostname identification must remain active.
+- MQTT accepts caller-supplied broker URLs/options and the convenience username/password constructor does not itself require TLS. The security of credentials and payloads therefore depends on the selected MQTT scheme/options and broker configuration.
+- Raw socket transport has no intrinsic peer identity. Legacy `EncryptionHandler` AES provides optional confidentiality but does not by itself provide authenticated encryption, sender identity, or replay protection.
+- MySQL/MariaDB `UseSSL` may provide encryption, but the repository does not treat that flag alone as a promise of hostname/certificate identity verification. PostgreSQL `VERIFY_FULL` is the explicit verified-TLS mode for that driver.
+
+Do not classify intentional plaintext/private-network compatibility as an authentication bypass by itself. Do report silent downgrade from an explicitly selected secure mode, credential disclosure where the API/configuration claims protection, peer-identity verification bypass, or code that treats an unauthenticated/plaintext channel as stronger than its documented guarantee.
+
 ### HTTP enrollment bootstrap
 
 The copy/paste HTTP connection code is bootstrap trust material. Its embedded MAC is keyed by the token contained in the same code, so it detects corruption but does **not** authenticate wholesale replacement of the code. Initial endpoint and certificate trust therefore depends on the operator receiving the complete connection code through an authentic and confidential administrative channel.
@@ -146,13 +160,14 @@ Severity depends on the consumer. A broken round-trip with no security-sensitive
 
 SimpleAPI contains reusable communication primitives used by higher-level plugins.
 
-Do not assume encryption means authentication. Determine the exact guarantee of each helper.
+Do not assume an operator-selected endpoint is trustworthy merely because it is configured, and do not assume encryption means authentication. Include both malicious remote peers and on-path network observers in the analysis, then determine the exact confidentiality, peer-identity, message-integrity, and replay guarantee of each helper.
 
 Search for:
 
 - unauthenticated messages exposed through an API that consumers reasonably treat as trusted;
 - sender/origin identifiers supplied only by the payload without channel binding;
 - replay or duplicate delivery;
+- plaintext credential or payload exposure to on-path observers where a secure mode was expected;
 - confidentiality without integrity/authentication;
 - key reuse across protocol domains;
 - unbounded payload/message queues;
@@ -255,12 +270,13 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 11. Replace, relay, replay, or disclose an HTTP connection code before enrollment and verify the implementation relies only on the explicitly trusted out-of-band delivery channel, code expiry, single-use semantics, identity binding, and pinned certificate data.
 12. Create/load every persisted cryptographic secret under permissive umask and mixed local-account conditions; verify paths that promise private storage actually enforce it, and identify legacy paths such as `EncryptionHandler` that do not.
 13. Rebuild from the same source while varying Maven repository availability, mutable snapshot contents, and transitive resolution; verify reviewed/released artifacts cannot silently substitute different shaded runtime bytes without detection.
+14. Place an active network observer or malicious endpoint between each non-HTTP transport and its configured peer; verify plaintext/optional-TLS modes are classified according to their real guarantees, secure modes cannot silently downgrade, credentials are protected when promised, and unauthenticated encryption is never mistaken for peer identity or message authenticity.
 
 ## Scan calibration and severity
 
 Critical: ordinary-player or remote input reaches arbitrary JVM code execution, arbitrary host/plugin file write, or SQL syntax capable of modifying unrelated data through a SimpleAPI helper contract.
 
-High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS verification bypass despite explicit VERIFY_FULL; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; repeatable cross-user/state corruption or resource exhaustion affecting the server.
+High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; repeatable cross-user/state corruption or resource exhaustion affecting the server.
 
 Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded but practical database or queue DoS; meaningful credential disclosure to limited readers; lifecycle races causing occasional duplicate or lost privileged operations.
 
