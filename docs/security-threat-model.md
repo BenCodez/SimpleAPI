@@ -41,17 +41,17 @@ Security review should focus on benign consumers passing lower-trust data into a
 
 ### Remote peers and on-path network observers
 
-Choosing a host, broker, database, or socket endpoint is an operator decision, but that does **not** make the selected remote peer, DNS/network path, or other hosts/tenants able to observe or modify traffic trusted. Treat an on-path observer and a compromised/malicious remote service as lower-trust actors unless the selected transport provides and successfully verifies the required confidentiality and peer/message authentication.
+Choosing a host, broker, database, or socket endpoint is an operator decision, but that does **not** make the selected remote peer, DNS/network path, or other hosts/tenants able to observe or modify traffic trusted. Treat both on-path observers and compromised/malicious remote services as lower-trust actors. Successful TLS, certificate, broker, database, or message authentication can establish peer identity and neutralize some on-path impersonation/tampering risks, but it does **not** make the authenticated peer's payload, database rows, broker messages, or envelope fields trusted input.
 
 Review the guarantee transport by transport:
 
-- HTTP transport is the strong authenticated case: private-CA TLS, certificate/hostname/pin checks, enrolled peer identity, bounded protocol messages, and replay/delivery state should protect against passive and active network observers when those checks succeed.
+- HTTP transport is the strong authenticated case against on-path impersonation: private-CA TLS, certificate/hostname/pin checks, enrolled peer identity, bounded protocol messages, and replay/delivery state should protect against passive and active network observers when those checks succeed. An authenticated backend/proxy remains lower-trust for message contents and operation authorization; identity proof does not authorize every subchannel or payload.
 - Redis supports optional TLS. The constructor defaults to `ssl=false`; username/password authentication over plaintext does not protect credentials or payloads from an on-path observer. When TLS is enabled, hostname identification must remain active.
 - MQTT accepts caller-supplied broker URLs/options and the convenience username/password constructor does not itself require TLS. The security of credentials and payloads therefore depends on the selected MQTT scheme/options and broker configuration.
 - Raw socket transport has no intrinsic peer identity. Legacy `EncryptionHandler` AES provides optional confidentiality but does not by itself provide authenticated encryption, sender identity, or replay protection.
 - MySQL/MariaDB `UseSSL` may provide encryption, but the repository does not treat that flag alone as a promise of hostname/certificate identity verification. PostgreSQL `VERIFY_FULL` is the explicit verified-TLS mode for that driver.
 
-Do not classify intentional plaintext/private-network compatibility as an authentication bypass by itself. Do report silent downgrade from an explicitly selected secure mode, credential disclosure where the API/configuration claims protection, peer-identity verification bypass, or code that treats an unauthenticated/plaintext channel as stronger than its documented guarantee.
+Do not classify intentional plaintext/private-network compatibility as an authentication bypass by itself. Do report silent downgrade from an explicitly selected secure mode, credential disclosure where the API/configuration claims protection, peer-identity verification bypass, or code that treats an unauthenticated/plaintext channel as stronger than its documented guarantee. Separately, continue treating authenticated peers as lower-trust data sources: a compromised backend, database, Redis server, or MQTT broker may send hostile but correctly authenticated content, which must still be schema-validated, authorized, and bounded before privileged callbacks or persistence.
 
 ### HTTP enrollment bootstrap
 
@@ -160,7 +160,7 @@ Severity depends on the consumer. A broken round-trip with no security-sensitive
 
 SimpleAPI contains reusable communication primitives used by higher-level plugins.
 
-Do not assume an operator-selected endpoint is trustworthy merely because it is configured, and do not assume encryption means authentication. Include both malicious remote peers and on-path network observers in the analysis, then determine the exact confidentiality, peer-identity, message-integrity, and replay guarantee of each helper.
+Do not assume an operator-selected endpoint is trustworthy merely because it is configured, and do not assume encryption means authentication. Include both malicious/compromised remote peers and on-path network observers in the analysis. First determine the exact confidentiality, peer-identity, message-integrity, and replay guarantee of each helper; then continue validating and authorizing the authenticated peer's content as lower-trust input.
 
 Search for:
 
