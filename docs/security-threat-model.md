@@ -48,7 +48,7 @@ Review the guarantee transport by transport:
 - HTTP transport is the strong authenticated case against on-path impersonation: private-CA TLS, certificate/hostname/pin checks, enrolled peer identity, bounded protocol messages, and replay/delivery state should protect against passive and active network observers when those checks succeed. An authenticated backend/proxy remains lower-trust for message contents and operation authorization; identity proof does not authorize every subchannel or payload.
 - Redis supports optional TLS. The constructor defaults to `ssl=false`; username/password authentication over plaintext does not protect credentials or payloads from an on-path observer. When TLS is enabled, hostname identification must remain active.
 - MQTT accepts caller-supplied broker URLs/options and the convenience username/password constructor does not itself require TLS. The security of credentials and payloads therefore depends on the selected MQTT scheme/options and broker configuration.
-- Raw socket transport has no intrinsic peer identity. Legacy `EncryptionHandler` AES provides optional confidentiality but does not by itself provide authenticated encryption, sender identity, or replay protection.
+- Raw socket transport has no intrinsic peer identity. Legacy `EncryptionHandler` calls `Cipher.getInstance("AES")` without an explicit mode, IV, or nonce; on common providers this resolves to deterministic ECB-style encryption. Treat it only as legacy obfuscation/limited confidentiality, **not** as modern semantic confidentiality, authenticated encryption, sender identity, or replay protection. Review the actual provider mode, IV/nonce use, key reuse, padding, integrity/MAC coverage, and whether repeated plaintext patterns remain visible.
 - MySQL/MariaDB `UseSSL` may provide encryption, but the repository does not treat that flag alone as a promise of hostname/certificate identity verification. PostgreSQL `VERIFY_FULL` is the explicit verified-TLS mode for that driver.
 
 Do not classify intentional plaintext/private-network compatibility as an authentication bypass by itself. Do report silent downgrade from an explicitly selected secure mode, credential disclosure where the API/configuration claims protection, peer-identity verification bypass, or code that treats an unauthenticated/plaintext channel as stronger than its documented guarantee. Separately, continue treating authenticated peers as lower-trust data sources: a compromised backend, database, Redis server, or MQTT broker may send hostile but correctly authenticated content, which must still be schema-validated, authorized, and bounded before privileged callbacks or persistence.
@@ -180,6 +180,19 @@ Search for:
 
 If authentication is intentionally the consuming plugin's responsibility, document that boundary rather than inventing a missing SimpleAPI contract.
 
+## Command dispatch and authorization
+
+Command routing is a security boundary when a consuming plugin exposes `CommandHandler` to ordinary players or non-player senders. Review the full gate before `execute` runs:
+
+- `hasPerm` and multi-permission parsing must enforce the intended permission for the actual sender;
+- `allowConsole` / `forceConsole` and player-vs-non-player checks must not let RCON, command blocks, proxy senders, or other non-player sources inherit unintended console authority;
+- argument-shape checks, special placeholders such as player selectors, and tab-completion helpers must not widen the action beyond what the permission authorizes;
+- authorization must be rechecked where delayed/asynchronous execution creates a meaningful stale-permission or stale-target window;
+- aliases or alternate dispatch paths must not bypass sender-type or permission gates;
+- permission denial and malformed arguments must fail before privileged consumer callbacks execute.
+
+`CommandHandler.runCommand` currently performs argument checks, sender-type gating, and `hasPerm` before scheduling `execute` asynchronously. Treat regressions that bypass those gates, execute before authorization, or apply a weaker gate on an alternate path as security-relevant when the callback performs privileged work.
+
 ## Concurrency, scheduling and lifecycle
 
 SimpleAPI is reused on Bukkit/Paper/Folia, proxies, and neutral/native contexts.
@@ -288,8 +301,9 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 11. Replace, relay, replay, or disclose an HTTP connection code before enrollment and verify the implementation relies only on the explicitly trusted out-of-band delivery channel, code expiry, single-use semantics, identity binding, and pinned certificate data.
 12. Create/load every persisted cryptographic secret under permissive umask and mixed local-account conditions; verify paths that promise private storage actually enforce it, and identify legacy paths such as `EncryptionHandler` that do not.
 13. Rebuild from the same source while varying Maven repository availability, mutable snapshot contents, and transitive resolution; verify reviewed/released artifacts cannot silently substitute different shaded runtime bytes without detection.
-14. Place an active network observer or malicious endpoint between each non-HTTP transport and its configured peer; verify plaintext/optional-TLS modes are classified according to their real guarantees, secure modes cannot silently downgrade, credentials are protected when promised, and unauthenticated encryption is never mistaken for peer identity or message authenticity.
-15. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
+14. Place an active network observer or malicious endpoint between each non-HTTP transport and its configured peer; verify plaintext/optional-TLS modes are classified according to their real guarantees, secure modes cannot silently downgrade, credentials are protected when promised, and legacy `EncryptionHandler` AES is never mistaken for authenticated or modern semantic confidentiality.
+15. Exercise `CommandHandler` as a player, console, RCON/command-block-like non-player sender, and through aliases/alternate paths; verify permission, sender-type, argument, and stale-authorization checks hold before every privileged callback.
+16. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
 
 ## Scan calibration and severity
 
