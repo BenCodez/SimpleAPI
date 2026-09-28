@@ -228,9 +228,15 @@ Apply the same local-principal reasoning to non-HTTP cryptographic material. In 
 
 Connection diagnostics may include host/database identifiers where operationally useful, but avoid full credential-bearing URLs and raw sensitive configuration.
 
-## Supply chain and compatibility
+## Supply chain, dependency provenance and compatibility
+
+Supply-chain review covers both CI privileges and the provenance of build inputs that become part of published artifacts.
 
 CI findings matter when untrusted PR-controlled code receives write-capable repository credentials, can poison trusted caches or artifacts, or can modify releases.
+
+Also review Maven repository and dependency trust because SimpleAPI resolves artifacts from multiple configured repositories and shades compile-scope dependencies into distributed JARs. Relevant targets include repository compromise, dependency substitution/confusion, mutable or replaced `SNAPSHOT` artifacts, vulnerable or malicious transitives, mismatched checksums/signatures where provenance controls exist, and release builds resolving bytes different from those previously reviewed or tested.
+
+Do not automatically classify every external repository or intentional development `SNAPSHOT` as a vulnerability. Severity should depend on whether a lower-trust or compromised upstream can alter the bytes used in a trusted build/release, whether those bytes are shaded or executed at runtime, and whether reproducibility/provenance controls would detect the substitution.
 
 SimpleAPI strongly values drop-in and API compatibility. Do not classify public signature changes, classifier/package regressions, config defaults, or platform leakage as security unless they cross a real trust boundary.
 
@@ -248,6 +254,7 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 10. Package the neutral/shared artifact and inspect signatures, annotations, static initializers, and service descriptors for unexpected platform linkage.
 11. Replace, relay, replay, or disclose an HTTP connection code before enrollment and verify the implementation relies only on the explicitly trusted out-of-band delivery channel, code expiry, single-use semantics, identity binding, and pinned certificate data.
 12. Create/load every persisted cryptographic secret under permissive umask and mixed local-account conditions; verify paths that promise private storage actually enforce it, and identify legacy paths such as `EncryptionHandler` that do not.
+13. Rebuild from the same source while varying Maven repository availability, mutable snapshot contents, and transitive resolution; verify reviewed/released artifacts cannot silently substitute different shaded runtime bytes without detection.
 
 ## Scan calibration and severity
 
@@ -257,7 +264,7 @@ High: realistic lower-trust SQL injection; authentication/origin bypass in a tra
 
 Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded but practical database or queue DoS; meaningful credential disclosure to limited readers; lifecycle races causing occasional duplicate or lost privileged operations.
 
-Low: defense-in-depth hardening, minor log/path disclosure, compatibility-only TLS legacy behavior, or generic API misuse requiring a fully malicious installed plugin.
+Low: defense-in-depth hardening, minor log/path disclosure, compatibility-only TLS legacy behavior, generic dependency-hygiene concerns without a concrete artifact-substitution path, or generic API misuse requiring a fully malicious installed plugin.
 
 Usually not security by itself: API/ABI/classifier regressions, malformed trusted config, a trusted caller choosing arbitrary files, SQL, or endpoints, delimiter bugs with no security-sensitive consumer, or accidental platform linkage without a trust-boundary effect.
 
