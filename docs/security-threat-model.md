@@ -39,6 +39,12 @@ A malicious installed plugin already shares the JVM and can usually bypass Simpl
 
 Security review should focus on benign consumers passing lower-trust data into a helper whose contract suggests safe handling, or on helpers directly used by exposed higher layers.
 
+### Local OS principals and persisted private state
+
+Other local OS accounts/processes that do **not** already run as the Minecraft server account are a distinct lower-trust boundary for persisted HTTP credentials and private material. Same-UID malicious plugin code is outside meaningful filesystem isolation, but unrelated local principals should not be able to read CA/server/client private keys, credential passwords, enrollment state, or active/staged credential generations.
+
+Review owner-only permissions, no-follow/symlink checks, atomic publication, durability, staged-generation cleanup, rotation/revocation, and failure behavior. A regression that broadens private-file or private-directory permissions, publishes sensitive data before permissions are enforced, leaves superseded private generations readable indefinitely, or silently continues when owner-only permissions cannot be proven crosses this boundary.
+
 ## Current controls to preserve
 
 Current master already includes controls that older findings may predate:
@@ -46,6 +52,7 @@ Current master already includes controls that older findings may predate:
 - SQL value paths commonly use PreparedStatement;
 - AbstractSqlTable provides identifier quoting and driver-aware SQL helpers;
 - PostgreSQL has explicit TLS modes, including VERIFY_FULL for certificate and hostname verification;
+- HTTP TLS identity, client credential, enrollment-state, and durable-delivery paths use `PrivateFilePermissions` plus no-follow/owner-only checks where private state is persisted;
 - neutral/shared packaging has explicit platform-isolation expectations;
 - concurrency and lifecycle contracts are documented in AGENTS.md.
 
@@ -203,9 +210,11 @@ Prioritize:
 
 Require a realistic caller path and concrete resource effect.
 
-## Secrets, logging and errors
+## Secrets, private files, logging and errors
 
 Database passwords, tokens, private keys, Authorization-like values, and JDBC URLs containing credentials must not appear in routine logs or exceptions returned to lower-trust callers.
+
+For HTTP transport state, review `HttpTlsIdentity`, `HttpClientCredentialStore`, `HttpEnrollmentAuthority`, durable delivery state, and `PrivateFilePermissions` together. Private files/directories should remain owner-only; symlinks and unsafe file types must be rejected where promised; temporary/staged generations must receive safe permissions before sensitive bytes are written; activation/rotation must not briefly expose weaker permissions; cleanup must not accidentally delete or retain the wrong active generation; and restart/recovery must re-validate permissions rather than trusting prior creation.
 
 Connection diagnostics may include host/database identifiers where operationally useful, but avoid full credential-bearing URLs and raw sensitive configuration.
 
