@@ -59,13 +59,15 @@ The copy/paste HTTP connection code is bootstrap trust material. Its embedded MA
 
 Treat interception, replacement, relay, disclosure, replay-before-consumption, and expiry handling of the connection code as part of this out-of-band bootstrap boundary. Do not blame the HTTP transport for an attacker who already controls that trusted delivery channel, but do report cases where the implementation accepts an expired/replayed/wrong-server code, fails to bind the resulting certificate to the advertised identity, or leaks the code/token outside that channel.
 
-### Local OS principals and persisted private state
+### Local OS principals and security-critical persisted state
 
-Other local OS accounts/processes that do **not** already run as the Minecraft server account are a distinct lower-trust boundary for **all persisted cryptographic secrets and credentials**, not only the HTTP transport. Same-UID malicious plugin code is outside meaningful filesystem isolation, but unrelated local principals should not be able to read CA/server/client private keys, credential passwords, enrollment state, active/staged credential generations, socket/shared-transport AES keys, or other reusable secrets that protect message confidentiality or authentication.
+Other local OS accounts/processes that do **not** already run as the Minecraft server account are a distinct lower-trust boundary for security-critical persisted state, including both secrets and configuration that controls trust decisions. Same-UID malicious plugin code is outside meaningful filesystem isolation, but unrelated local principals should not be able to read reusable credentials/keys **or modify** operator-owned configuration and state in ways that redirect connections, weaken TLS/authentication, change trusted endpoints, alter identity bindings, or change executable/runtime behavior.
 
-Review owner-only permissions, no-follow/symlink checks, atomic publication, durability, staged-generation cleanup, rotation/revocation, and failure behavior. A regression that broadens private-file or private-directory permissions, publishes sensitive data before permissions are enforced, leaves superseded private generations readable indefinitely, or silently continues when owner-only permissions cannot be proven crosses this boundary.
+This includes CA/server/client private keys, credential passwords, enrollment state, active/staged credential generations, socket/shared-transport AES keys, database/broker credentials, and security-sensitive YAML/properties such as database host, driver/type, TLS mode, `UseSSL`, broker/socket endpoints, connection-code state, trusted pins/identities, and other persisted values that determine who or what the process trusts.
 
-Current HTTP credential paths use `PrivateFilePermissions` and related no-follow checks. The legacy `com.bencodez.simpleapi.encryption.EncryptionHandler.save` path is a separate review target: it writes its AES key with ordinary `FileWriter` semantics and does not currently establish the same owner-only guarantee. Do not let the stronger HTTP storage controls imply that this or other non-HTTP secret stores are equally protected.
+Review file and directory ownership/permissions, no-follow/symlink checks, atomic publication, durability, unauthorized replacement, staged-generation cleanup, rotation/revocation, and failure behavior. A regression that broadens access, permits an unrelated local principal to replace security-critical configuration/state, publishes sensitive data before permissions are enforced, leaves superseded private generations readable indefinitely, or silently continues when a promised ownership/permission invariant cannot be proven crosses this boundary.
+
+Current HTTP credential paths use `PrivateFilePermissions` and related no-follow checks. The legacy `com.bencodez.simpleapi.encryption.EncryptionHandler.save` path is a separate review target: it writes its AES key with ordinary `FileWriter` semantics and does not currently establish the same owner-only guarantee. Likewise, generic YAML/config loaders such as MySQL configuration parsing consume security-sensitive endpoint/TLS/credential settings supplied by the embedding plugin; the operator's intended values are trusted, but unauthorized local modification of those persisted values is not. Do not let stronger HTTP storage controls imply that non-HTTP secret stores or ordinary config files have equivalent integrity protection.
 
 ## Current controls to preserve
 
@@ -122,7 +124,7 @@ A bypass of explicitly selected VERIFY_FULL is security-relevant. Choosing a wea
 
 ## Files, YAML and configuration
 
-SimpleAPI contains generic file/config primitives used by higher-level plugins. A helper accepting a File from a trusted caller is not automatically responsible for sandboxing the filesystem.
+SimpleAPI contains generic file/config primitives used by higher-level plugins. A helper accepting a File from a trusted caller is not automatically responsible for sandboxing the filesystem. However, the **integrity** of operator-owned security configuration is part of the local-principal boundary: another OS account rewriting a trusted config file is not equivalent to the operator intentionally selecting those values.
 
 Security findings require either a helper that promises containment or safe-name behavior and can be bypassed, or a realistic downstream path feeding lower-trust names/paths into it.
 
@@ -136,7 +138,8 @@ Review:
 - copying/default-merge behavior that unexpectedly overwrites secrets or permissions;
 - configuration recursion and cycle handling;
 - serialization of platform-native objects into supposedly neutral formats;
-- logs/errors exposing full paths or sensitive configuration.
+- logs/errors exposing full paths or sensitive configuration;
+- unauthorized local replacement of security-sensitive config or state that changes endpoints, TLS/authentication modes, credentials, identity bindings, or other trust decisions.
 
 Do not classify "a trusted plugin can ask a generic file helper to write any file it chooses" as arbitrary-file-write without a lower-trust path or documented containment promise.
 
@@ -276,7 +279,7 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 
 Critical: ordinary-player or remote input reaches arbitrary JVM code execution, arbitrary host/plugin file write, or SQL syntax capable of modifying unrelated data through a SimpleAPI helper contract.
 
-High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; repeatable cross-user/state corruption or resource exhaustion affecting the server.
+High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; unauthorized local modification of security-critical configuration/state that redirects or weakens a protected connection or identity boundary; repeatable cross-user/state corruption or resource exhaustion affecting the server.
 
 Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded but practical database or queue DoS; meaningful credential disclosure to limited readers; lifecycle races causing occasional duplicate or lost privileged operations.
 
