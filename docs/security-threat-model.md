@@ -39,11 +39,19 @@ A malicious installed plugin already shares the JVM and can usually bypass Simpl
 
 Security review should focus on benign consumers passing lower-trust data into a helper whose contract suggests safe handling, or on helpers directly used by exposed higher layers.
 
+### HTTP enrollment bootstrap
+
+The copy/paste HTTP connection code is bootstrap trust material. Its embedded MAC is keyed by the token contained in the same code, so it detects corruption but does **not** authenticate wholesale replacement of the code. Initial endpoint and certificate trust therefore depends on the operator receiving the complete connection code through an authentic and confidential administrative channel.
+
+Treat interception, replacement, relay, disclosure, replay-before-consumption, and expiry handling of the connection code as part of this out-of-band bootstrap boundary. Do not blame the HTTP transport for an attacker who already controls that trusted delivery channel, but do report cases where the implementation accepts an expired/replayed/wrong-server code, fails to bind the resulting certificate to the advertised identity, or leaks the code/token outside that channel.
+
 ### Local OS principals and persisted private state
 
-Other local OS accounts/processes that do **not** already run as the Minecraft server account are a distinct lower-trust boundary for persisted HTTP credentials and private material. Same-UID malicious plugin code is outside meaningful filesystem isolation, but unrelated local principals should not be able to read CA/server/client private keys, credential passwords, enrollment state, or active/staged credential generations.
+Other local OS accounts/processes that do **not** already run as the Minecraft server account are a distinct lower-trust boundary for **all persisted cryptographic secrets and credentials**, not only the HTTP transport. Same-UID malicious plugin code is outside meaningful filesystem isolation, but unrelated local principals should not be able to read CA/server/client private keys, credential passwords, enrollment state, active/staged credential generations, socket/shared-transport AES keys, or other reusable secrets that protect message confidentiality or authentication.
 
 Review owner-only permissions, no-follow/symlink checks, atomic publication, durability, staged-generation cleanup, rotation/revocation, and failure behavior. A regression that broadens private-file or private-directory permissions, publishes sensitive data before permissions are enforced, leaves superseded private generations readable indefinitely, or silently continues when owner-only permissions cannot be proven crosses this boundary.
+
+Current HTTP credential paths use `PrivateFilePermissions` and related no-follow checks. The legacy `com.bencodez.simpleapi.encryption.EncryptionHandler.save` path is a separate review target: it writes its AES key with ordinary `FileWriter` semantics and does not currently establish the same owner-only guarantee. Do not let the stronger HTTP storage controls imply that this or other non-HTTP secret stores are equally protected.
 
 ## Current controls to preserve
 
@@ -52,7 +60,7 @@ Current master already includes controls that older findings may predate:
 - SQL value paths commonly use PreparedStatement;
 - AbstractSqlTable provides identifier quoting and driver-aware SQL helpers;
 - PostgreSQL has explicit TLS modes, including VERIFY_FULL for certificate and hostname verification;
-- HTTP TLS identity, client credential, enrollment-state, and durable-delivery paths use `PrivateFilePermissions` plus no-follow/owner-only checks where private state is persisted;
+- HTTP TLS identity, client credential, enrollment-state, and durable-delivery paths use `PrivateFilePermissions` plus no-follow/owner-only checks where private state is persisted; this control is path-specific and does not cover every persisted secret (for example the legacy `EncryptionHandler` AES key path);
 - neutral/shared packaging has explicit platform-isolation expectations;
 - concurrency and lifecycle contracts are documented in AGENTS.md.
 
@@ -212,9 +220,11 @@ Require a realistic caller path and concrete resource effect.
 
 ## Secrets, private files, logging and errors
 
-Database passwords, tokens, private keys, Authorization-like values, and JDBC URLs containing credentials must not appear in routine logs or exceptions returned to lower-trust callers.
+Database passwords, tokens, private keys, reusable encryption keys, Authorization-like values, enrollment codes, and JDBC URLs containing credentials must not appear in routine logs or exceptions returned to lower-trust callers.
 
 For HTTP transport state, review `HttpTlsIdentity`, `HttpClientCredentialStore`, `HttpEnrollmentAuthority`, durable delivery state, and `PrivateFilePermissions` together. Private files/directories should remain owner-only; symlinks and unsafe file types must be rejected where promised; temporary/staged generations must receive safe permissions before sensitive bytes are written; activation/rotation must not briefly expose weaker permissions; cleanup must not accidentally delete or retain the wrong active generation; and restart/recovery must re-validate permissions rather than trusting prior creation.
+
+Apply the same local-principal reasoning to non-HTTP cryptographic material. In particular, the AES key persisted by `EncryptionHandler` is reusable secret material even though that legacy helper does not provide the HTTP stack's owner-only persistence guarantees. Review creation-time permissions, existing-file revalidation, symlink/file-type handling, key rotation, cleanup, and whether disclosure would let another local principal decrypt or forge protected traffic.
 
 Connection diagnostics may include host/database identifiers where operationally useful, but avoid full credential-bearing URLs and raw sensitive configuration.
 
@@ -236,12 +246,14 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 8. Pass lower-trust class, method, or provider names through reflection and dynamic-loading helpers.
 9. Shut down while file, SQL, or network tasks are accepted and verify no stale callback mutates replacement state.
 10. Package the neutral/shared artifact and inspect signatures, annotations, static initializers, and service descriptors for unexpected platform linkage.
+11. Replace, relay, replay, or disclose an HTTP connection code before enrollment and verify the implementation relies only on the explicitly trusted out-of-band delivery channel, code expiry, single-use semantics, identity binding, and pinned certificate data.
+12. Create/load every persisted cryptographic secret under permissive umask and mixed local-account conditions; verify paths that promise private storage actually enforce it, and identify legacy paths such as `EncryptionHandler` that do not.
 
 ## Scan calibration and severity
 
 Critical: ordinary-player or remote input reaches arbitrary JVM code execution, arbitrary host/plugin file write, or SQL syntax capable of modifying unrelated data through a SimpleAPI helper contract.
 
-High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS verification bypass despite explicit VERIFY_FULL; repeatable cross-user/state corruption or resource exhaustion affecting the server.
+High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS verification bypass despite explicit VERIFY_FULL; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; repeatable cross-user/state corruption or resource exhaustion affecting the server.
 
 Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded but practical database or queue DoS; meaningful credential disclosure to limited readers; lifecycle races causing occasional duplicate or lost privileged operations.
 
