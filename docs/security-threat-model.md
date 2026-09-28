@@ -236,6 +236,21 @@ Prioritize:
 
 Require a realistic caller path and concrete resource effect.
 
+## Outbound telemetry and third-party egress
+
+Metrics/telemetry is an outbound trust boundary even when the destination is intentionally configured or built in. When bStats or another telemetry path is enabled, data leaves the operator-controlled server and is disclosed to a third party.
+
+Review telemetry code such as `BStatsMetrics.submitData` / `sendData` and custom-chart registration for:
+
+- preserving the documented/operator opt-out and never submitting after metrics are disabled;
+- avoiding player names, UUIDs, chat, IPs, credentials, database/broker endpoints, configuration secrets, raw logs, or other sensitive plugin/server state unless that specific field is explicitly part of the telemetry contract;
+- minimizing persistent identifiers and ensuring a server UUID or similar installation identifier is not reused for unrelated tracking purposes;
+- preventing lower-trust custom-chart values or consumer-provided labels from smuggling secrets or unbounded/high-cardinality data into outbound requests;
+- bounding request size, retry behavior, failure logging, and network work so telemetry cannot affect server availability;
+- keeping telemetry failure isolated from normal plugin/runtime behavior.
+
+The existence of opt-in/default metrics is not by itself a vulnerability. Security-relevant regressions include ignoring the opt-out, expanding data collection beyond the documented contract, leaking sensitive values, or allowing lower-trust input to influence telemetry egress unexpectedly.
+
 ## Secrets, private files, logging and errors
 
 Database passwords, tokens, private keys, reusable encryption keys, Authorization-like values, enrollment codes, and JDBC URLs containing credentials must not appear in routine logs or exceptions returned to lower-trust callers.
@@ -274,6 +289,7 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 12. Create/load every persisted cryptographic secret under permissive umask and mixed local-account conditions; verify paths that promise private storage actually enforce it, and identify legacy paths such as `EncryptionHandler` that do not.
 13. Rebuild from the same source while varying Maven repository availability, mutable snapshot contents, and transitive resolution; verify reviewed/released artifacts cannot silently substitute different shaded runtime bytes without detection.
 14. Place an active network observer or malicious endpoint between each non-HTTP transport and its configured peer; verify plaintext/optional-TLS modes are classified according to their real guarantees, secure modes cannot silently downgrade, credentials are protected when promised, and unauthenticated encryption is never mistaken for peer identity or message authenticity.
+15. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
 
 ## Scan calibration and severity
 
@@ -281,7 +297,7 @@ Critical: ordinary-player or remote input reaches arbitrary JVM code execution, 
 
 High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; unauthorized local modification of security-critical configuration/state that redirects or weakens a protected connection or identity boundary; repeatable cross-user/state corruption or resource exhaustion affecting the server.
 
-Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded but practical database or queue DoS; meaningful credential disclosure to limited readers; lifecycle races causing occasional duplicate or lost privileged operations.
+Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded but practical database or queue DoS; meaningful credential disclosure to limited readers; unintended telemetry disclosure of sensitive server/plugin/player data to a third party; lifecycle races causing occasional duplicate or lost privileged operations.
 
 Low: defense-in-depth hardening, minor log/path disclosure, compatibility-only TLS legacy behavior, generic dependency-hygiene concerns without a concrete artifact-substitution path, or generic API misuse requiring a fully malicious installed plugin.
 
