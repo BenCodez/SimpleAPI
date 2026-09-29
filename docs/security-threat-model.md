@@ -249,6 +249,23 @@ Prioritize:
 
 Require a realistic caller path and concrete resource effect.
 
+## Caller-selected outbound requests and SSRF
+
+Not all outbound HTTP requests are fixed third-party APIs. Some shared helpers accept or derive destinations from caller-controlled values, so a benign consuming plugin can accidentally turn player or remote input into a server-side request.
+
+Review helpers such as `SkullCache.getContent(String)`, texture/profile URL handling, and `SkullCacheHandler.changeApiProfileURL` for:
+
+- allowing only intended URI schemes and rejecting non-HTTP(S) schemes where network fetches are expected;
+- blocking or explicitly scoping loopback, link-local, private, metadata-service, Unix/local, and other internal destinations when lower-trust input can reach the URL;
+- validating every redirect hop rather than only the initial destination;
+- preventing DNS/rebinding or hostname-resolution changes from bypassing destination policy where such policy is promised;
+- bounding response bytes before materializing the body, plus connect/read/request deadlines;
+- avoiding credential/header forwarding to a redirected or attacker-selected authority;
+- keeping caller-selected URLs out of unbounded caches or other persistent high-cardinality state;
+- distinguishing fixed operator/maintainer-selected APIs from destinations reachable from player/vote/remote input.
+
+A generic helper accepting an operator-supplied URL is not automatically SSRF. Security relevance depends on a realistic lower-trust path into the destination or on a helper contract that promises safe URL fetching.
+
 ## Outbound telemetry and third-party egress
 
 Metrics/telemetry is an outbound trust boundary even when the destination is intentionally configured or built in. When bStats or another telemetry path is enabled, data leaves the operator-controlled server and is disclosed to a third party.
@@ -303,15 +320,16 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 13. Rebuild from the same source while varying Maven repository availability, mutable snapshot contents, and transitive resolution; verify reviewed/released artifacts cannot silently substitute different shaded runtime bytes without detection.
 14. Place an active network observer or malicious endpoint between each non-HTTP transport and its configured peer; verify plaintext/optional-TLS modes are classified according to their real guarantees, secure modes cannot silently downgrade, credentials are protected when promised, and legacy `EncryptionHandler` AES is never mistaken for authenticated or modern semantic confidentiality.
 15. Exercise `CommandHandler` as a player, console, RCON/command-block-like non-player sender, and through aliases/alternate paths; verify permission, sender-type, argument, and stale-authorization checks hold before every privileged callback.
-16. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
+16. Feed lower-trust URLs through skull/profile/custom outbound-fetch helpers, including loopback/private/link-local/metadata targets, redirects, hostile DNS, large bodies, and unusual schemes; verify destination and response bounds hold before data is fetched or cached.
+17. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
 
 ## Scan calibration and severity
 
 Critical: ordinary-player or remote input reaches arbitrary JVM code execution, arbitrary host/plugin file write, or SQL syntax capable of modifying unrelated data through a SimpleAPI helper contract.
 
-High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; unauthorized local modification of security-critical configuration/state that redirects or weakens a protected connection or identity boundary; repeatable cross-user/state corruption or resource exhaustion affecting the server.
+High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; unauthorized local modification of security-critical configuration/state that redirects or weakens a protected connection or identity boundary; SSRF reaching sensitive internal/metadata/admin services with meaningful impact; resource exhaustion only when it is unbounded or strongly amplified, produces a sustained server-wide outage/watchdog/heap/disk failure at a practical attacker cost, or creates comparable cross-tenant impact.
 
-Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded but practical database or queue DoS; meaningful credential disclosure to limited readers; unintended telemetry disclosure of sensitive server/plugin/player data to a third party; lifecycle races causing occasional duplicate or lost privileged operations.
+Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded and recoverable database/queue/worker DoS that causes meaningful stalls, dropped work, or temporary availability loss but does not meet the High sustained-outage/amplification threshold; meaningful credential disclosure to limited readers; constrained SSRF with limited reachable impact; unintended telemetry disclosure of sensitive server/plugin/player data to a third party; lifecycle races causing occasional duplicate or lost privileged operations.
 
 Low: defense-in-depth hardening, minor log/path disclosure, compatibility-only TLS legacy behavior, generic dependency-hygiene concerns without a concrete artifact-substitution path, or generic API misuse requiring a fully malicious installed plugin.
 
