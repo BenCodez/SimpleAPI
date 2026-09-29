@@ -2,6 +2,10 @@
 
 SimpleAPI is a shared library consumed by AdvancedCore and other plugins. The repository now uses one Maven project and one source tree with platform-neutral and platform-specific packages; do not recreate the removed experimental submodule build.
 
+## Security threat model
+
+For security reviews, vulnerability triage, and security-sensitive changes, read docs/security-threat-model.md before classifying or fixing findings. Treat it as the repository-specific attacker/trust-boundary model; verify every conclusion against current code and tests. Do not promote compatibility, trusted-operator behavior, or generic correctness bugs into security findings unless the documented boundary is actually crossed.
+
 ## Build and verification
 
 Requirements: JDK 21+ and Maven. The Maven project is in `SimpleAPI/`.
