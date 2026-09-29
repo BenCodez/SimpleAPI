@@ -195,6 +195,23 @@ Command routing is a security boundary when a consuming plugin exposes `CommandH
 
 `CommandHandler.runCommand` currently performs argument checks, sender-type gating, and `hasPerm` before scheduling `execute` asynchronously. Treat regressions that bypass those gates, execute before authorization, or apply a weaker gate on an alternate path as security-relevant when the callback performs privileged work.
 
+## Value-request session and callback authorization
+
+`ValueRequest` and its chat, sign, book, dialog, and inventory input paths can feed player-controlled values into callbacks that a consuming plugin may use to mutate privileged configuration or state. Treat the pending request itself as an authorization/session boundary, not merely as a UI convenience.
+
+Review each request/input method for:
+
+- binding a response to the exact player, active request instance, input method, and view/session that created it;
+- for inventory-backed requests, accepting clicks only from the request's own top inventory rather than from the player's bottom inventory or another simultaneously opened view;
+- validating fixed-choice selections against the request's allowed option set instead of trusting an item's display name or other client-influenced presentation data;
+- respecting `allowCustom=false` consistently across inventory, sign, book, chat, and dialog fallbacks;
+- consuming one-shot request state before invoking a privileged callback so double-clicks, duplicate events, replayed UI actions, or re-entrant callbacks cannot execute twice;
+- cancelling and cleaning up pending contexts on close, disconnect, plugin disable/reload, request replacement, and input-method changes;
+- preventing stale callbacks from an older request from mutating state after a newer request/session has replaced it;
+- keeping callback execution on the required platform thread/context and revalidating downstream permissions/ownership where the callback performs a privileged action.
+
+Current `InventoryRequestManager` stores request context by player UUID and, on click, reads `event.getCurrentItem()`'s display name before invoking the callback. Treat exact-inventory binding and allowed-option validation as explicit review targets: a pending fixed-choice request must not accept an arbitrary renamed item from the player's own inventory as though it were one of the presented choices.
+
 ## Platform-event authorization helpers
 
 Some SimpleAPI helpers synthesize Bukkit events so downstream protection plugins can decide whether a player-requested world action is allowed. Those event results are an authorization boundary, not just an API convenience.
@@ -337,15 +354,16 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 13. Rebuild from the same source while varying Maven repository availability, mutable snapshot contents, and transitive resolution; verify reviewed/released artifacts cannot silently substitute different shaded runtime bytes without detection.
 14. Place an active network observer or malicious endpoint between each non-HTTP transport and its configured peer; verify plaintext/optional-TLS modes are classified according to their real guarantees, secure modes cannot silently downgrade, credentials are protected when promised, and legacy `EncryptionHandler` AES is never mistaken for authenticated or modern semantic confidentiality.
 15. Exercise `CommandHandler` as a player, console, RCON/command-block-like non-player sender, and through aliases/alternate paths; verify permission, sender-type, argument, and stale-authorization checks hold before every privileged callback.
-16. Exercise `PlayerUtils.canBreakBlock` / `canInteract` with protection plugins that cancel or deny different event result fields; verify the exact actor/block/action is checked synchronously and every authoritative denial prevents the subsequent side effect.
-17. Feed lower-trust URLs through skull/profile/custom outbound-fetch helpers, including loopback/private/link-local/metadata targets, redirects, hostile DNS, large bodies, and unusual schemes; verify destination and response bounds hold before data is fetched or cached.
-18. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
+16. Exercise every `ValueRequest` input method with fixed choices and privileged callbacks; attempt bottom-inventory clicks, renamed items, stale/replaced requests, double-click/replay, close/reopen, disconnect, and reload, and verify only the exact active request and allowed values can invoke the callback once.
+17. Exercise `PlayerUtils.canBreakBlock` / `canInteract` with protection plugins that cancel or deny different event result fields; verify the exact actor/block/action is checked synchronously and every authoritative denial prevents the subsequent side effect.
+18. Feed lower-trust URLs through skull/profile/custom outbound-fetch helpers, including loopback/private/link-local/metadata targets, redirects, hostile DNS, large bodies, and unusual schemes; verify destination and response bounds hold before data is fetched or cached.
+19. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
 
 ## Scan calibration and severity
 
 Critical: ordinary-player or remote input reaches arbitrary JVM code execution, arbitrary host/plugin file write, or SQL syntax capable of modifying unrelated data through a SimpleAPI helper contract.
 
-High: realistic lower-trust SQL injection; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; unauthorized local modification of security-critical configuration/state that redirects or weakens a protected connection or identity boundary; SSRF reaching sensitive internal/metadata/admin services with meaningful impact; resource exhaustion only when it is unbounded or strongly amplified, produces a sustained server-wide outage/watchdog/heap/disk failure at a practical attacker cost, or creates comparable cross-tenant impact.
+High: realistic lower-trust SQL injection; ordinary-player bypass of a value-request/session boundary that reaches a privileged configuration/state mutation; authentication/origin bypass in a transport that promises authenticated messages; TLS/peer-identity verification bypass despite an explicitly selected verified mode; exposure of reusable network credentials or cryptographic keys to an on-path observer when the configured mode promises their protection; exposure of reusable cryptographic keys or HTTP client/server credentials to an unrelated local principal where private storage is expected; unauthorized local modification of security-critical configuration/state that redirects or weakens a protected connection or identity boundary; SSRF reaching sensitive internal/metadata/admin services with meaningful impact; resource exhaustion only when it is unbounded or strongly amplified, produces a sustained server-wide outage/watchdog/heap/disk failure at a practical attacker cost, or creates comparable cross-tenant impact.
 
 Medium: parser/serialization ambiguity with a security-sensitive consumer; bounded and recoverable database/queue/worker DoS that causes meaningful stalls, dropped work, or temporary availability loss but does not meet the High sustained-outage/amplification threshold; meaningful credential disclosure to limited readers; constrained SSRF with limited reachable impact; unintended telemetry disclosure of sensitive server/plugin/player data to a third party; lifecycle races causing occasional duplicate or lost privileged operations.
 
