@@ -59,6 +59,8 @@ The copy/paste HTTP connection code is bootstrap trust material. Its embedded MA
 
 Treat interception, replacement, relay, disclosure, replay-before-consumption, and expiry handling of the connection code as part of this out-of-band bootstrap boundary. Do not blame the HTTP transport for an attacker who already controls that trusted delivery channel, but do report cases where the implementation accepts an expired/replayed/wrong-server code, fails to bind the resulting certificate to the advertised identity, or leaks the code/token outside that channel.
 
+Bootstrap credentials must also be **unpredictable**, not merely secret in transit. Review enrollment tokens, challenges, credential-generation keys, and related one-time secrets for CSPRNG-backed generation, sufficient entropy/length, no predictable counters/timestamps/weak PRNG fallback, appropriate key-generation strength, and constant-time comparison where secret equality is checked. Current `HttpTransportSecrets.randomToken()` uses 32 random bytes from `SecureRandom`, `randomBytes` rejects very short secrets, and `constantTimeEquals` uses `MessageDigest.isEqual`; treat regressions that weaken those properties as security-relevant even if the connection code itself is never intercepted.
+
 ### Local OS principals and security-critical persisted state
 
 Other local OS accounts/processes that do **not** already run as the Minecraft server account are a distinct lower-trust boundary for security-critical persisted state, including both secrets and configuration that controls trust decisions. Same-UID malicious plugin code is outside meaningful filesystem isolation, but unrelated local principals should not be able to read reusable credentials/keys **or modify** operator-owned configuration and state in ways that redirect connections, weaken TLS/authentication, change trusted endpoints, alter identity bindings, or change executable/runtime behavior.
@@ -193,6 +195,21 @@ Command routing is a security boundary when a consuming plugin exposes `CommandH
 
 `CommandHandler.runCommand` currently performs argument checks, sender-type gating, and `hasPerm` before scheduling `execute` asynchronously. Treat regressions that bypass those gates, execute before authorization, or apply a weaker gate on an alternate path as security-relevant when the callback performs privileged work.
 
+## Platform-event authorization helpers
+
+Some SimpleAPI helpers synthesize Bukkit events so downstream protection plugins can decide whether a player-requested world action is allowed. Those event results are an authorization boundary, not just an API convenience.
+
+Review helpers such as `PlayerUtils.canBreakBlock` and `PlayerUtils.canInteract` for:
+
+- constructing the event with the **actual player, block, action, item, face, and world context** that will be used by the real operation;
+- dispatching the protection event synchronously on the platform thread/context required by Bukkit/Paper/Folia before the protected side effect occurs;
+- honoring every cancellation/result field that is authoritative for that event type, including explicit cancellation and relevant `Event.Result.DENY` states rather than checking only one field when another can veto the action;
+- preventing a caller from checking one block/action/actor and then applying the privileged effect to another;
+- avoiding asynchronous or stale check-then-act windows where region/claim/permission state can change before the side effect;
+- ensuring alternate helper/compatibility paths do not skip the protection-event check.
+
+`canBreakBlock` currently fires `BlockBreakEvent` and checks cancellation. `canInteract` fires `PlayerInteractEvent` and currently checks `useItemInHand() == DENY`; review whether all cancellation/result states required by consuming protection plugins are preserved for the intended operation. A helper returning `true` despite a protection plugin's authoritative denial can become an ordinary-player authorization bypass in the consuming plugin.
+
 ## Concurrency, scheduling and lifecycle
 
 SimpleAPI is reused on Bukkit/Paper/Folia, proxies, and neutral/native contexts.
@@ -315,13 +332,14 @@ SimpleAPI strongly values drop-in and API compatibility. Do not classify public 
 8. Pass lower-trust class, method, or provider names through reflection and dynamic-loading helpers.
 9. Shut down while file, SQL, or network tasks are accepted and verify no stale callback mutates replacement state.
 10. Package the neutral/shared artifact and inspect signatures, annotations, static initializers, and service descriptors for unexpected platform linkage.
-11. Replace, relay, replay, or disclose an HTTP connection code before enrollment and verify the implementation relies only on the explicitly trusted out-of-band delivery channel, code expiry, single-use semantics, identity binding, and pinned certificate data.
+11. Replace, relay, replay, disclose, or attempt to guess an HTTP connection code/enrollment credential; verify the implementation relies on an authentic out-of-band channel, CSPRNG-backed high-entropy tokens, constant-time secret comparison where applicable, code expiry, single-use semantics, identity binding, and pinned certificate data.
 12. Create/load every persisted cryptographic secret under permissive umask and mixed local-account conditions; verify paths that promise private storage actually enforce it, and identify legacy paths such as `EncryptionHandler` that do not.
 13. Rebuild from the same source while varying Maven repository availability, mutable snapshot contents, and transitive resolution; verify reviewed/released artifacts cannot silently substitute different shaded runtime bytes without detection.
 14. Place an active network observer or malicious endpoint between each non-HTTP transport and its configured peer; verify plaintext/optional-TLS modes are classified according to their real guarantees, secure modes cannot silently downgrade, credentials are protected when promised, and legacy `EncryptionHandler` AES is never mistaken for authenticated or modern semantic confidentiality.
 15. Exercise `CommandHandler` as a player, console, RCON/command-block-like non-player sender, and through aliases/alternate paths; verify permission, sender-type, argument, and stale-authorization checks hold before every privileged callback.
-16. Feed lower-trust URLs through skull/profile/custom outbound-fetch helpers, including loopback/private/link-local/metadata targets, redirects, hostile DNS, large bodies, and unusual schemes; verify destination and response bounds hold before data is fetched or cached.
-17. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
+16. Exercise `PlayerUtils.canBreakBlock` / `canInteract` with protection plugins that cancel or deny different event result fields; verify the exact actor/block/action is checked synchronously and every authoritative denial prevents the subsequent side effect.
+17. Feed lower-trust URLs through skull/profile/custom outbound-fetch helpers, including loopback/private/link-local/metadata targets, redirects, hostile DNS, large bodies, and unusual schemes; verify destination and response bounds hold before data is fetched or cached.
+18. Enable and disable bStats/telemetry repeatedly, inspect every outbound field and custom chart, and verify opt-out is respected, only documented/minimized metadata leaves the server, lower-trust data cannot inject secrets or unbounded values, and telemetry failures remain isolated.
 
 ## Scan calibration and severity
 
