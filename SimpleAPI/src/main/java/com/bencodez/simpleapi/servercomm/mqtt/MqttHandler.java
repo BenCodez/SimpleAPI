@@ -67,8 +67,7 @@ public class MqttHandler {
 	}
 
 	public void disconnect() throws Exception {
-		mqtt.disconnect();
-		scheduler.shutdownNow();
+		try { mqtt.close(); } finally { scheduler.shutdownNow(); }
 	}
 
 	public boolean isConnected() {
