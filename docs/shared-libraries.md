@@ -172,3 +172,23 @@ version. Existing deployment profiles/configuration remain unchanged; attached
 artifacts are available to the existing publishing lifecycle. This change does not
 invoke deployment or claim the new classifier is already on Nexus. There is no
 separate parent or module publication step to maintain.
+
+## MQTT broker recovery
+
+`MqttServerComm` owns a single bounded recovery task with reconnect backoff from
+one to sixty seconds. After a broker disconnect it reconnects and restores the
+registered topic filters, QoS values and listeners, including clean-session
+connections. Failed SUBACKs also retry. Explicit `disconnect()` stops recovery;
+`connect()` permits reuse, while `close()` permanently releases the client and
+recovery executor. `MqttHandler.disconnect()` is terminal and closes both owned
+executors. Desired subscriptions are bounded to 1,024 distinct filters.
+
+Recovery does not make MQTT QoS delivery exactly once. Consumers must continue to
+fence vote effects with their stable occurrence IDs and durable receipts. Publish
+calls still report disconnected/error states rather than silently acknowledging
+unsent messages; existing durable delivery owners remain responsible for retries.
+
+The deterministic lifecycle tests run in the normal Maven suite. To additionally
+exercise real bidirectional restoration after an ephemeral loopback broker
+restart, pass `-Dsimpleapi.mqtt.broker=/path/to/mosquitto`. This test never calls
+manual reconnect or re-registers subscriptions after the restart.
