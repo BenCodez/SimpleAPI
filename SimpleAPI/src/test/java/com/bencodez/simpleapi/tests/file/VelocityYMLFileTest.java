@@ -42,6 +42,51 @@ public class VelocityYMLFileTest {
 	}
 
 	@Test
+	void malformedReloadPreservesActiveSnapshotAndDiskThenRecovers() throws Exception {
+		Files.writeString(testFile.toPath(), "BungeeMethod: MQTT\nCustom:\n  label: administrator\n");
+		VelocityYMLFile config = new VelocityYMLFile(testFile);
+		ConfigurationNode active = config.getData();
+		String malformed = "BungeeMethod: [broken\n";
+		Files.writeString(testFile.toPath(), malformed);
+		org.junit.jupiter.api.Assertions.assertThrows(java.io.UncheckedIOException.class, config::reload);
+		org.junit.jupiter.api.Assertions.assertSame(active, config.getData());
+		assertEquals("MQTT", config.getNode("BungeeMethod").getString());
+		assertEquals("administrator", config.getNode("Custom", "label").getString());
+		assertEquals(malformed, Files.readString(testFile.toPath()));
+		Files.writeString(testFile.toPath(), "BungeeMethod: REDIS\nCustom:\n  label: corrected\n");
+		config.reload();
+		assertEquals("REDIS", config.getNode("BungeeMethod").getString());
+		assertEquals("corrected", config.getNode("Custom", "label").getString());
+	}
+
+	@Test
+	void missingOrUnreadableReloadDoesNotPublishStartupDefaults() throws Exception {
+		Files.writeString(testFile.toPath(), "BungeeMethod: MQTT\n");
+		VelocityYMLFile config = new VelocityYMLFile(testFile);
+		ConfigurationNode active = config.getData();
+		Files.delete(testFile.toPath());
+		org.junit.jupiter.api.Assertions.assertThrows(java.io.UncheckedIOException.class, config::reload);
+		org.junit.jupiter.api.Assertions.assertSame(active, config.getData());
+		Files.createDirectory(testFile.toPath());
+		org.junit.jupiter.api.Assertions.assertThrows(java.io.UncheckedIOException.class, config::reload);
+		org.junit.jupiter.api.Assertions.assertSame(active, config.getData());
+	}
+
+	@Test
+	void missingStartupFileAndValidEmptyReloadKeepDefaultSemantics() throws Exception {
+		Files.delete(testFile.toPath());
+		VelocityYMLFile config = new VelocityYMLFile(testFile);
+		assertTrue(testFile.isFile());
+		assertEquals("default", config.getNode("missing").getString("default"));
+		Files.writeString(testFile.toPath(), "BungeeMethod: MQTT\n");
+		config.reload();
+		assertEquals("MQTT", config.getNode("BungeeMethod").getString());
+		Files.writeString(testFile.toPath(), "");
+		config.reload();
+		assertEquals("PLUGINMESSAGING", config.getNode("BungeeMethod").getString("PLUGINMESSAGING"));
+	}
+
+	@Test
 	public void getBooleanReturnsDefaultWhenNodeDoesNotExist() {
 		VelocityYMLFile velocityYMLFile = new VelocityYMLFile(testFile);
 		ConfigurationNode node = velocityYMLFile.getNode("non", "existent", "path");
