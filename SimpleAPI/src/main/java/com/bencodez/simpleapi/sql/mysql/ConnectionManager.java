@@ -261,7 +261,8 @@ public class ConnectionManager {
 		if (postgreSqlTlsMode != PostgreSqlTlsMode.LEGACY) {
 			throw new IllegalArgumentException("PostgreSqlTlsMode applies only to PostgreSQL connections");
 		}
-		boolean maria = (dbType == DbType.MARIADB) || "org.mariadb.jdbc.Driver".equals(driverClassName);
+		boolean maria = !"com.mysql.cj.jdbc.Driver".equals(driverClassName)
+				&& (dbType == DbType.MARIADB || "org.mariadb.jdbc.Driver".equals(driverClassName));
 		String base = maria ? String.format("jdbc:mariadb://%s:%s/%s", host, port, database)
 				: String.format("jdbc:mysql://%s:%s/%s", host, port, database);
 

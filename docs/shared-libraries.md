@@ -202,3 +202,11 @@ is different: it reads a replacement before publishing it and throws
 last valid active configuration. The failed reload does not rewrite the file.
 Callers must abort runtime reconfiguration when reload fails. An intentionally
 empty, valid YAML document remains accepted.
+
+### MariaDB JDBC fallback
+
+When the configured MariaDB driver is absent and the existing MySQL-driver
+fallback is enabled, the resolved MySQL Connector/J driver uses a `jdbc:mysql:`
+URL. The configured database type, TLS/options, host, and database remain intact.
+Native MariaDB and custom MariaDB driver overrides retain the MariaDB scheme;
+the explicit fallback opt-out remains supported.
