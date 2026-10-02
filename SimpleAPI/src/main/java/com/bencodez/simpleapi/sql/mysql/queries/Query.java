@@ -42,7 +42,7 @@ public class Query {
 	 * @throws SQLException SQLException
 	 */
 	public int[] executeBatch() throws SQLException {
-		try (Connection conn = mysql.getConnectionManager().getConnection();
+		try (Connection conn = mysql.getConnectionManager().getConnectionChecked();
 				PreparedStatement sql = conn.prepareStatement(this.sql);) {
 
 			for (Entry<Integer, Object> entry : paramters.entrySet()) {
@@ -107,7 +107,7 @@ public class Query {
 	 * @Deprecated public ResultSet executeQuery() throws SQLException {
 	 * CachedRowSet rowSet = RowSetProvider.newFactory().createCachedRowSet();
 	 * ResultSet resultSet = null; try (Connection conn =
-	 * mysql.getConnectionManager().getConnection(); PreparedStatement sql =
+	 * mysql.getConnectionManager().getConnectionChecked(); PreparedStatement sql =
 	 * conn.prepareStatement(this.sql);) { for (Entry<Integer, Object> entry :
 	 * paramters.entrySet()) { sql.setObject(entry.getKey(), entry.getValue()); } if
 	 * (addBatch) { sql.addBatch(); } resultSet = sql.executeQuery();
@@ -139,7 +139,7 @@ public class Query {
 	 * @throws SQLException SQLException
 	 */
 	public int executeUpdate() throws SQLException {
-		try (Connection conn = mysql.getConnectionManager().getConnection();
+		try (Connection conn = mysql.getConnectionManager().getConnectionChecked();
 				PreparedStatement sql = conn.prepareStatement(this.sql);) {
 			for (Entry<Integer, Object> entry : paramters.entrySet()) {
 				sql.setObject(entry.getKey(), entry.getValue());

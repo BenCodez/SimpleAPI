@@ -99,6 +99,24 @@ does not. Future mixed AdvancedCore common/Bukkit packaging must align relocatio
 of callers and implementations and test the final JAR. Exclusions alone do not
 prove the mixed SQL signatures compatible. Prefer JDBC/JDK types at new boundaries.
 
+
+### SQL pool acquisition and lifecycle
+
+`ConnectionManager.getConnectionChecked()` borrows a lease or throws
+`SQLException`; a borrow timeout/exhaustion does not reopen/replace its pool.
+SimpleAPI SQL queries/table operations use this checked failure path. The legacy
+`getConnection()` signature remains available and throws `IllegalStateException`
+with the SQL cause on acquisition failure instead of returning a null connection.
+Callers with SQL error handling should prefer the additive checked method.
+
+Explicit `open()` constructs its successor before publication, retains the
+predecessor if initialization fails, and closes the predecessor after a successful
+replacement. The existing datasource setter uses the same ownership transfer and
+keeps a same-pool assignment unchanged. Lifecycle operations serialize publication/close; waiting for a lease
+does not hold that monitor. Existing lazy initialization/reopening remains supported.
+All SQL calls are synchronous: keep them on the owning storage worker, not a
+platform/server thread.
+
 ## Configuration use and guarantees
 
 New code may import `com.bencodez.simpleapi.core.config.AnnotationBinder`,

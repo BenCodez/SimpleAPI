@@ -30,8 +30,7 @@ public class ConnectionManager {
 	private String database;
 
 	@Getter
-	@Setter
-	private HikariDataSource dataSource;
+	private volatile HikariDataSource dataSource;
 
 	@Getter
 	@Setter
@@ -141,27 +140,63 @@ public class ConnectionManager {
 		this.dbType = useMariaDB ? DbType.MARIADB : DbType.MYSQL;
 	}
 
-	public boolean isClosed() {
-		return dataSource == null || dataSource.isClosed();
+	/** Transfers ownership of a supplied pool and retires the previous one. */
+	public synchronized void setDataSource(HikariDataSource replacement) {
+		replaceDataSource(replacement);
 	}
 
-	public void close() {
+	private void replaceDataSource(HikariDataSource replacement) {
+		HikariDataSource predecessor = dataSource;
+		if (predecessor == replacement) return;
+		dataSource = replacement;
+		if (predecessor != null) {
+			try {
+				predecessor.close();
+			} catch (RuntimeException cleanupFailure) {
+				// Publication succeeded; cleanup failure must not misreport initialization failure.
+				System.err.println("Unable to close predecessor SQL pool after replacement");
+			}
+		}
+	}
+
+	public boolean isClosed() {
+		HikariDataSource current = dataSource;
+		return current == null || current.isClosed();
+	}
+
+	public synchronized void close() {
 		if (!isClosed()) {
 			dataSource.close();
 		}
 	}
 
+	/**
+	 * Legacy no-checked-exception entry point. Acquisition failure is explicit,
+	 * never a null connection; SQL callers should use getConnectionChecked().
+	 */
 	public Connection getConnection() {
 		try {
-			if (isClosed()) {
-				open();
-			}
-			return dataSource.getConnection();
-		} catch (SQLException e) {
-			e.printStackTrace();
-			open();
-			return null;
+			return getConnectionChecked();
+		} catch (SQLException failure) {
+			throw new IllegalStateException("Unable to obtain a SQL pool connection", failure);
 		}
+	}
+
+	/**
+	 * Borrows from the current pool without replacing it on timeout/exhaustion.
+	 * The lifecycle monitor is released before waiting for a lease, so shutdown
+	 * does not wait for an exhausted borrow's connection timeout.
+	 * @throws SQLException when initialization or acquisition fails
+	 */
+	public Connection getConnectionChecked() throws SQLException {
+		HikariDataSource current;
+		synchronized (this) {
+			if (isClosed() && !open()) {
+				throw new SQLException("Unable to initialize SQL connection pool");
+			}
+			current = dataSource;
+		}
+		return current.getConnection();
 	}
 
 	private void ensureDriverPresent(String className) throws ClassNotFoundException {
@@ -291,7 +326,7 @@ public class ConnectionManager {
 
 	// --- Pool Configuration ---
 
-	public boolean open() {
+	public synchronized boolean open() {
 		try {
 			// If someone only set legacy flag but not dbType explicitly, keep it consistent
 			if (dbType == null) {
@@ -342,7 +377,8 @@ public class ConnectionManager {
 			cfg.setAutoCommit(true);
 			cfg.setPoolName(poolName != null && !poolName.isEmpty() ? poolName : "SimpleAPI-Hikari");
 
-			dataSource = new HikariDataSource(cfg);
+			HikariDataSource replacement = new HikariDataSource(cfg);
+			replaceDataSource(replacement);
 			return true;
 		} catch (Exception e) {
 			e.printStackTrace();
