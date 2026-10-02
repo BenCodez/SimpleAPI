@@ -192,3 +192,13 @@ The deterministic lifecycle tests run in the normal Maven suite. To additionally
 exercise real bidirectional restoration after an ephemeral loopback broker
 restart, pass `-Dsimpleapi.mqtt.broker=/path/to/mosquitto`. This test never calls
 manual reconnect or re-registers subscriptions after the restart.
+
+### Legacy Velocity YAML reload
+
+`VelocityYMLFile` retains its existing startup behavior (including creation of a
+missing initial file and defaults when initial loading fails). Normal `reload()`
+is different: it reads a replacement before publishing it and throws
+`UncheckedIOException` on unreadable, missing, or malformed input, keeping the
+last valid active configuration. The failed reload does not rewrite the file.
+Callers must abort runtime reconfiguration when reload fails. An intentionally
+empty, valid YAML document remains accepted.

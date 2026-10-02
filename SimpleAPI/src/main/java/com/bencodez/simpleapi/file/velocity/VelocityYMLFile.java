@@ -1,7 +1,10 @@
 package com.bencodez.simpleapi.file.velocity;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,7 +22,7 @@ public class VelocityYMLFile {
 
 	@Getter
 	@Setter
-	private ConfigurationNode conf;
+	private volatile ConfigurationNode conf;
 
 	@Getter
 	private final File file;
@@ -31,7 +34,7 @@ public class VelocityYMLFile {
 		ensureFileExists(file);
 
 		this.loader = buildLoader(file.toPath());
-		this.conf = loadOrEmpty();
+		this.conf = loadInitialOrEmpty();
 	}
 
 	private static void ensureFileExists(File file) {
@@ -55,7 +58,7 @@ public class VelocityYMLFile {
 				.build();
 	}
 
-	private ConfigurationNode loadOrEmpty() {
+	private ConfigurationNode loadInitialOrEmpty() {
 		try {
 			return loader.load();
 		} catch (IOException e) {
@@ -110,9 +113,25 @@ public class VelocityYMLFile {
 		}
 	}
 
-	public void reload() {
-		this.loader = buildLoader(file.toPath());
-		this.conf = loadOrEmpty();
+	/**
+	 * Publishes a replacement only after a successful load. Startup may use
+	 * defaults, but a reload failure must keep the last valid active snapshot.
+	 * @throws UncheckedIOException when the replacement cannot be read or parsed
+	 */
+	public synchronized void reload() {
+		YamlConfigurationLoader replacement = buildLoader(file.toPath());
+		try {
+			ConfigurationNode loaded;
+			// Open before invoking Configurate: its path loader treats a missing file as empty.
+			try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
+				loaded = YamlConfigurationLoader.builder().source(() -> reader)
+						.nodeStyle(NodeStyle.BLOCK).build().load();
+			}
+			this.loader = replacement;
+			this.conf = loaded;
+		} catch (IOException failure) {
+			throw new UncheckedIOException("Velocity YAML reload failed; previous configuration remains active", failure);
+		}
 	}
 
 	public void save() {
