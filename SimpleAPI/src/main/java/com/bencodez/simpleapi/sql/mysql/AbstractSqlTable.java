@@ -207,7 +207,7 @@ public abstract class AbstractSqlTable {
 
 	public boolean containsKeyQuery(String key) {
 		String sql = "SELECT 1 FROM " + qi(tableName) + " WHERE " + qi(getPrimaryKeyColumn()) + " = ? LIMIT 1;";
-		try (Connection conn = mysql.getConnectionManager().getConnection();
+		try (Connection conn = mysql.getConnectionManager().getConnectionChecked();
 				PreparedStatement ps = conn.prepareStatement(sql)) {
 			ps.setString(1, key);
 			try (ResultSet rs = ps.executeQuery()) {
@@ -333,7 +333,7 @@ public abstract class AbstractSqlTable {
 	 * FIXED: no external Connection needed.
 	 */
 	public boolean columnNeedsAlter(String column, String newType) throws SQLException {
-		try (Connection conn = mysql.getConnectionManager().getConnection()) {
+		try (Connection conn = mysql.getConnectionManager().getConnectionChecked()) {
 			if (dbType == DbType.POSTGRESQL) {
 				return columnNeedsAlterPostgres(conn, column, newType);
 			}
@@ -530,7 +530,7 @@ public abstract class AbstractSqlTable {
 	public List<String> getPrimaryKeysQuery() {
 		List<String> keys = new ArrayList<>();
 		String sql = "SELECT " + qi(getPrimaryKeyColumn()) + " FROM " + qi(tableName) + ";";
-		try (Connection conn = mysql.getConnectionManager().getConnection();
+		try (Connection conn = mysql.getConnectionManager().getConnectionChecked();
 				PreparedStatement ps = conn.prepareStatement(sql);
 				ResultSet rs = ps.executeQuery()) {
 			while (rs.next()) {
@@ -550,7 +550,7 @@ public abstract class AbstractSqlTable {
 		if (dbType == DbType.POSTGRESQL) {
 			String sql = "SELECT column_name FROM information_schema.columns "
 					+ "WHERE table_schema = current_schema() AND table_name = ?;";
-			try (Connection conn = mysql.getConnectionManager().getConnection();
+			try (Connection conn = mysql.getConnectionManager().getConnectionChecked();
 					PreparedStatement ps = conn.prepareStatement(sql)) {
 				ps.setString(1, tableName);
 				try (ResultSet rs = ps.executeQuery()) {
@@ -565,7 +565,7 @@ public abstract class AbstractSqlTable {
 		}
 
 		String sql = "SHOW COLUMNS FROM " + qi(tableName) + ";";
-		try (Connection conn = mysql.getConnectionManager().getConnection();
+		try (Connection conn = mysql.getConnectionManager().getConnectionChecked();
 				PreparedStatement ps = conn.prepareStatement(sql);
 				ResultSet rs = ps.executeQuery()) {
 			while (rs.next()) {
