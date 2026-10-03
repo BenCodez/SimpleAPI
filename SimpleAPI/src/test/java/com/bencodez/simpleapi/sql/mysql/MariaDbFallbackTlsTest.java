@@ -11,8 +11,14 @@ import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Path;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLException;
+import com.bencodez.simpleapi.servercomm.http.HttpTlsIdentity;
 
 class MariaDbFallbackTlsTest {
+    @TempDir Path directory;
     @Test void sslEnabledFallbackRequiresTls() {
         assertTrue(fallback().buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=REQUIRED&requireSSL=true"));
     }
@@ -21,7 +27,12 @@ class MariaDbFallbackTlsTest {
         for (String mode : new String[]{"REQUIRED", "VERIFY_CA", "VERIFY_IDENTITY"}) {
             ConnectionManager manager = fallback();
             manager.setStr("&sslMode=" + mode);
-            assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=" + mode + "&requireSSL=true"));
+            if (mode.equals("VERIFY_IDENTITY") && legacyDriver()) {
+                assertThrows(IllegalArgumentException.class, () -> manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver"));
+            } else {
+                String certificateFlag = mode.startsWith("VERIFY_") ? "&verifyServerCertificate=true" : "";
+                assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=" + mode + "&requireSSL=true" + certificateFlag));
+            }
         }
     }
 
@@ -40,7 +51,14 @@ class MariaDbFallbackTlsTest {
     @Test void legacyCertificateVerificationRemainsEnabled() {
         ConnectionManager manager = fallback();
         manager.setStr("&verifyServerCertificate=true&customOption=retained");
-        assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=VERIFY_CA&requireSSL=true"));
+        assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=VERIFY_CA&requireSSL=true&verifyServerCertificate=true"));
+    }
+
+    @Test void explicitEncryptionRetainsLegacyCertificateVerification() {
+        ConnectionManager manager = fallback();
+        manager.setStr("&sslMode=REQUIRED&verifyServerCertificate=true");
+        assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith(
+                "&sslMode=VERIFY_CA&requireSSL=true&verifyServerCertificate=true"));
     }
 
     @Test void ordinaryMysqlNativeMariaAndSslDisabledRemainUnchanged() {
@@ -84,6 +102,76 @@ class MariaDbFallbackTlsTest {
         }
     }
 
+    @Test void identityVerificationFailsClosedOnLegacyDriver() {
+        ConnectionManager manager = fallback();
+        manager.setStr("&sslMode=VERIFY_IDENTITY");
+        if (legacyDriver()) {
+            assertThrows(IllegalArgumentException.class, () -> manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver"));
+        } else {
+            assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").contains("sslMode=VERIFY_IDENTITY"));
+        }
+    }
+
+    @Test void verifiedFallbackRejectsUntrustedTlsPeerBeforeAuthentication() throws Exception {
+        var context = HttpTlsIdentity.loadOrCreate(directory.resolve("untrusted-server"), "localhost").serverContext();
+        try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            server.setSoTimeout(5000);
+            var worker = Executors.newSingleThreadExecutor();
+            try {
+                var peer = worker.submit(() -> {
+                    try (var socket = server.accept()) {
+                        socket.setSoTimeout(5000);
+                        socket.getOutputStream().write(greeting(true));
+                        socket.getOutputStream().flush();
+                        byte[] header = socket.getInputStream().readNBytes(4);
+                        assertEquals(4, header.length);
+                        int length = (header[0] & 255) | ((header[1] & 255) << 8) | ((header[2] & 255) << 16);
+                        assertEquals(32, length, "Client must send a bounded SSL request before TLS");
+                        byte[] request = socket.getInputStream().readNBytes(length);
+                        assertEquals(32, request.length);
+                        assertTrue((request[1] & 8) != 0, "CLIENT_SSL must be set");
+                        try (SSLSocket tls = (SSLSocket) context.getSocketFactory().createSocket(
+                                socket, "localhost", socket.getPort(), true)) {
+                            tls.setUseClientMode(false);
+                            try {
+                                tls.startHandshake();
+                                return tls.getInputStream().read();
+                            } catch (SSLException rejected) {
+                                return -1;
+                            }
+                        }
+                    }
+                });
+                ConnectionManager manager = fallback();
+                manager.setHost(server.getInetAddress().getHostAddress());
+                manager.setPort(Integer.toString(server.getLocalPort()));
+                manager.setStr("&sslMode=VERIFY_CA&verifyServerCertificate=false&enabledTLSProtocols=TLSv1.2&connectTimeout=2000&socketTimeout=2000");
+                Properties properties = new Properties();
+                properties.setProperty("user", "test-user");
+                properties.setProperty("password", "test-only-not-a-secret");
+                SQLException failure = assertThrows(SQLException.class, () ->
+                        new com.mysql.cj.jdbc.Driver().connect(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver"), properties));
+                assertTrue(certificateFailure(failure), "Expected certificate validation failure, got " + failure);
+                assertEquals(-1, peer.get(5, TimeUnit.SECONDS), "No authentication packet may reach an untrusted TLS peer");
+            } finally {
+                worker.shutdownNow();
+            }
+        }
+    }
+
+    private static boolean certificateFailure(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof java.security.cert.CertificateException
+                    || current instanceof java.security.cert.CertPathBuilderException
+                    || current instanceof java.security.cert.CertPathValidatorException) return true;
+        }
+        return false;
+    }
+
+    private static boolean legacyDriver() {
+        return "8.0.12".equals(com.mysql.cj.jdbc.Driver.class.getPackage().getImplementationVersion());
+    }
+
     private static ConnectionManager fallback() {
         ConnectionManager manager = new ConnectionManager("localhost", "3306", "test", "", "votes");
         manager.setDbType(DbType.MARIADB);
@@ -93,14 +181,16 @@ class MariaDbFallbackTlsTest {
 
     // Protocol-10 greeting with protocol-41, secure connection and plugin authentication,
     // deliberately omitting CLIENT_SSL. No actual database or external network is needed.
-    private static byte[] nonTlsGreeting() {
+    private static byte[] nonTlsGreeting() { return greeting(false); }
+
+    private static byte[] greeting(boolean ssl) {
         ByteArrayOutputStream payload = new ByteArrayOutputStream();
         payload.write(10);
         payload.writeBytes("8.0.0-test\0".getBytes(StandardCharsets.US_ASCII));
         payload.writeBytes(new byte[]{1, 0, 0, 0});
         payload.writeBytes("abcdefgh".getBytes(StandardCharsets.US_ASCII));
         payload.write(0);
-        int capabilities = 1 | 512 | 8192 | 32768 | 0x80000;
+        int capabilities = 1 | 512 | 8192 | 32768 | 0x80000 | (ssl ? 2048 : 0);
         payload.write(capabilities & 255);
         payload.write((capabilities >>> 8) & 255);
         payload.write(45);

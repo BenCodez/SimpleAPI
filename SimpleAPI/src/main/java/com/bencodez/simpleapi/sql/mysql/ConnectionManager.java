@@ -340,7 +340,27 @@ public class ConnectionManager {
 				verifyCertificate = true;
 			}
 		}
-		return "&sslMode=" + (mode != null ? mode : verifyCertificate ? "VERIFY_CA" : "REQUIRED") + "&requireSSL=true";
+		String requiredMode = mode != null ? mode : verifyCertificate ? "VERIFY_CA" : "REQUIRED";
+		if (verifyCertificate && requiredMode.equals("REQUIRED")) requiredMode = "VERIFY_CA";
+		if (requiredMode.equals("VERIFY_IDENTITY") && !mysqlDriverSupportsSslMode()) {
+			throw new IllegalArgumentException("MariaDB VERIFY_IDENTITY requires Connector/J hostname verification support");
+		}
+		return "&sslMode=" + requiredMode + "&requireSSL=true"
+				+ (requiredMode.startsWith("VERIFY_") ? "&verifyServerCertificate=true" : "");
+	}
+
+	/** Query the driver's supported JDBC properties without opening a connection. */
+	private boolean mysqlDriverSupportsSslMode() {
+		try {
+			java.sql.Driver driver = (java.sql.Driver) Class.forName("com.mysql.cj.jdbc.Driver")
+					.getDeclaredConstructor().newInstance();
+			for (java.sql.DriverPropertyInfo property : driver.getPropertyInfo("jdbc:mysql://localhost/", null)) {
+				if ("sslMode".equals(property.name)) return true;
+			}
+			return false;
+		} catch (ReflectiveOperationException | SQLException | LinkageError failure) {
+			throw new IllegalArgumentException("Unable to determine Connector/J TLS verification support", failure);
+		}
 	}
 
 	private void rejectConflictingPostgreSqlTlsOptions(String extra) {
