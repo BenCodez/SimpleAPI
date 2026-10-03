@@ -22,8 +22,7 @@ class ConnectionManagerPoolTest {
         Connection recovered = mock(Connection.class);
         when(pool.getConnection()).thenThrow(exhausted).thenThrow(exhausted).thenReturn(recovered);
         assertSame(exhausted, assertThrows(SQLException.class, manager::getConnectionChecked));
-        IllegalStateException legacy = assertThrows(IllegalStateException.class, manager::getConnection);
-        assertSame(exhausted, legacy.getCause());
+        assertNull(manager.getConnection());
         assertSame(pool, manager.getDataSource());
         verify(pool, never()).close();
         assertSame(recovered, manager.getConnectionChecked());
@@ -44,7 +43,7 @@ class ConnectionManagerPoolTest {
         }
     }
 
-    @Test void publicPoolSetterRetiresPredecessorWithoutClosingSamePool() {
+    @Test void publicPoolSetterPreservesCallerOwnership() {
         ConnectionManager manager = manager(DbType.MYSQL);
         HikariDataSource first = mock(HikariDataSource.class);
         HikariDataSource second = mock(HikariDataSource.class);
@@ -52,10 +51,11 @@ class ConnectionManagerPoolTest {
         manager.setDataSource(first);
         verify(first, never()).close();
         manager.setDataSource(second);
-        verify(first).close();
+        verify(first, never()).close();
         verify(second, never()).close();
         manager.setDataSource(null);
-        verify(second).close();
+        verify(first, never()).close();
+        verify(second, never()).close();
         assertTrue(manager.isClosed());
     }
 
@@ -75,11 +75,11 @@ class ConnectionManagerPoolTest {
         }
     }
 
-    @Test void initializationFailureNeverReturnsNull() throws Exception {
+    @Test void initializationFailurePreservesLegacyNullAndCheckedFailure() throws Exception {
         ConnectionManager manager = manager(DbType.MYSQL);
         manager.setMysqlDriver("missing.probe.Driver");
         assertThrows(SQLException.class, manager::getConnectionChecked);
-        assertThrows(IllegalStateException.class, manager::getConnection);
+        assertNull(manager.getConnection());
         assertNull(manager.getDataSource());
     }
 

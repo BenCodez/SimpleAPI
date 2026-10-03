@@ -140,9 +140,9 @@ public class ConnectionManager {
 		this.dbType = useMariaDB ? DbType.MARIADB : DbType.MYSQL;
 	}
 
-	/** Transfers ownership of a supplied pool and retires the previous one. */
+	/** Legacy assignment-only setter; the caller retains predecessor ownership. */
 	public synchronized void setDataSource(HikariDataSource replacement) {
-		replaceDataSource(replacement);
+		dataSource = replacement;
 	}
 
 	private void replaceDataSource(HikariDataSource replacement) {
@@ -171,14 +171,15 @@ public class ConnectionManager {
 	}
 
 	/**
-	 * Legacy no-checked-exception entry point. Acquisition failure is explicit,
-	 * never a null connection; SQL callers should use getConnectionChecked().
+	 * Legacy no-checked-exception entry point. Preserves null on acquisition
+	 * failure; SQL callers should use getConnectionChecked().
 	 */
 	public Connection getConnection() {
 		try {
 			return getConnectionChecked();
 		} catch (SQLException failure) {
-			throw new IllegalStateException("Unable to obtain a SQL pool connection", failure);
+			System.err.println("Unable to obtain a SQL pool connection");
+			return null;
 		}
 	}
 
