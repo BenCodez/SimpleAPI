@@ -13,6 +13,9 @@
         <timestamp>${maven.build.timestamp}</timestamp>
         <maven.build.timestamp.format>yyyy-MM-dd HH:mm</maven.build.timestamp.format>
         <build.number>NOTSET</build.number>
+        <mysql.connector.test.group>com.mysql</mysql.connector.test.group>
+        <mysql.connector.test.artifact>mysql-connector-j</mysql.connector.test.artifact>
+        <mysql.connector.test.version>9.5.0</mysql.connector.test.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <maven.compiler.release>21</maven.compiler.release>
@@ -299,6 +302,12 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>${mysql.connector.test.group}</groupId>
+            <artifactId>${mysql.connector.test.artifact}</artifactId>
+            <version>${mysql.connector.test.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
             <version>5.23.0</version>
@@ -354,6 +363,14 @@
         </dependency>
     </dependencies>
     <profiles>
+        <profile>
+            <id>legacy-mysql-tls-test</id>
+            <properties>
+                <mysql.connector.test.group>mysql</mysql.connector.test.group>
+                <mysql.connector.test.artifact>mysql-connector-java</mysql.connector.test.artifact>
+                <mysql.connector.test.version>8.0.12</mysql.connector.test.version>
+            </properties>
+        </profile>
         <profile>
             <id>normal</id>
             <properties>

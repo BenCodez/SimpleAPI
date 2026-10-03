@@ -297,14 +297,70 @@ public class ConnectionManager {
 		if (postgreSqlTlsMode != PostgreSqlTlsMode.LEGACY) {
 			throw new IllegalArgumentException("PostgreSqlTlsMode applies only to PostgreSQL connections");
 		}
-		boolean maria = (dbType == DbType.MARIADB) || "org.mariadb.jdbc.Driver".equals(driverClassName);
+		boolean maria = !"com.mysql.cj.jdbc.Driver".equals(driverClassName)
+				&& (dbType == DbType.MARIADB || "org.mariadb.jdbc.Driver".equals(driverClassName));
 		String base = maria ? String.format("jdbc:mariadb://%s:%s/%s", host, port, database)
 				: String.format("jdbc:mysql://%s:%s/%s", host, port, database);
 
+		String fallbackTls = !maria && dbType == DbType.MARIADB && useSSL
+				? requiredMysqlFallbackTls(extra) : "";
 		return base + "?useSSL=" + useSSL + "&allowMultiQueries=true" + "&rewriteBatchedStatements=true"
 				+ "&useDynamicCharsetInfo=false" + "&allowPublicKeyRetrieval=" + publicKeyRetrieval
 				+ "&tcpKeepAlive=true" + "&connectTimeout=10000" + "&socketTimeout=30000" + "&serverTimezone=UTC"
-				+ extra;
+				+ extra + fallbackTls;
+	}
+
+	/** Require TLS on both modern and pre-8.0.13 Connector/J when MariaDB SSL is enabled. */
+	private String requiredMysqlFallbackTls(String extra) {
+		String mode = null;
+		boolean verifyCertificate = false;
+		String options = extra.startsWith("?") || extra.startsWith("&") ? extra.substring(1) : extra;
+		for (String parameter : options.split("&", -1)) {
+			String[] pair = parameter.split("=", 2);
+			String key;
+			String value;
+			try {
+				key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8).trim().toLowerCase(Locale.ROOT);
+				value = pair.length == 2 ? URLDecoder.decode(pair[1], StandardCharsets.UTF_8).trim() : "";
+			} catch (IllegalArgumentException invalid) {
+				throw new IllegalArgumentException("Invalid encoded parameter in MariaDB fallback Line");
+			}
+			if (key.equals("sslmode")) {
+				String selected = value.toUpperCase(Locale.ROOT);
+				if (mode != null || !(selected.equals("REQUIRED") || selected.equals("VERIFY_CA")
+						|| selected.equals("VERIFY_IDENTITY"))) {
+					throw new IllegalArgumentException("MariaDB UseSSL requires a single mandatory Connector/J TLS mode");
+				}
+				mode = selected;
+			} else if (key.equals("usessl") || key.equals("requiressl")) {
+				if (!value.equalsIgnoreCase("true")) {
+					throw new IllegalArgumentException("MariaDB UseSSL forbids disabling Connector/J TLS");
+				}
+			} else if (key.equals("verifyservercertificate") && value.equalsIgnoreCase("true")) {
+				verifyCertificate = true;
+			}
+		}
+		String requiredMode = mode != null ? mode : verifyCertificate ? "VERIFY_CA" : "REQUIRED";
+		if (verifyCertificate && requiredMode.equals("REQUIRED")) requiredMode = "VERIFY_CA";
+		if (requiredMode.equals("VERIFY_IDENTITY") && !mysqlDriverSupportsSslMode()) {
+			throw new IllegalArgumentException("MariaDB VERIFY_IDENTITY requires Connector/J hostname verification support");
+		}
+		return "&sslMode=" + requiredMode + "&requireSSL=true"
+				+ (requiredMode.startsWith("VERIFY_") ? "&verifyServerCertificate=true" : "");
+	}
+
+	/** Query the driver's supported JDBC properties without opening a connection. */
+	private boolean mysqlDriverSupportsSslMode() {
+		try {
+			java.sql.Driver driver = (java.sql.Driver) Class.forName("com.mysql.cj.jdbc.Driver")
+					.getDeclaredConstructor().newInstance();
+			for (java.sql.DriverPropertyInfo property : driver.getPropertyInfo("jdbc:mysql://localhost/", null)) {
+				if ("sslMode".equals(property.name)) return true;
+			}
+			return false;
+		} catch (ReflectiveOperationException | SQLException | LinkageError failure) {
+			throw new IllegalArgumentException("Unable to determine Connector/J TLS verification support", failure);
+		}
 	}
 
 	private void rejectConflictingPostgreSqlTlsOptions(String extra) {
