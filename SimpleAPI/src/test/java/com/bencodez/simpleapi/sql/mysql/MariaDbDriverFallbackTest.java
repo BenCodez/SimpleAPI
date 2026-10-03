@@ -23,7 +23,7 @@ class MariaDbDriverFallbackTest {
         assertTrue(url.contains("useSSL=true"));
         assertTrue(url.contains("allowPublicKeyRetrieval=true"));
         assertTrue(url.contains("&customOption=retained"));
-        assertTrue(url.endsWith("&sslMode=REQUIRED"));
+        assertTrue(url.endsWith("&sslMode=REQUIRED&requireSSL=true"));
         assertEquals(DbType.MARIADB, manager.getDbType());
     }
 

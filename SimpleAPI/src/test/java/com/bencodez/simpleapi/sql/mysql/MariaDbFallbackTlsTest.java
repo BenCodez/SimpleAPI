@@ -14,14 +14,14 @@ import org.junit.jupiter.api.Test;
 
 class MariaDbFallbackTlsTest {
     @Test void sslEnabledFallbackRequiresTls() {
-        assertTrue(fallback().buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=REQUIRED"));
+        assertTrue(fallback().buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=REQUIRED&requireSSL=true"));
     }
 
     @Test void explicitStrongerModesRemainIntact() {
         for (String mode : new String[]{"REQUIRED", "VERIFY_CA", "VERIFY_IDENTITY"}) {
             ConnectionManager manager = fallback();
             manager.setStr("&sslMode=" + mode);
-            assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=" + mode));
+            assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=" + mode + "&requireSSL=true"));
         }
     }
 
@@ -29,7 +29,8 @@ class MariaDbFallbackTlsTest {
         for (String options : new String[]{"&sslMode=DISABLED", "&sslMode=PREFERRED", "&sslMode=",
                 "&sslMode=unknown", "&ssl%4dode=PREFERRED", "&sslMode=%50REFERRED",
                 "&sslMode=REQUIRED&sslMode=DISABLED", "&sslMode=VERIFY_CA&sslMode=REQUIRED",
-                "&sslMode=%GG"}) {
+                "&sslMode=%GG", "&useSSL=false", "&requireSSL=false", "&useSSL=",
+                "&requireSSL=unknown", "&require%53SL=false"}) {
             ConnectionManager manager = fallback();
             manager.setStr(options);
             assertThrows(IllegalArgumentException.class, () -> manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver"));
@@ -39,7 +40,7 @@ class MariaDbFallbackTlsTest {
     @Test void legacyCertificateVerificationRemainsEnabled() {
         ConnectionManager manager = fallback();
         manager.setStr("&verifyServerCertificate=true&customOption=retained");
-        assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=VERIFY_CA"));
+        assertTrue(manager.buildJdbcUrl("com.mysql.cj.jdbc.Driver").endsWith("&sslMode=VERIFY_CA&requireSSL=true"));
     }
 
     @Test void ordinaryMysqlNativeMariaAndSslDisabledRemainUnchanged() {

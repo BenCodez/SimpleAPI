@@ -27,3 +27,6 @@ jobs:
 
       - name: Build with Maven
         run: mvn -B -f SimpleAPI/pom.xml package
+
+      - name: Verify legacy Connector/J fallback TLS
+        run: mvn -B -f SimpleAPI/pom.xml -Plegacy-mysql-tls-test -Dtest=MariaDbFallbackTlsTest test

@@ -274,7 +274,7 @@ public class ConnectionManager {
 				+ extra + fallbackTls;
 	}
 
-	/** Connector/J useSSL=true alone permits plaintext fallback; MariaDB's flag does not. */
+	/** Require TLS on both modern and pre-8.0.13 Connector/J when MariaDB SSL is enabled. */
 	private String requiredMysqlFallbackTls(String extra) {
 		String mode = null;
 		boolean verifyCertificate = false;
@@ -296,11 +296,15 @@ public class ConnectionManager {
 					throw new IllegalArgumentException("MariaDB UseSSL requires a single mandatory Connector/J TLS mode");
 				}
 				mode = selected;
+			} else if (key.equals("usessl") || key.equals("requiressl")) {
+				if (!value.equalsIgnoreCase("true")) {
+					throw new IllegalArgumentException("MariaDB UseSSL forbids disabling Connector/J TLS");
+				}
 			} else if (key.equals("verifyservercertificate") && value.equalsIgnoreCase("true")) {
 				verifyCertificate = true;
 			}
 		}
-		return "&sslMode=" + (mode != null ? mode : verifyCertificate ? "VERIFY_CA" : "REQUIRED");
+		return "&sslMode=" + (mode != null ? mode : verifyCertificate ? "VERIFY_CA" : "REQUIRED") + "&requireSSL=true";
 	}
 
 	private void rejectConflictingPostgreSqlTlsOptions(String extra) {

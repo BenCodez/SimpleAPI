@@ -212,9 +212,9 @@ Native MariaDB and custom MariaDB driver overrides retain the MariaDB scheme;
 the explicit fallback opt-out remains supported.
 
 For MariaDB configured with `UseSSL=true`, Connector/J fallback requires TLS
-(`sslMode=REQUIRED`) instead of permitting a plaintext downgrade. Stronger
+(`sslMode=REQUIRED` plus `requireSSL=true` for pre-8.0.13 drivers) instead of permitting a plaintext downgrade. Stronger
 `VERIFY_CA`/`VERIFY_IDENTITY` modes in `Line` remain supported; weaker or ambiguous
-`sslMode` overrides are rejected. Legacy certificate verification requests remain
+`sslMode` overrides and options disabling `useSSL`/`requireSSL` are rejected. Legacy certificate verification requests remain
 verified. This requires encryption but does not claim server identity verification
 without the appropriate verified mode. Native MariaDB, ordinary MySQL settings,
 and explicitly disabled TLS remain unchanged.
