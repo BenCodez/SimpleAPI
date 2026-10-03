@@ -266,10 +266,41 @@ public class ConnectionManager {
 		String base = maria ? String.format("jdbc:mariadb://%s:%s/%s", host, port, database)
 				: String.format("jdbc:mysql://%s:%s/%s", host, port, database);
 
+		String fallbackTls = !maria && dbType == DbType.MARIADB && useSSL
+				? requiredMysqlFallbackTls(extra) : "";
 		return base + "?useSSL=" + useSSL + "&allowMultiQueries=true" + "&rewriteBatchedStatements=true"
 				+ "&useDynamicCharsetInfo=false" + "&allowPublicKeyRetrieval=" + publicKeyRetrieval
 				+ "&tcpKeepAlive=true" + "&connectTimeout=10000" + "&socketTimeout=30000" + "&serverTimezone=UTC"
-				+ extra;
+				+ extra + fallbackTls;
+	}
+
+	/** Connector/J useSSL=true alone permits plaintext fallback; MariaDB's flag does not. */
+	private String requiredMysqlFallbackTls(String extra) {
+		String mode = null;
+		boolean verifyCertificate = false;
+		String options = extra.startsWith("?") || extra.startsWith("&") ? extra.substring(1) : extra;
+		for (String parameter : options.split("&", -1)) {
+			String[] pair = parameter.split("=", 2);
+			String key;
+			String value;
+			try {
+				key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8).trim().toLowerCase(Locale.ROOT);
+				value = pair.length == 2 ? URLDecoder.decode(pair[1], StandardCharsets.UTF_8).trim() : "";
+			} catch (IllegalArgumentException invalid) {
+				throw new IllegalArgumentException("Invalid encoded parameter in MariaDB fallback Line");
+			}
+			if (key.equals("sslmode")) {
+				String selected = value.toUpperCase(Locale.ROOT);
+				if (mode != null || !(selected.equals("REQUIRED") || selected.equals("VERIFY_CA")
+						|| selected.equals("VERIFY_IDENTITY"))) {
+					throw new IllegalArgumentException("MariaDB UseSSL requires a single mandatory Connector/J TLS mode");
+				}
+				mode = selected;
+			} else if (key.equals("verifyservercertificate") && value.equalsIgnoreCase("true")) {
+				verifyCertificate = true;
+			}
+		}
+		return "&sslMode=" + (mode != null ? mode : verifyCertificate ? "VERIFY_CA" : "REQUIRED");
 	}
 
 	private void rejectConflictingPostgreSqlTlsOptions(String extra) {

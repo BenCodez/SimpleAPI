@@ -22,7 +22,8 @@ class MariaDbDriverFallbackTest {
         assertTrue(url.startsWith("jdbc:mysql://localhost:3306/votes?"));
         assertTrue(url.contains("useSSL=true"));
         assertTrue(url.contains("allowPublicKeyRetrieval=true"));
-        assertTrue(url.endsWith("&customOption=retained"));
+        assertTrue(url.contains("&customOption=retained"));
+        assertTrue(url.endsWith("&sslMode=REQUIRED"));
         assertEquals(DbType.MARIADB, manager.getDbType());
     }
 
