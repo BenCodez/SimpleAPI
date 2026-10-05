@@ -15,7 +15,7 @@
         <build.number>NOTSET</build.number>
         <mysql.connector.test.group>com.mysql</mysql.connector.test.group>
         <mysql.connector.test.artifact>mysql-connector-j</mysql.connector.test.artifact>
-        <mysql.connector.test.version>9.5.0</mysql.connector.test.version>
+        <mysql.connector.test.version>26.7.0</mysql.connector.test.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <maven.compiler.release>21</maven.compiler.release>
