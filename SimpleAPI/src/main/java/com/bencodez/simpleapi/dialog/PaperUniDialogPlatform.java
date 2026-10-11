@@ -12,17 +12,32 @@ import io.github.projectunified.unidialog.paper.PaperDialogManager;
 import io.github.projectunified.unidialog.paper.dialog.PaperConfirmationDialog;
 import io.github.projectunified.unidialog.paper.dialog.PaperMultiActionDialog;
 import io.github.projectunified.unidialog.paper.dialog.PaperNoticeDialog;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextReplacementConfig;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
 /**
  * Paper implementation using UniDialog's Paper manager.
  */
 public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 
+	private static final TextReplacementConfig HIDE_INERT_GUARDS = TextReplacementConfig.builder()
+			.matchLiteral("\u2060").replacement("").build();
 	private final PaperDialogManager manager;
 
 	public PaperUniDialogPlatform(Plugin plugin, String namespace) {
 		super(plugin, namespace);
-		this.manager = new PaperDialogManager(plugin, namespace);
+		this.manager = new PaperDialogManager(plugin, namespace, PaperUniDialogPlatform::renderedText);
+	}
+
+	/**
+	 * Called by UniDialog at its final component deserialization boundary.
+	 * Deserialize while WORD JOINER guards are present, then remove those
+	 * markers from the component tree, never from another parsable string.
+	 */
+	static Component renderedText(String prepared) {
+		return LegacyComponentSerializer.legacySection().deserialize(prepared)
+				.replaceText(HIDE_INERT_GUARDS);
 	}
 
 	@Override
@@ -275,6 +290,6 @@ public class PaperUniDialogPlatform extends AbstractUniDialogPlatform {
 	}
 
 	private String getInputInitial(UniDialogInput input) {
-		return input.getInitialValue();
+		return input.getInitialValue() == null ? null : input.getInitialValue().replace("\u2060", "");
 	}
 }
