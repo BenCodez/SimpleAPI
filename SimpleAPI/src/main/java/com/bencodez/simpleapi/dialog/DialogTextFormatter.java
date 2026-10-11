@@ -29,6 +29,9 @@ public final class DialogTextFormatter {
 
 		String formatted = text;
 
-		return MessageAPI.colorize(MessageAPI.replacePlaceHolder(formatted, placeholders, true));
+		// Keep WORD JOINER guards through placeholder/color parsing, then remove them
+		// at this final dialog-text sink so unsupported Minecraft glyphs never show.
+		return MessageAPI.colorize(MessageAPI.replacePlaceHolder(formatted, placeholders, true))
+				.replace("\u2060", "");
 	}
 }
