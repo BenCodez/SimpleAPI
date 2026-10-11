@@ -147,6 +147,30 @@ class ConnectionManagerPoolTest {
         assertEquals(1, callbacks.get());
     }
 
+    @Test void externalConnectRetainsFailureDebugWithoutCredentials() {
+        java.util.List<String> messages = new java.util.ArrayList<>();
+        MySQL mysql = new MySQL(1) {
+            public void debug(SQLException e) { fail("unexpected exception callback"); }
+            public void debug(String message) { messages.add(message); }
+            public void severe(String message) { fail("unexpected severe callback"); }
+        };
+        var config = new com.bencodez.simpleapi.sql.mysql.config.MysqlConfig();
+        config.setDebug(true);
+        config.setPass("private-password");
+        try (var managers = mockConstruction(ConnectionManager.class, (manager, context) -> {
+            when(manager.open()).thenReturn(false);
+            when(manager.getDbType()).thenReturn(DbType.MYSQL);
+        })) {
+            assertFalse(mysql.connect(config));
+            assertEquals(java.util.List.of("DB connection failed. type=MYSQL Check host/port/credentials and timeouts."), messages);
+            messages.clear();
+            assertFalse(mysql.connect(config, false));
+            assertTrue(messages.isEmpty());
+        } finally {
+            mysql.disconnect();
+        }
+    }
+
     @Test void closedPoolIsReopenedAndConnectionIsReturned() throws Exception {
         ConnectionManager manager = manager(DbType.MYSQL);
         HikariDataSource closed = mock(HikariDataSource.class);

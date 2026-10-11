@@ -148,6 +148,8 @@ public abstract class AbstractSqlTable {
 			} catch (SQLException | RuntimeException | Error failure) {
 				try { mysql.disconnect(); }
 				catch (RuntimeException | Error cleanupFailure) { failure.addSuppressed(cleanupFailure); }
+				if (failure instanceof RuntimeException unchecked) { throw unchecked; }
+				if (failure instanceof Error fatal) { throw fatal; }
 				throw new IllegalStateException("Failed to initialize SQL database selection", failure);
 			}
 		}

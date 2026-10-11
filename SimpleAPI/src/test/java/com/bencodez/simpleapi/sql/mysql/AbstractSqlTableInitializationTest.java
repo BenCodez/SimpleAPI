@@ -57,6 +57,29 @@ class AbstractSqlTableInitializationTest {
         }
     }
 
+    @Test void uncheckedDatabaseSelectionFailuresKeepIdentityAndCleanupFailures() throws Exception {
+        for (Throwable failure : new Throwable[] {new IllegalArgumentException("driver rejected selection"),
+                new LinkageError("driver linkage failure")}) {
+            RuntimeException cleanupFailure = new IllegalStateException("controlled cleanup failure");
+            RejectingTable.hookCalls = 0;
+            try (var managers = mockConstruction(ConnectionManager.class, (manager, context) -> {
+                when(manager.open()).thenReturn(true);
+                Connection connection = mock(Connection.class);
+                when(manager.getConnectionChecked()).thenReturn(connection);
+                when(connection.prepareStatement(anyString())).thenThrow(failure);
+                doThrow(cleanupFailure).when(manager).close();
+            })) {
+                Throwable thrown = assertThrows(failure.getClass(),
+                        () -> new RejectingTable("votes", config(), true));
+                assertSame(failure, thrown);
+                assertArrayEquals(new Throwable[] {cleanupFailure}, thrown.getSuppressed());
+                assertEquals(0, RejectingTable.hookCalls);
+                verify(managers.constructed().get(0)).close();
+                verify(managers.constructed().get(0).getConnectionChecked()).close();
+            }
+        }
+    }
+
     @Test void databaseSelectionEscapesQuotedDatabaseNames() throws Exception {
         MysqlConfig config = config();
         config.setDatabase("vote`data");

@@ -106,9 +106,14 @@ public abstract class MySQL {
 			// disconnects explicitly when construction is aborted instead.
 		}
 
-		if (ok && emitDiagnostics && config.isDebug()) {
-			debug("DB connected. type=" + connectionManager.getDbType() + " host=" + config.getHostName() + " db="
-					+ config.getDatabase() + " maxPool=" + maxConnections);
+		if (emitDiagnostics && config.isDebug()) {
+			if (ok) {
+				debug("DB connected. type=" + connectionManager.getDbType() + " host=" + config.getHostName() + " db="
+						+ config.getDatabase() + " maxPool=" + maxConnections);
+			} else {
+				debug("DB connection failed. type=" + connectionManager.getDbType()
+						+ " Check host/port/credentials and timeouts.");
+			}
 		}
 		return ok;
 	}
