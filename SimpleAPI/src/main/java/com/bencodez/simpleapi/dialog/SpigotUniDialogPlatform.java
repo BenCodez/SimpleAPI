@@ -257,8 +257,8 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 	 * Let that final conversion see the inert guards, then drop them from text
 	 * components without reparsing color or click-action syntax.
 	 */
-	static TextComponent renderedText(String prepared) {
-		TextComponent component = TextComponent.fromLegacy(prepared);
+	static BaseComponent renderedText(String prepared) {
+		BaseComponent component = TextComponent.fromLegacy(prepared);
 		stripGuards(component);
 		return component;
 	}
