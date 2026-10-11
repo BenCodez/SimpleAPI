@@ -38,9 +38,15 @@ class DialogTextFormatterTest {
                 .serialize(PaperUniDialogPlatform.renderedText(ampersand)));
 
         String section = DialogTextFormatter.format(null, "\u00A7%site%", values);
-        assertEquals("\u00A7a", SpigotUniDialogPlatform.renderedText(section).toPlainText());
-        assertEquals("\u00A7a", PlainTextComponentSerializer.plainText()
-                .serialize(PaperUniDialogPlatform.renderedText(section)));
+        // A legacy parser may drop the isolated invalid § character, but
+        // the site name must remain text, not turn into a green color token.
+        var spigot = SpigotUniDialogPlatform.renderedText(section);
+        var paper = PaperUniDialogPlatform.renderedText(section);
+        assertTrue(spigot.toPlainText().endsWith("a"));
+        assertTrue(PlainTextComponentSerializer.plainText().serialize(paper).endsWith("a"));
+        assertFalse(spigot.toLegacyText().contains("\u00A7a"));
+        assertFalse(net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer.legacySection()
+                .serialize(paper).contains("\u00A7a"));
     }
 
     @Test
