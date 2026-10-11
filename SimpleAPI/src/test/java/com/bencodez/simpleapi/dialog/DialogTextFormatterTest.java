@@ -2,42 +2,57 @@ package com.bencodez.simpleapi.dialog;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashMap;
 
 import org.junit.jupiter.api.Test;
 
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+
 class DialogTextFormatterTest {
 
     @Test
-    void stripsInertMarkersAfterFormattingSiteNames() {
+    void removesMarkersOnlyAfterSpigotAndPaperComponentParsing() {
         HashMap<String, String> values = new HashMap<>();
         values.put("site", "\u2060Minecraft Menu\u2060");
 
-        String result = DialogTextFormatter.format(null, "&7Site: &e%site%", values);
-
-        assertEquals("\u00A77Site: \u00A7eMinecraft Menu", result);
-        assertFalse(result.contains("\u2060"));
+        String formatted = DialogTextFormatter.format(null, "&7Site: &e%site%", values);
+        assertTrue(formatted.contains("\u2060"), "Keep guards through UniDialog's final legacy parser");
+        assertEquals("Site: Minecraft Menu", SpigotUniDialogPlatform.renderedText(formatted).toPlainText());
+        assertEquals("Site: Minecraft Menu", PlainTextComponentSerializer.plainText()
+                .serialize(PaperUniDialogPlatform.renderedText(formatted)));
     }
 
     @Test
-    void boundariesStillBlockColorsFormedAcrossPlaceholderEdges() {
+    void boundariesProtectBothAmpersandAndSectionSignCodesAcrossSubstitution() {
         HashMap<String, String> values = new HashMap<>();
         values.put("site", "\u2060a\u2060");
 
-        // Without the guards, a trailing & in the trusted template would
-        // become a Minecraft color code before the message is sent.
-        assertEquals("&a", DialogTextFormatter.format(null, "&%site%", values));
-        assertEquals("\u00A7a", DialogTextFormatter.format(null, "&%site%",
-                new HashMap<>(java.util.Map.of("site", "a"))));
+        // Color code can be formed only if the boundaries are dropped BEFORE
+        // either parser runs. Verify the finished components still show literal
+        // text in both legacy serializers, including when a template has §.
+        String ampersand = DialogTextFormatter.format(null, "&%site%", values);
+        assertEquals("&a", SpigotUniDialogPlatform.renderedText(ampersand).toPlainText());
+        assertEquals("&a", PlainTextComponentSerializer.plainText()
+                .serialize(PaperUniDialogPlatform.renderedText(ampersand)));
+
+        String section = DialogTextFormatter.format(null, "\u00A7%site%", values);
+        assertEquals("\u00A7a", SpigotUniDialogPlatform.renderedText(section).toPlainText());
+        assertEquals("\u00A7a", PlainTextComponentSerializer.plainText()
+                .serialize(PaperUniDialogPlatform.renderedText(section)));
     }
 
     @Test
-    void guardedNestedPlaceholderRemainsLiteralText() {
+    void nestedPlaceholderNeverResolvesFromGuardedSiteName() {
         HashMap<String, String> values = new HashMap<>();
         values.put("site", "\u2060%\u2060player_name%\u2060");
         values.put("player_name", "NotTheSite");
 
-        assertEquals("%player_name%", DialogTextFormatter.format(null, "%site%", values));
+        String formatted = DialogTextFormatter.format(null, "%site%", values);
+        assertFalse(formatted.contains("NotTheSite"));
+        assertEquals("%player_name%", SpigotUniDialogPlatform.renderedText(formatted).toPlainText());
+        assertEquals("%player_name%", PlainTextComponentSerializer.plainText()
+                .serialize(PaperUniDialogPlatform.renderedText(formatted)));
     }
 }
