@@ -45,8 +45,10 @@ class DialogTextFormatterTest {
         assertTrue(spigot.toPlainText().endsWith("a"));
         assertTrue(PlainTextComponentSerializer.plainText().serialize(paper).endsWith("a"));
         assertFalse(spigot.toLegacyText().contains("\u00A7a"));
-        assertFalse(net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer.legacySection()
-                .serialize(paper).contains("\u00A7a"));
+        // Re-serializing a literal § followed by 'a' to a legacy String can
+        // produce an ambiguous §a sequence; check the actual component style.
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                net.kyori.adventure.text.format.NamedTextColor.GREEN, paper.color());
     }
 
     @Test
