@@ -11,6 +11,11 @@ public abstract class MySQL {
 	private ConnectionManager connectionManager;
 	private int maxConnections;
 	private ExecutorService threadPool;
+	private volatile Exception lastConnectFailure;
+
+	public Exception getLastConnectFailure() {
+		return lastConnectFailure;
+	}
 
 	/**
 	 * Create a new MySQL object with a default of 10 maximum threads.
@@ -31,6 +36,12 @@ public abstract class MySQL {
 	}
 
 	public boolean connect(MysqlConfig config) {
+		return connect(config, true);
+	}
+
+	/** Connect without subclass diagnostics when called by a superclass constructor. */
+	public boolean connect(MysqlConfig config, boolean emitDiagnostics) {
+		lastConnectFailure = null;
 		// (Re)size thread pool to match MaxConnections from config
 		this.maxConnections = Math.max(1, config.getMaxThreads());
 		if (threadPool != null) {
@@ -89,18 +100,16 @@ public abstract class MySQL {
 		}
 
 		boolean ok = connectionManager.open();
-
-		// Optional debug output
-		if (config.isDebug()) {
-			if (ok) {
-				debug("DB connected. type=" + connectionManager.getDbType() + " host=" + config.getHostName() + " db="
-						+ config.getDatabase() + " maxPool=" + maxConnections);
-			} else {
-				debug("DB connection failed. type=" + connectionManager.getDbType()
-						+ " Check host/port/credentials and timeouts.");
-			}
+		if (!ok) {
+			lastConnectFailure = connectionManager.getLastOpenFailure();
+			// Legacy callers can retry through the connection manager. The owner
+			// disconnects explicitly when construction is aborted instead.
 		}
 
+		if (ok && emitDiagnostics && config.isDebug()) {
+			debug("DB connected. type=" + connectionManager.getDbType() + " host=" + config.getHostName() + " db="
+					+ config.getDatabase() + " maxPool=" + maxConnections);
+		}
 		return ok;
 	}
 

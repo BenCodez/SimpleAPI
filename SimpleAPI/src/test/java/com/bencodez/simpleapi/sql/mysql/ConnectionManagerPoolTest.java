@@ -5,6 +5,7 @@ import static org.mockito.Mockito.*;
 import java.sql.*;
 import java.util.Properties;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.Test;
@@ -78,9 +79,72 @@ class ConnectionManagerPoolTest {
     @Test void initializationFailurePreservesLegacyNullAndCheckedFailure() throws Exception {
         ConnectionManager manager = manager(DbType.MYSQL);
         manager.setMysqlDriver("missing.probe.Driver");
-        assertThrows(SQLException.class, manager::getConnectionChecked);
+        SQLException failure = assertThrows(SQLException.class, manager::getConnectionChecked);
+        assertNotNull(failure.getCause());
+        assertInstanceOf(ClassNotFoundException.class, failure.getCause());
+        assertSame(failure.getCause(), manager.getLastOpenFailure());
         assertNull(manager.getConnection());
         assertNull(manager.getDataSource());
+    }
+
+    @Test void failedLegacyConnectRetainsCauseAndAllowsAsyncRecovery() throws Exception {
+        MySQL mysql = new MySQL(1) {
+            public void debug(SQLException e) { fail("failure diagnostics must not call subclass hooks"); }
+            public void debug(String message) { fail("failure diagnostics must not call subclass hooks"); }
+            public void severe(String message) { fail("failure diagnostics must not call subclass hooks"); }
+        };
+        var config = new com.bencodez.simpleapi.sql.mysql.config.MysqlConfig();
+        config.setHostName("localhost");
+        config.setPort(3306);
+        config.setUser("test");
+        config.setPass("secret");
+        config.setDatabase("test");
+        config.setDriver("missing.probe.Driver");
+        try (var managers = mockConstruction(ConnectionManager.class, (manager, context) -> {
+            when(manager.open()).thenReturn(false);
+            when(manager.getLastOpenFailure()).thenReturn(new SQLException("controlled outage"));
+            Connection recovered = mock(Connection.class);
+            PreparedStatement statement = mock(PreparedStatement.class);
+            when(manager.getConnectionChecked()).thenReturn(recovered);
+            when(recovered.prepareStatement(anyString())).thenReturn(statement);
+            when(statement.executeUpdate()).thenReturn(1);
+            when(statement.executeBatch()).thenReturn(new int[] { 2 });
+        })) {
+            assertFalse(mysql.connect(config));
+            assertNotNull(mysql.getLastConnectFailure());
+            assertFalse(mysql.getThreadPool().isShutdown());
+            var update = new CompletableFuture<Integer>();
+            var batch = new CompletableFuture<int[]>();
+            var query = new com.bencodez.simpleapi.sql.mysql.queries.Query(mysql, "UPDATE votes SET total=1");
+            query.executeUpdateAsync((result, failure) -> {
+                if (failure != null) update.completeExceptionally(failure); else update.complete(result);
+            });
+            query.executeBatchAsync((result, failure) -> {
+                if (failure != null) batch.completeExceptionally(failure); else batch.complete(result);
+            });
+            assertEquals(1, update.get(2, TimeUnit.SECONDS));
+            assertArrayEquals(new int[] { 2 }, batch.get(2, TimeUnit.SECONDS));
+            verify(managers.constructed().get(0), times(2)).getConnectionChecked();
+        } finally {
+            mysql.disconnect();
+            assertTrue(mysql.getThreadPool().awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test void externalConnectRetainsSuccessfulDebugCallback() {
+        AtomicInteger callbacks = new AtomicInteger();
+        MySQL mysql = new MySQL(1) {
+            public void debug(SQLException e) { }
+            public void debug(String message) { callbacks.incrementAndGet(); }
+            public void severe(String message) { }
+        };
+        var config = new com.bencodez.simpleapi.sql.mysql.config.MysqlConfig();
+        config.setDriver(TestDriver.class.getName());
+        config.setDebug(true);
+        try (var pools = mockConstruction(HikariDataSource.class)) {
+            assertTrue(mysql.connect(config));
+        }
+        assertEquals(1, callbacks.get());
     }
 
     @Test void closedPoolIsReopenedAndConnectionIsReturned() throws Exception {

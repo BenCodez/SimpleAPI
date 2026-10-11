@@ -31,6 +31,12 @@ public class ConnectionManager {
 
 	@Getter
 	private volatile HikariDataSource dataSource;
+	/** The original initialization failure from the most recent open attempt. */
+	private volatile Exception lastOpenFailure;
+
+	public Exception getLastOpenFailure() {
+		return lastOpenFailure;
+	}
 
 	@Getter
 	@Setter
@@ -193,7 +199,7 @@ public class ConnectionManager {
 		HikariDataSource current;
 		synchronized (this) {
 			if (isClosed() && !open()) {
-				throw new SQLException("Unable to initialize SQL connection pool");
+				throw new SQLException("Unable to initialize SQL connection pool", lastOpenFailure);
 			}
 			current = dataSource;
 		}
@@ -384,6 +390,7 @@ public class ConnectionManager {
 	// --- Pool Configuration ---
 
 	public synchronized boolean open() {
+		lastOpenFailure = null;
 		try {
 			// If someone only set legacy flag but not dbType explicitly, keep it consistent
 			if (dbType == null) {
@@ -438,7 +445,7 @@ public class ConnectionManager {
 			replaceDataSource(replacement);
 			return true;
 		} catch (Exception e) {
-			e.printStackTrace();
+			lastOpenFailure = e;
 			return false;
 		}
 	}
