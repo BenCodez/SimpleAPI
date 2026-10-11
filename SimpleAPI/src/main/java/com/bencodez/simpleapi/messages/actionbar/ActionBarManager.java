@@ -297,6 +297,15 @@ public class ActionBarManager {
      */
     @SuppressWarnings("deprecation")
     protected void sendNow(Player player, String message) {
-        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(message));
+        // Parse legacy styling while the inert boundaries still separate
+        // untrusted text from formatting tokens. Remove them only from the
+        // finished components, after parsing can no longer be influenced.
+        net.md_5.bungee.api.chat.BaseComponent[] rendered = TextComponent.fromLegacyText(message);
+        for (net.md_5.bungee.api.chat.BaseComponent component : rendered) {
+            if (component instanceof TextComponent text) {
+                text.setText(text.getText().replace("\u2060", ""));
+            }
+        }
+        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, rendered);
     }
 }
