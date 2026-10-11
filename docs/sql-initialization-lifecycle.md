@@ -17,3 +17,9 @@ and invoke `init()` after construction. The legacy non-deferred constructors
 still initialize the table using subclass schema hooks; subclasses whose hooks
 need instance fields should use the existing deferred constructor. Successful
 external `MySQL.connect(config)` calls retain their debug diagnostics.
+
+Disconnect attempts both connection-pool closure and worker shutdown. A pool-close
+failure remains the primary exception; any independent worker-shutdown failure is
+attached as suppressed evidence. Worker retirement is still attempted after failed
+pool cleanup, including during aborted table construction. Normal shutdown remains
+graceful and does not interrupt accepted worker tasks.

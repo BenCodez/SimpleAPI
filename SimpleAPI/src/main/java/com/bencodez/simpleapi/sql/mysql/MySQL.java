@@ -126,12 +126,17 @@ public abstract class MySQL {
 	 * Close all connections and the data source.
 	 */
 	public void disconnect() {
-		if (connectionManager != null) {
-			connectionManager.close();
-		}
-		if (threadPool != null) {
-			threadPool.shutdown();
-		}
+        try {
+            if (connectionManager != null) connectionManager.close();
+        } catch (RuntimeException | Error failure) {
+            // Pool cleanup and worker retirement are independent responsibilities.
+            try { if (threadPool != null) threadPool.shutdown(); }
+            catch (RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
+        if (threadPool != null) threadPool.shutdown();
 	}
 
 	/**
