@@ -11,6 +11,11 @@ public abstract class MySQL {
 	private ConnectionManager connectionManager;
 	private int maxConnections;
 	private ExecutorService threadPool;
+	private volatile Exception lastConnectFailure;
+
+	public Exception getLastConnectFailure() {
+		return lastConnectFailure;
+	}
 
 	/**
 	 * Create a new MySQL object with a default of 10 maximum threads.
@@ -31,6 +36,12 @@ public abstract class MySQL {
 	}
 
 	public boolean connect(MysqlConfig config) {
+		return connect(config, true);
+	}
+
+	/** Connect without subclass diagnostics when called by a superclass constructor. */
+	public boolean connect(MysqlConfig config, boolean emitDiagnostics) {
+		lastConnectFailure = null;
 		// (Re)size thread pool to match MaxConnections from config
 		this.maxConnections = Math.max(1, config.getMaxThreads());
 		if (threadPool != null) {
@@ -89,9 +100,13 @@ public abstract class MySQL {
 		}
 
 		boolean ok = connectionManager.open();
+		if (!ok) {
+			lastConnectFailure = connectionManager.getLastOpenFailure();
+			// Legacy callers can retry through the connection manager. The owner
+			// disconnects explicitly when construction is aborted instead.
+		}
 
-		// Optional debug output
-		if (config.isDebug()) {
+		if (emitDiagnostics && config.isDebug()) {
 			if (ok) {
 				debug("DB connected. type=" + connectionManager.getDbType() + " host=" + config.getHostName() + " db="
 						+ config.getDatabase() + " maxPool=" + maxConnections);
@@ -100,7 +115,6 @@ public abstract class MySQL {
 						+ " Check host/port/credentials and timeouts.");
 			}
 		}
-
 		return ok;
 	}
 
@@ -112,12 +126,17 @@ public abstract class MySQL {
 	 * Close all connections and the data source.
 	 */
 	public void disconnect() {
-		if (connectionManager != null) {
-			connectionManager.close();
-		}
-		if (threadPool != null) {
-			threadPool.shutdown();
-		}
+        try {
+            if (connectionManager != null) connectionManager.close();
+        } catch (RuntimeException | Error failure) {
+            // Pool cleanup and worker retirement are independent responsibilities.
+            try { if (threadPool != null) threadPool.shutdown(); }
+            catch (RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
+        if (threadPool != null) threadPool.shutdown();
 	}
 
 	/**

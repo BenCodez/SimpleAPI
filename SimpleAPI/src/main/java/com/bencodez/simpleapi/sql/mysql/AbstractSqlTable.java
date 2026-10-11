@@ -129,19 +129,28 @@ public abstract class AbstractSqlTable {
 			}
 		};
 
-		boolean ok = this.mysql.connect(config);
+		boolean ok = this.mysql.connect(config, false);
 		if (!ok) {
-			logSevere("Failed to connect to database. host=" + config.getHostName() + " db=" + config.getDatabase());
+			IllegalStateException failure = new IllegalStateException("Failed to initialize SQL connection pool",
+					this.mysql.getLastConnectFailure());
+			try { mysql.disconnect(); }
+			catch (RuntimeException | Error cleanupFailure) { failure.addSuppressed(cleanupFailure); }
+			throw failure;
 		}
 
 		// Keep the old behavior: USE db for MySQL/MariaDB
 		if (this.dbType == DbType.MYSQL || this.dbType == DbType.MARIADB) {
-			try {
-				new Query(mysql, "USE `" + config.getDatabase() + "`;").executeUpdate();
-			} catch (SQLException e) {
-				logSevere("Failed to send USE database query: " + config.getDatabase()
-						+ " (DB may still work depending on JDBC URL). Error: " + e.getMessage());
-				debug(e);
+			// Query.executeUpdate retains legacy logging/zero-result behavior on SQL
+			// failure. Constructor setup needs a checked path without subclass hooks.
+			try (Connection connection = mysql.getConnectionManager().getConnectionChecked();
+					PreparedStatement statement = connection.prepareStatement("USE " + qi(config.getDatabase()) + ";")) {
+				statement.executeUpdate();
+			} catch (SQLException | RuntimeException | Error failure) {
+				try { mysql.disconnect(); }
+				catch (RuntimeException | Error cleanupFailure) { failure.addSuppressed(cleanupFailure); }
+				if (failure instanceof RuntimeException unchecked) { throw unchecked; }
+				if (failure instanceof Error fatal) { throw fatal; }
+				throw new IllegalStateException("Failed to initialize SQL database selection", failure);
 			}
 		}
 
