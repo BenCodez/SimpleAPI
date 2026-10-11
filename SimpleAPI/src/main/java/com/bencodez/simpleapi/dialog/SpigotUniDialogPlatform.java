@@ -12,6 +12,8 @@ import io.github.projectunified.unidialog.bungeecord.dialog.BungeeNoticeDialog;
 import io.github.projectunified.unidialog.core.payload.DialogPayload;
 import io.github.projectunified.unidialog.spigot.SpigotDialogManager;
 import io.github.projectunified.unidialog.spigot.opener.SpigotDialogOpener;
+import net.md_5.bungee.api.chat.BaseComponent;
+import net.md_5.bungee.api.chat.TextComponent;
 
 /**
  * Spigot implementation using UniDialog's Spigot manager.
@@ -69,13 +71,13 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 			registerCustomAction(namespace, actionId, request.getCallback());
 		}
 
-		BungeeNoticeDialog<SpigotDialogOpener> dialog = manager.createNoticeDialog().title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody()));
+		BungeeNoticeDialog<SpigotDialogOpener> dialog = manager.createNoticeDialog().title(renderedText(request.getTitle()))
+				.body(builder -> builder.text().text(renderedText(request.getBody())));
 
 		applyInputs(dialog, request.getInputs());
 
 		dialog.action(action -> {
-			action.label(request.getButtonText());
+			action.label(renderedText(request.getButtonText()));
 			action.dynamicCustom(namespace, actionId);
 		});
 
@@ -97,17 +99,17 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 		}
 
 		BungeeConfirmationDialog<SpigotDialogOpener> dialog = manager.createConfirmationDialog()
-				.title(request.getTitle()).body(builder -> builder.text().text(request.getBody()));
+				.title(renderedText(request.getTitle())).body(builder -> builder.text().text(renderedText(request.getBody())));
 
 		applyInputs(dialog, request.getInputs());
 
 		dialog.yesAction(action -> {
-			action.label(request.getYesText());
+			action.label(renderedText(request.getYesText()));
 			action.dynamicCustom(namespace, yesActionId);
 		});
 
 		dialog.noAction(action -> {
-			action.label(request.getNoText());
+			action.label(renderedText(request.getNoText()));
 			action.dynamicCustom(namespace, noActionId);
 		});
 
@@ -118,8 +120,8 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 	public void showMultiAction(Player player, UniDialogMultiActionRequest request) {
 		String namespace = resolveNamespace(request.getNamespace());
 
-		BungeeMultiActionDialog<SpigotDialogOpener> dialog = manager.createMultiActionDialog().title(request.getTitle())
-				.body(builder -> builder.text().text(request.getBody())).columns(request.getColumns());
+		BungeeMultiActionDialog<SpigotDialogOpener> dialog = manager.createMultiActionDialog().title(renderedText(request.getTitle()))
+				.body(builder -> builder.text().text(renderedText(request.getBody()))).columns(request.getColumns());
 
 		applyInputs(dialog, request.getInputs());
 
@@ -131,10 +133,10 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 			}
 
 			dialog.action(action -> {
-				action.label(button.getText());
+				action.label(renderedText(button.getText()));
 
 				if (button.getTooltip() != null && !button.getTooltip().isEmpty()) {
-					action.tooltip(button.getTooltip());
+					action.tooltip(renderedText(button.getTooltip()));
 				}
 
 				Integer width = button.getWidth();
@@ -190,13 +192,13 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 
 		dialog.input(input.getId(), builder -> {
 			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
-				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+				builder.booleanInput().label(renderedText(getInputLabel(input))).initial(input.isInitialBoolean());
 			} else {
 				String initial = getInputInitial(input);
 				if (initial != null && !initial.isEmpty()) {
-					builder.textInput().label(getInputLabel(input)).initial(initial);
+					builder.textInput().label(renderedText(getInputLabel(input))).initial(initial);
 				} else {
-					builder.textInput().label(getInputLabel(input));
+					builder.textInput().label(renderedText(getInputLabel(input)));
 				}
 			}
 		});
@@ -209,13 +211,13 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 
 		dialog.input(input.getId(), builder -> {
 			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
-				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+				builder.booleanInput().label(renderedText(getInputLabel(input))).initial(input.isInitialBoolean());
 			} else {
 				String initial = getInputInitial(input);
 				if (initial != null && !initial.isEmpty()) {
-					builder.textInput().label(getInputLabel(input)).initial(initial);
+					builder.textInput().label(renderedText(getInputLabel(input))).initial(initial);
 				} else {
-					builder.textInput().label(getInputLabel(input));
+					builder.textInput().label(renderedText(getInputLabel(input)));
 				}
 			}
 		});
@@ -228,13 +230,13 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 
 		dialog.input(input.getId(), builder -> {
 			if (input.getType() == UniDialogInput.InputType.BOOLEAN) {
-				builder.booleanInput().label(getInputLabel(input)).initial(input.isInitialBoolean());
+				builder.booleanInput().label(renderedText(getInputLabel(input))).initial(input.isInitialBoolean());
 			} else {
 				String initial = getInputInitial(input);
 				if (initial != null && !initial.isEmpty()) {
-					builder.textInput().label(getInputLabel(input)).initial(initial);
+					builder.textInput().label(renderedText(getInputLabel(input))).initial(initial);
 				} else {
-					builder.textInput().label(getInputLabel(input));
+					builder.textInput().label(renderedText(getInputLabel(input)));
 				}
 			}
 		});
@@ -250,7 +252,27 @@ public class SpigotUniDialogPlatform extends AbstractUniDialogPlatform {
 		return label;
 	}
 
+	/**
+	 * UniDialog's Spigot methods deserialize Bungee legacy formatting again.
+	 * Let that final conversion see the inert guards, then drop them from text
+	 * components without reparsing color or click-action syntax.
+	 */
+	static TextComponent renderedText(String prepared) {
+		TextComponent component = TextComponent.fromLegacy(prepared);
+		stripGuards(component);
+		return component;
+	}
+
+	private static void stripGuards(BaseComponent component) {
+		if (component instanceof TextComponent text) {
+			text.setText(text.getText().replace("\u2060", ""));
+		}
+		if (component.getExtra() != null) {
+			for (BaseComponent extra : component.getExtra()) stripGuards(extra);
+		}
+	}
+
 	private String getInputInitial(UniDialogInput input) {
-		return input.getInitialValue();
+		return input.getInitialValue() == null ? null : input.getInitialValue().replace("\u2060", "");
 	}
 }
