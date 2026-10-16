@@ -13,7 +13,7 @@ import java.util.jar.JarFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.bencodez.simpleapi.servercomm.http.PackagedTlsSmoke;
+import com.bencodez.simpleapi.tests.servercomm.http.PackagedTlsSmoke;
 
 /** Package-phase checks: Maven's dependency classpath must not mask missing shaded classes. */
 public class FullArtifactTest {
