@@ -3,12 +3,16 @@ package com.bencodez.simpleapi.tests.packaging;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
+import java.io.StringWriter;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.Attributes;
 import java.util.jar.JarFile;
+
+import javax.tools.ToolProvider;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -18,6 +22,55 @@ import com.bencodez.simpleapi.tests.servercomm.http.PackagedTlsSmoke;
 /** Package-phase checks: Maven's dependency classpath must not mask missing shaded classes. */
 public class FullArtifactTest {
     @TempDir Path temporary;
+
+    @Test void legacyRedisConsumerCompilesAndLinksAgainstOnlyTheFullJar() throws Exception {
+        Path full = fullJar();
+        Path source = temporary.resolve("LegacyRedisConsumer.java");
+        Files.writeString(source, """
+                import java.util.Set;
+                import redis.clients.jedis.HostAndPort;
+                import redis.clients.jedis.JedisClientConfig;
+                import redis.clients.jedis.JedisPooled;
+                import redis.clients.jedis.JedisSentineled;
+                import redis.clients.jedis.UnifiedJedis;
+
+                public final class LegacyRedisConsumer {
+                    // Compile the established constructor calls without opening a connection.
+                    public static Object[] construct(HostAndPort endpoint, JedisClientConfig config,
+                            Set<HostAndPort> sentinels) {
+                        return new Object[] {
+                            new JedisPooled(endpoint, config),
+                            new JedisSentineled("synthetic-master", config, sentinels, config),
+                            new UnifiedJedis(endpoint, config)
+                        };
+                    }
+
+                    public static int link() throws Exception {
+                        JedisPooled.class.getConstructor(HostAndPort.class, JedisClientConfig.class);
+                        JedisSentineled.class.getConstructor(String.class, JedisClientConfig.class,
+                                Set.class, JedisClientConfig.class);
+                        UnifiedJedis.class.getConstructor(HostAndPort.class, JedisClientConfig.class);
+                        return 3;
+                    }
+                }
+                """);
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        assertNotNull(compiler, "Packaged API verification requires the build JDK");
+        StringWriter diagnostics = new StringWriter();
+        try (var files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
+            boolean compiled = compiler.getTask(diagnostics, files, null,
+                    java.util.List.of("--release", "21", "-proc:none", "-classpath", full.toString(),
+                            "-d", temporary.toString()), null,
+                    files.getJavaFileObjects(source.toFile())).call();
+            assertTrue(compiled, "Legacy Redis consumer must compile using only the packaged JAR: " + diagnostics);
+        }
+        // Platform parent excludes every Maven dependency, including any older Jedis on the test classpath.
+        try (var loader = new URLClassLoader(new java.net.URL[] {
+                temporary.toUri().toURL(), full.toUri().toURL() }, ClassLoader.getPlatformClassLoader())) {
+            Class<?> consumer = Class.forName("LegacyRedisConsumer", true, loader);
+            assertEquals(3, consumer.getMethod("link").invoke(null));
+        }
+    }
 
     @Test void omitsExternalCryptoProvider() throws Exception {
         Path full = fullJar();
