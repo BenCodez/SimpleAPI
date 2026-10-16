@@ -15,6 +15,8 @@ mvn -B -f SimpleAPI/pom.xml test
 mvn -B -f SimpleAPI/pom.xml package
 ```
 
+All test classes and test-only helpers belong under `com.bencodez.simpleapi.tests` (or its subpackages), with matching paths under `SimpleAPI/src/test/java/com/bencodez/simpleapi/tests/`. Keep production package names and visibility unchanged when organizing tests; use narrowly scoped test-only reflection access where an existing test needs implementation internals. Preserve test discovery and both full/shared artifact checks when moving tests.
+
 Confirm current CI and POM settings before relying on these commands. Verify that the package invocation produced both the legacy/full artifact and every configured classifier, especially the `shared` JAR. Run `git diff --check` and confirm tests actually ran.
 
 ## Packaging boundaries
