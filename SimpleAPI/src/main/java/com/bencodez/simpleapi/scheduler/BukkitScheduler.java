@@ -80,6 +80,14 @@ public class BukkitScheduler {
 			runTaskLater(plugin, task, delay);
 			return;
 		}
+		// FoliaLib 0.3.4's Spigot entity-delay overloads recurse for valid entities.
+		// Non-Folia servers share the main-thread owner; keep Folia's entity dispatch.
+		if (!getFoliaLib().isFolia()) {
+			if (entity.isValid()) {
+				runTaskLater(plugin, task, delay);
+			}
+			return;
+		}
 		getFoliaLib().getImpl().runAtEntityLater(entity, run -> {
 			task.run();
 		}, delay, TimeUnit.SECONDS);
