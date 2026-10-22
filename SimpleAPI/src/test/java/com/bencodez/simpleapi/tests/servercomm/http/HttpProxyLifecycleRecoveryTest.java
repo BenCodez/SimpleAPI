@@ -29,12 +29,15 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.io.TempDir;
 
 class HttpProxyLifecycleRecoveryTest {
 	@TempDir Path directory;
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void closeDefersOutgoingSealUntilAcknowledgeCallbackReturns() throws Exception {
 		Path outgoing = directory.resolve("delayed-ack-outgoing");
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("delayed-ack-proxy"), "localhost");
@@ -80,6 +83,7 @@ class HttpProxyLifecycleRecoveryTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void callbackOwnedCloseCompletesItsInboundJournalBeforeItIsSealed() throws Exception {
 		Path outgoing = directory.resolve("outgoing");
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
@@ -121,6 +125,7 @@ class HttpProxyLifecycleRecoveryTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void failedNewBackendSetupCleansItsEmptyDirectoryBeforeRetry() throws Exception {
 		Path root = directory.resolve("outgoing");
 		AtomicBoolean failFirstBackendPublication = new AtomicBoolean(true);
@@ -142,6 +147,7 @@ class HttpProxyLifecycleRecoveryTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void restartPrunesAccumulatedEmptyBackendDirectoriesBeforeApplyingTheCap() throws Exception {
 		Path root = directory.resolve("outgoing");
 		HttpTestAccess.DurableOutgoingQueue initial = new HttpTestAccess.DurableOutgoingQueue(root,
@@ -161,6 +167,7 @@ class HttpProxyLifecycleRecoveryTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void capPruningPreservesAnEmptyDirectoryUntilItsUnconfirmedAckCanRetry() throws Exception {
 		Path root = directory.resolve("outgoing");
 		Path lobbyDirectory = root.resolve("lobby-1");

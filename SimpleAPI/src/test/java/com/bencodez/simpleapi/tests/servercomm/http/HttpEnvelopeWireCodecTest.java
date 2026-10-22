@@ -25,12 +25,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.io.TempDir;
 
 class HttpEnvelopeWireCodecTest {
 	@TempDir Path directory;
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void serializedWrappersCoordinateConcurrentAccessToOneCodec() throws Exception {
 		CountDownLatch firstEntered = new CountDownLatch(1);
 		CountDownLatch releaseFirst = new CountDownLatch(1);
@@ -84,6 +87,7 @@ class HttpEnvelopeWireCodecTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void durableProxyQueueKeepsSemanticEnvelopeAcrossCodecChange() throws Exception {
 		Path outgoing = directory.resolve("outgoing");
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
@@ -116,6 +120,7 @@ class HttpEnvelopeWireCodecTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void codecAppliesAtBothAuthenticatedHttpWireBoundaries() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("integration-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("integration-authority"));
@@ -147,6 +152,7 @@ class HttpEnvelopeWireCodecTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void wireExpansionIsRejectedBeforeItCanBlockAQueue() throws Exception {
 		Path outgoing = directory.resolve("bounded-outgoing");
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("bounded-proxy"), "localhost");
@@ -190,6 +196,7 @@ class HttpEnvelopeWireCodecTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void uncheckedCodecRejectionReturnsFalseAtBothSendBoundaries() throws Exception {
 		HttpEnvelopeWireCodec rejecting = new HttpEnvelopeWireCodec() {
 			@Override public JsonEnvelope encode(JsonEnvelope envelope) {
