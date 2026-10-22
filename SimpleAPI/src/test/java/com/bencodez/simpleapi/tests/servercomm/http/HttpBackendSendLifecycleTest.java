@@ -20,12 +20,15 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.io.TempDir;
 
 class HttpBackendSendLifecycleTest {
 	@TempDir Path directory;
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void pausedSendCannotEnterAfterCloseAndFlushCutsOffNewSends() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
@@ -59,6 +62,7 @@ class HttpBackendSendLifecycleTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void restartedConnectorRequiresAResponseFromItsNewRun() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("restart-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("restart-authority"));
@@ -82,6 +86,7 @@ class HttpBackendSendLifecycleTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void startOpensSendAdmissionBeforeThePollerCanRun() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("startup-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("startup-authority"));
@@ -111,6 +116,7 @@ class HttpBackendSendLifecycleTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void restartWaitsForThePreviousPollerToExit() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("restart-proxy"), "localhost");
 		HttpConnectionCode code = new HttpConnectionCode("lobby-1", java.net.URI.create("https://localhost:8443/"),

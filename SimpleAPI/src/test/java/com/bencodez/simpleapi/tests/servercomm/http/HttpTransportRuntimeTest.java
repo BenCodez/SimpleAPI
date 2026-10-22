@@ -32,12 +32,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.io.TempDir;
 
 class HttpTransportRuntimeTest {
 	@TempDir Path directory;
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void publicConstructorsRequireDurableOutgoingDirectory() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("guard-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("guard-authority"));
@@ -49,6 +52,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void pendingDeliveryStateTracksDurableQueueUntilAcknowledgement() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pending-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("pending-authority"));
@@ -66,6 +70,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void persistedDeliveryStateCanBeCheckedBeforeServerStartup() throws Exception {
 		Path outgoing = directory.resolve("stopped-outgoing");
 		assertFalse(HttpProxyTransportServer.hasPersistedDeliveries(outgoing));
@@ -76,6 +81,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void inaccessiblePersistedDeliveryLocationIsNotReportedAsAbsent() throws Exception {
 		Path nonDirectoryParent = directory.resolve("queue-parent-file");
 		Files.writeString(nonDirectoryParent, "not a directory");
@@ -85,6 +91,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void endpointHelperSupportsIpv6Literals() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("ipv6-proxy"), "::1");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("ipv6-authority"));
@@ -99,6 +106,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void enrollsThenDeliversBothDirectionsWithAuthenticatedIdentity() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
@@ -144,6 +152,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void responseBodyConsumptionRemainsBoundedByRequestTimeout() throws Exception {
 		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(
 				new InetSocketAddress("localhost", 0), 1);
@@ -170,6 +179,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void stableProxyDeliveryIdsAreIdempotentAndAcknowledgedBeforeRemoval() throws Exception {
 		AtomicLong acknowledged = new AtomicLong();
 		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState("lobby-1", null,
@@ -187,6 +197,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void outgoingQueueRetriesDirectoryPublicationAfterForceFailure() throws Exception {
 		Path queueRoot = directory.resolve("retry-outgoing-root");
 		java.util.concurrent.atomic.AtomicBoolean failRootPublication = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -226,6 +237,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void generatedSendExposesRecoverableIdAfterPublicationFailure() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("generated-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("generated-authority"));
@@ -269,6 +281,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void outgoingQueueRecoversWhenPromotionQuarantineRenameFails() throws Exception {
 		Path queueRoot = directory.resolve("promotion-rename-failure");
 		String deliveryId = java.util.UUID.randomUUID().toString();
@@ -305,6 +318,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void publishedOutgoingDeliveryRemainsTrackedUntilDurabilityCanBeConfirmed() throws Exception {
 		AtomicLong forceCalls = new AtomicLong();
 		Path queueRoot = directory.resolve("uncertain-outgoing");
@@ -353,6 +367,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void acknowledgedBackendDropsItsEmptyOutgoingIndexes() throws Exception {
 		Path queueRoot = directory.resolve("acknowledged-index-cleanup");
 		try (HttpTestAccess.DurableOutgoingQueue queue = new HttpTestAccess.DurableOutgoingQueue(
@@ -375,6 +390,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void unresolvedOutgoingPublicationDoesNotReportAFalseRejection() throws Exception {
 		AtomicLong forceCalls = new AtomicLong();
 		java.util.concurrent.atomic.AtomicBoolean failForces = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -401,6 +417,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyInboundCompletionSurvivesRestartBeforeAcknowledgement() throws Exception {
 		Path root = directory.resolve("proxy-incoming");
 		Files.createDirectory(root);
@@ -434,6 +451,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void inboundJournalHasOneWriterWhileReadOnlyInspectionRemainsAvailable() throws Exception {
 		Path root = directory.resolve("exclusive-incoming");
 		Files.createDirectory(root);
@@ -451,6 +469,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void backendConnectorReleasesJournalOwnershipOnlyAfterClose() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("owner-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -468,6 +487,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void completedInboundPublicationRetriesForceBeforeProxyAcknowledgement() throws Exception {
 		Path root = directory.resolve("proxy-incoming-force-retry");
 		Files.createDirectory(root);
@@ -503,6 +523,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void reservedInboundPublicationRetriesBeforeProxyCallback() throws Exception {
 		Path root = directory.resolve("reserved-force-proxy");
 		Files.createDirectory(root);
@@ -548,6 +569,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void runningPublicationRollbackLeavesAReservationSafeAfterRestart() throws Exception {
 		Path root = directory.resolve("running-rollback-restart");
 		Files.createDirectory(root);
@@ -576,6 +598,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyRetriesKnownNotStartedRunningRollbackBeforeDispatch() throws Exception {
 		Path root = directory.resolve("running-rollback-proxy");
 		Files.createDirectory(root);
@@ -612,6 +635,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void backendRetriesKnownNotStartedRunningRollbackBeforeDispatch() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("running-backend-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -652,6 +676,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void failedAcknowledgementCallbackRetainsProxyDelivery() throws Exception {
 		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState("lobby-1", null,
 				(server, deliveryId) -> { throw new java.io.IOException("cache save failed"); });
@@ -664,6 +689,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void oppositeDirectionIdsUseSeparateAcknowledgementNamespaces() throws Exception {
 		String deliveryId = java.util.UUID.randomUUID().toString();
 		Path incomingRoot = directory.resolve("separate-ack-incoming");
@@ -691,6 +717,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void closeWaitsForTheCredentialOwningPollerToStop() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("close-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("close-authority"));
@@ -712,6 +739,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void closeDrainsRunningCallbacksBeforeSealingTheirJournal() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("close-callback-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -741,6 +769,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void interruptedCloseRemainsBoundedWhenACallbackIgnoresInterruption() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("bounded-close-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -780,6 +809,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyShutdownGivesInterruptedCallbacksTimeToFinish() throws Exception {
 		java.util.concurrent.ThreadPoolExecutor executor = new java.util.concurrent.ThreadPoolExecutor(1, 1, 0L,
 				TimeUnit.MILLISECONDS, new java.util.concurrent.ArrayBlockingQueue<>(1));
@@ -803,6 +833,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void finalFlushDeliversMessagesQueuedBehindAnActiveLongPoll() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("flush-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("flush-authority"));
@@ -832,6 +863,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void normalTransportRejectsAClientWithoutCertificate() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
@@ -848,6 +880,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void fixedRequestBodiesReportProtocolErrorsBeforeAdmissionErrors() {
 		Headers headers = new Headers();
 		assertEquals(411, HttpTestAccess.fixedBodyErrorStatus(headers, 128));
@@ -864,6 +897,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void enrollmentPersistenceFailuresReturnServiceUnavailable() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("failed-enroll-proxy"), "localhost");
 		Path authorityDirectory = directory.resolve("failed-enroll-authority");
@@ -887,6 +921,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void boundedQueuesFailClosed() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
@@ -898,6 +933,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyBackendStateIsGloballyBounded() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("bounded-backend-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity,
@@ -913,6 +949,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyReclaimsOnlyQuiescentBackendStateAfterReplayWindow() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("reclaim-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity,
@@ -935,6 +972,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyDoesNotReclaimAQuarantineOnlyBackendAfterReplayWindow() throws Exception {
 		Path queueRoot = directory.resolve("quarantine-reclamation-outgoing");
 		AtomicLong forceCalls = new AtomicLong();
@@ -971,6 +1009,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyOutgoingQueueSurvivesRestartUntilBackendAcknowledges() throws Exception {
 		Path proxyDirectory = directory.resolve("proxy");
 		Path authorityDirectory = directory.resolve("authority");
@@ -1002,6 +1041,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void pollCreatedBackendStateUsesDurableOutgoingQueue() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("poll-proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("poll-authority"));
@@ -1042,6 +1082,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void aggregatePacketBudgetSplitsLargeValidEnvelopes() {
 		java.util.List<HttpProtocolAccess.Delivery> candidates = new java.util.ArrayList<>();
 		for (int index = 0; index < 12; index++) candidates.add(new HttpProtocolAccess.Delivery(
@@ -1055,6 +1096,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void packetNumbersMustUseCanonicalJsonIntegerTokens() {
 		com.google.gson.JsonObject packet = com.google.gson.JsonParser.parseString(new String(HttpProtocolAccess.request(
 				"lobby-1", java.util.UUID.randomUUID().toString(), 0, java.util.List.of(), java.util.List.of(), java.util.List.of()),
@@ -1075,6 +1117,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void protocolParsingRejectsDuplicateObjectMembers() {
 		String deliveryId = java.util.UUID.randomUUID().toString();
 		String packet = new String(HttpProtocolAccess.request("lobby-1", java.util.UUID.randomUUID().toString(), 0,
@@ -1094,6 +1137,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void packetParsingRejectsNoncanonicalUuidForms() {
 		String deliveryId = java.util.UUID.randomUUID().toString();
 		com.google.gson.JsonObject packet = com.google.gson.JsonParser.parseString(new String(HttpProtocolAccess.request(
@@ -1124,6 +1168,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void persistedProfileStartsAfterTheEnrollmentCodeExpires() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("authority"));
@@ -1143,6 +1188,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void persistedBackendConnectsAfterAutomaticServerLeafRotation() throws Exception {
 		Instant now = Instant.now();
 		Path proxyDirectory = directory.resolve("proxy");
@@ -1170,6 +1216,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void renewalRetainsOldCredentialUntilPublishedPointerIsConfirmed() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("pointer-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate expiring = HttpTestAccess.issueClientCertificate(identity, "lobby-1",
@@ -1240,6 +1287,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void backendRenewsClientCertificateBeforeExpiryWithoutNewConnectionCode() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate expiring = HttpTestAccess.issueClientCertificate(identity, "lobby-1",
@@ -1278,6 +1326,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void duplicateInboundDeliveryIsReAcknowledgedWithoutSecondDispatch() {
 		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState();
 		String session = java.util.UUID.randomUUID().toString();
@@ -1297,6 +1346,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void newerDeliveriesDoNotPostponeRetryOfOlderUnacknowledgedDelivery() {
 		AtomicLong nanoTime = new AtomicLong(1L);
 		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState(nanoTime::get);
@@ -1322,6 +1372,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void longPollWakesAtTheOldestDeliveryRetryDeadline() throws Exception {
 		AtomicLong nanoTime = new AtomicLong(1L);
 		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState(nanoTime::get);
@@ -1354,6 +1405,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyDedupWindowEvictsOldestCompletedDeliveryAtCapacity() {
 		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState();
 		String oldest = null, newest = null;
@@ -1372,6 +1424,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void backendReAcknowledgesLostAckDuplicateWithoutSecondCallback() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1398,6 +1451,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void backendCallbacksAreSerializedInDeliveryOrder() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("ordered-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1429,6 +1483,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void backendCallbackQueueBackpressuresWithoutBreakingFifo() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("backpressure-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1468,6 +1523,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void pausedBackendDefersCallbackAndDurableFenceUntilActivation() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("paused-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1497,6 +1553,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void restartingPausedBackendWithStartReleasesWaitingCallbacks() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("paused-start-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1520,6 +1577,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void closingPausedBackendLeavesDeliveryRecoverable() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("paused-close-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1547,6 +1605,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void durableBackendFencePreventsCallbackReplayAfterRestartBeforeAck() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("fence-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1574,6 +1633,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void failedBackendCallbackRemainsUnacknowledgedAndIsNotReplayed() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("retry-fence-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1602,6 +1662,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void reservedButNotStartedDeliveryResumesAfterRestart() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("reserved-proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
@@ -1632,6 +1693,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void interruptedStateRenameRetainsTheFurthestSafeState() throws Exception {
 		Path clientDirectory = directory.resolve("interrupted-state-client");
 		String id = java.util.UUID.randomUUID().toString();
@@ -1657,6 +1719,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void proxyCallbacksAreSerializedInDeliveryOrder() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("ordered-proxy-server"), "localhost");
 		HttpEnrollmentAuthority authority = new HttpEnrollmentAuthority(identity, directory.resolve("ordered-authority"));
@@ -1691,6 +1754,7 @@ class HttpTransportRuntimeTest {
 	}
 
 	@Test
+	@Execution(ExecutionMode.CONCURRENT)
 	void backendDedupWindowContinuesAfterCapacity() throws Exception {
 		HttpTlsIdentity identity = HttpTlsIdentity.loadOrCreate(directory.resolve("proxy"), "localhost");
 		HttpTlsIdentity.IssuedClientCertificate issued = identity.issueClientCertificate("lobby-1");
