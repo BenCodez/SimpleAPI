@@ -80,6 +80,16 @@ public class FullArtifactTest {
             assertTrue(classPath == null || classPath.isBlank(), "Smoke test must not load external manifest dependencies");
             assertFalse(output.stream().anyMatch(entry -> entry.getName().startsWith("org/bouncycastle/")),
                     "The JDK-only TLS implementation must not package Bouncy Castle");
+            assertFalse(output.stream().anyMatch(entry ->
+                            entry.getName().startsWith("org/checkerframework/")
+                            || entry.getName().startsWith("org/jspecify/")),
+                    "Compile-time annotation libraries must not be embedded");
+            assertFalse(output.stream().anyMatch(entry -> entry.getName().equals("module-info.class")
+                            || entry.getName().startsWith("META-INF/versions/")
+                            || (entry.getName().startsWith("META-INF/maven/")
+                                && (entry.getName().endsWith("/pom.xml")
+                                    || entry.getName().endsWith("/pom.properties")))),
+                    "A shaded non-modular JAR must not contain unreachable module or Maven POM metadata");
         }
         System.out.printf("Full artifact: %,d bytes; no external crypto provider packaged%n", Files.size(full));
     }
