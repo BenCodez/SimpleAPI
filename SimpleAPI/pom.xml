@@ -323,7 +323,8 @@
         <dependency>
             <groupId>redis.clients</groupId>
             <artifactId>jedis</artifactId>
-            <version>8.0.2</version>
+            <!-- Jedis 8 removes APIs exposed by the full JAR; retain legacy consumer compatibility. -->
+            <version>7.5.3</version>
         </dependency>
         <dependency>
             <groupId>org.spongepowered</groupId>
