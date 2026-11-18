@@ -59,6 +59,9 @@ public class SharedArtifactTest {
             Class<?> yamlFixture = loader.loadClass(NativeYamlFixture.class.getName());
             assertSame(loader, yamlFixture.getClassLoader());
             yamlFixture.getMethod("run").invoke(null);
+            Class<?> apiFixture = loader.loadClass(NativeYamlApiFixture.class.getName());
+            assertSame(loader, apiFixture.getClassLoader());
+            apiFixture.getMethod("run").invoke(null);
         }
         System.out.println("Shared classifier: " + classes.size() + " classes linked; native configuration smoke passed");
     }

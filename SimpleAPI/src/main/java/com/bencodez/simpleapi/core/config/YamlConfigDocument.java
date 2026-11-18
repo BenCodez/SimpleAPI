@@ -86,6 +86,19 @@ public final class YamlConfigDocument implements ConfigDocument {
 
     @Override public Path path() { return path; }
 
+    /** Seeds a missing document using the same parser, limits and atomic replacement as updates. */
+    synchronized ConfigSnapshot initializeFrom(byte[] bytes) throws IOException {
+        if (editing) throw new IllegalStateException("Cannot initialize inside an edit callback");
+        if (!revision.equals("missing")) return snapshot();
+        if (bytes.length > maxBytes) throw new IOException("Default configuration exceeds byte limit");
+        ConfigurationNode candidate = parse(bytes);
+        ConfigSnapshot result = new ConfigSnapshot(revisionOf(bytes), new ConfigurateConfigView(candidate.copy()));
+        replace(bytes);
+        root = candidate;
+        revision = result.revision();
+        return result;
+    }
+
     @Override public synchronized ConfigSnapshot snapshot() {
         return new ConfigSnapshot(revision, new ConfigurateConfigView(root.copy()));
     }

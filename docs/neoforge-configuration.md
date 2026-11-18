@@ -1,6 +1,8 @@
 # YAML configuration in a NeoForge consumer
 
-Use SimpleAPI's existing platform-neutral YAML API from the `shared` classifier.
+Use `com.bencodez.simpleapi.core.config.YamlConfiguration` from the `shared`
+classifier for direct file/resource loading, typed reads, sections and atomic
+persistence over the existing neutral document and views.
 No SimpleAPI loader adapter, second YAML parser, or NeoForge dependency is needed
 for this configuration path. The mod supplies its configuration directory and
 owns lifecycle scheduling. Existing Bukkit/proxy consumers keep their current
@@ -53,60 +55,97 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import com.bencodez.simpleapi.core.config.YamlConfigDocument;
-import com.bencodez.simpleapi.file.config.ConfigSnapshot;
+import com.bencodez.simpleapi.core.config.YamlConfiguration;
 
-static YamlConfigDocument openSettings(Path configDirectory) throws IOException {
-    Files.createDirectories(configDirectory); // Application-owned setup
-    return YamlConfigDocument.open(configDirectory.resolve("settings.yml"));
-}
+final class NativeSettings {
+    private final YamlConfiguration yaml;
 
-static ConfigSnapshot initialize(YamlConfigDocument document) throws IOException {
-    ConfigSnapshot before = document.snapshot();
-    // Seed defaults only for a missing file; do not replace an existing config.
-    if (!before.revision().equals("missing")) return before;
-    return document.update(before.revision(), edit -> {
-        edit.set("Points", 1);
-        edit.set("Rewards.Commands", List.of("say voted"));
-    });
+    NativeSettings(Path configDirectory) throws IOException {
+        Files.createDirectories(configDirectory); // Application-owned setup
+        yaml = YamlConfiguration.load(configDirectory.resolve("settings.yml"),
+                NativeSettings.class, "/native-settings.yml");
+    }
+
+    int pointsOnVote() { return yaml.getInt("PointsOnVote", 1); }
+
+    List<String> commands(String siteKey) {
+        var sites = yaml.getConfigurationSection("VoteSites");
+        var site = sites == null ? null : sites.at(siteKey); // Literal key, including dots
+        return site == null ? List.of() : site.getStringList("Rewards.Commands");
+    }
+
+    void changeCommands(String siteKey, List<String> commands) throws IOException {
+        yaml.setAt(commands, "VoteSites", siteKey, "Rewards", "Commands");
+    }
+
+    void reload() throws IOException { yaml.reload(); }
 }
 ```
 
-Use `snapshot.view().getInt("Points", 1)` for a numeric read with a fallback.
+Bundle `/native-settings.yml` in the consumer's resources, for example:
+
+```yaml
+PointsOnVote: 1
+VoteSites:
+  'some.site':
+    Rewards:
+      Commands: [say voted]
+```
+
+`load(path)` reads a missing document without creating it. The classpath-resource
+overload initializes missing files only, preserving initial resource bytes after
+bounded validation. Existing files, including intentionally empty files, are never
+replaced or merged with resource defaults. An existing file does not require the
+resource to exist. There is no resource default-tree overlay; use getter defaults
+for absent options and explicit updates for intentional migrations.
+
+`load(path, inputStream)` also supports missing-file defaults and always closes the
+supplied stream, including on failure. Read/close failures precede initialization.
+Plain load and stream load accept an optional final byte-limit argument.
+
+Use `yaml.getInt("PointsOnVote", 1)` for a numeric read with a fallback.
 Numeric/boolean scalar getters are strict: a quoted `'12'` is not a number.
 Existing list conversions remain supported. Missing values use getter/annotation
 defaults; an explicit empty list remains distinct from a missing value when read
 through a structured view. Reads are case-sensitive by default.
 
-For structured or case-insensitive access, wrap the existing snapshot view:
+The facade implements `StructuredConfigView` directly. No Configurate nodes or
+casts are needed. String/boolean/int/long/double reads also have one-argument
+conveniences using null/false/zero defaults. For structured or case-insensitive access:
 
 ```java
-import com.bencodez.simpleapi.core.config.CaseInsensitiveConfigView;
-import com.bencodez.simpleapi.core.config.ConfigurateConfigView;
-import com.bencodez.simpleapi.core.config.ConfigurateStructuredConfigView;
-
-var structured = new ConfigurateStructuredConfigView(
-        (ConfigurateConfigView) snapshot.view()); // Snapshot from core YamlConfigDocument
-var insensitive = new CaseInsensitiveConfigView(structured);
-int points = insensitive.getInt("points", 1);
-var literalSite = structured.at("some.site"); // One literal key, not a dotted path
+yaml.setIgnoreCase(true);
+int points = yaml.getInt("pointsonvote", 1);
+var literalSite = yaml.at("votesites", "some.site"); // Literal segments
+var stable = yaml.snapshot(); // Detached revision and view
 ```
 
 Case-insensitive wrapping is opt-in; enumeration retains original spelling and the
 first enumerated key wins case collisions. Numeric YAML keys remain addressable
-by string paths. Use `edit.setAt(value, "some.site", "Commands")` for literal key
+by string paths. The casing option affects reads only; edits always use exact keys.
+Use `yaml.setAt(value, "some.site", "Commands")` for literal key
 segments containing dots. Structured exports are detached, bounded plain-data trees;
 native platform objects are rejected. Existing annotation types and
 `core.config.AnnotationBinder` can bind ordinary option classes from these views.
 
-All open/reload/update operations are synchronous. A missing file opens empty
+`getData()`, `snapshot()` and sections are detached read views. Retained views do
+not change after reload/update or a casing-policy change; reacquire them when
+needed. Direct facade getters follow the latest successful operation.
+
+All load/reload/update operations are synchronous. A missing file opens empty
 without creating it. Malformed initial YAML throws `IOException`; do not silently
-replace it with defaults. On reload, call `document.reload()` and validate the
+replace it with defaults. On reload, call `yaml.reload()` and validate the
 returned snapshot before publishing application settings. A reload exception
 retains the last valid document snapshot and must abort runtime reconfiguration.
 Application validation/publication remains the consumer's responsibility.
 
-Updates require the snapshot revision, retain unknown keys, and use a bounded
+`set`, `setAt`, `update` and `save` immediately persist; there is no mutable pending
+tree. Use `update(edit -> ...)` for a multi-key transaction, or
+`update(snapshot.revision(), edit -> ...)` to reject a stale application edit.
+A null value removes the selected key. `save()` explicitly rewrites current data
+or creates an empty missing file. Use `yaml.reload()` for external changes.
+
+Updates check the snapshot revision, retain unknown keys, and use a bounded
 temporary sibling followed by atomic replacement. Failed updates retain the active
 snapshot. External edits, stale revisions, serialization limits and filesystem
 failures are reported instead of truncating the original file. Reload after an
@@ -120,8 +159,11 @@ contract in [shared-libraries.md](shared-libraries.md).
 
 ## Verification and remaining integration
 
-`NativeYamlTest` exercises this contract directly. The normal Maven `package`
-phase also runs `NativeYamlFixture` against the actual shared JAR with only neutral
+`YamlConfigurationTest` exercises the production facade, resource read/close errors,
+empty existing files, bounded writes, casing, initialization races and real
+unwritable-parent rollback/retry. The existing `NativeYamlTest` document regressions
+are retained. The normal Maven `package` phase also runs `NativeYamlApiFixture`
+and `NativeYamlFixture` against the actual shared JAR with only neutral
 runtime libraries, explicitly rejecting Bukkit, proxy, Minecraft and mod-loader
 classes. Existing tests cover legacy facades and Bukkit configuration parity.
 

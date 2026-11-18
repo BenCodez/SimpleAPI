@@ -1,0 +1,13 @@
+# Synthetic native consumer defaults
+PointsOnVote: 1
+ProcessRewards: true
+Empty: []
+Quoted: '12'
+VoteSites:
+  'some.site':
+    Enabled: true
+    Rewards:
+      Commands: [say voted]
+Milestones:
+  10:
+    Points: 2
