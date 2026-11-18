@@ -22,3 +22,8 @@ mvn -B -f SimpleAPI/pom.xml clean package
 The same POM attaches a platform-neutral `shared` JAR; there are no child modules.
 See `shared-libraries.md` for dependency exclusions, package compatibility,
 configuration persistence guarantees, and packaged headless verification.
+
+For a NeoForge consumer, [neoforge-configuration.md](neoforge-configuration.md)
+documents the existing shared YAML API, explicit Gradle dependency baseline,
+configuration lifecycle and the boundary between headless verification and native
+mod packaging.
