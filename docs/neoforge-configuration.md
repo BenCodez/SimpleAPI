@@ -98,6 +98,8 @@ bounded validation. Existing files, including intentionally empty files, are nev
 replaced or merged with resource defaults. An existing file does not require the
 resource to exist. There is no resource default-tree overlay; use getter defaults
 for absent options and explicit updates for intentional migrations.
+Resource initialization atomically publishes a staged file only if absent, using
+a same-directory hard link; unsupported filesystems fail without an unsafe fallback.
 
 `load(path, inputStream)` also supports missing-file defaults and always closes the
 supplied stream, including on failure. Read/close failures precede initialization.
@@ -150,6 +152,10 @@ temporary sibling followed by atomic replacement. Failed updates retain the acti
 snapshot. External edits, stale revisions, serialization limits and filesystem
 failures are reported instead of truncating the original file. Reload after an
 external edit before retrying. Old snapshots remain detached across updates.
+Document instances from the same defining classloader coordinate final revision
+checks and publication by canonical path, so stale same-process writers cannot
+both succeed and silently lose one edit. Cross-process writer exclusion remains
+the application's responsibility.
 
 Defaults are 1 MiB input/output (configurable up to 16 MiB), 64 levels and 100,000
 nodes. The parent directory must exist and be trusted; the application owns

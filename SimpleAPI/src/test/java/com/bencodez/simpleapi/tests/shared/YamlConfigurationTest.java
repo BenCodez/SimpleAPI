@@ -12,6 +12,9 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.Set;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -138,6 +141,78 @@ class YamlConfigurationTest {
         } finally { Files.setPosixFilePermissions(directory, permissions); }
         config.set("Points", 8);
         assertEquals(8, YamlConfiguration.load(path()).getInt("Points"));
+    }
+
+    @Test void simultaneousFirstLoadsCannotBothPublishDifferentDefaults() throws Exception {
+        var workers = Executors.newFixedThreadPool(2);
+        try {
+            for (int trial = 0; trial < 50; trial++) {
+                Path path = directory.resolve("initialize-" + trial + ".yml");
+                var gate = new CyclicBarrier(2);
+                var first = workers.submit(() -> initialize(path, "Points: 1\n", gate));
+                var second = workers.submit(() -> initialize(path, "Points: 2\n", gate));
+                Integer one = first.get(10, TimeUnit.SECONDS);
+                Integer two = second.get(10, TimeUnit.SECONDS);
+                assertNotEquals(one == null, two == null, "Exactly one missing-file initializer must succeed");
+                assertEquals(one == null ? two.intValue() : one.intValue(), YamlConfiguration.load(path).getInt("Points"));
+            }
+        } finally {
+            workers.shutdownNow();
+            assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test void simultaneousSameRevisionEditsCannotBothSucceedAndLoseOneChange() throws Exception {
+        var workers = Executors.newFixedThreadPool(2);
+        try {
+            for (int trial = 0; trial < 50; trial++) {
+                Path path = directory.resolve("update-" + trial + ".yml");
+                Files.writeString(path, "First: 0\nSecond: 0\n");
+                var first = YamlConfiguration.load(path);
+                var second = YamlConfiguration.load(path);
+                var gate = new CyclicBarrier(2);
+                var one = workers.submit(() -> editAtBarrier(first, "First", gate));
+                var two = workers.submit(() -> editAtBarrier(second, "Second", gate));
+                boolean firstSucceeded = one.get(10, TimeUnit.SECONDS);
+                boolean secondSucceeded = two.get(10, TimeUnit.SECONDS);
+                assertNotEquals(firstSucceeded, secondSucceeded, "One stale writer must be rejected");
+                var disk = YamlConfiguration.load(path);
+                assertEquals(firstSucceeded ? 1 : 0, disk.getInt("First"));
+                assertEquals(secondSucceeded ? 1 : 0, disk.getInt("Second"));
+            }
+        } finally {
+            workers.shutdownNow();
+            assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    private static Integer initialize(Path path, String text, CyclicBarrier gate) throws Exception {
+        InputStream stream = new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)) {
+            @Override public byte[] readNBytes(int limit) throws IOException {
+                await(gate);
+                return super.readNBytes(limit);
+            }
+        };
+        try { return YamlConfiguration.load(path, stream).getInt("Points"); }
+        catch (IOException stale) { return null; }
+    }
+
+    private static boolean editAtBarrier(YamlConfiguration config, String key, CyclicBarrier gate) throws Exception {
+        try {
+            config.update(edit -> {
+                try { await(gate); } catch (IOException failure) { throw new AssertionError(failure); }
+                edit.set(key, 1);
+            });
+            return true;
+        } catch (IOException stale) { return false; }
+    }
+
+    private static void await(CyclicBarrier gate) throws IOException {
+        try { gate.await(5, TimeUnit.SECONDS); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new IOException(interrupted); }
+        catch (java.util.concurrent.BrokenBarrierException | java.util.concurrent.TimeoutException failure) {
+            throw new IOException(failure);
+        }
     }
 
     private static final class TrackedStream extends ByteArrayInputStream {

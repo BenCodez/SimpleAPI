@@ -58,8 +58,14 @@ public final class YamlConfigDocument implements ConfigDocument {
     public static final int DEFAULT_MAX_BYTES = 1024 * 1024;
     private static final int MAX_NODES = 100_000;
     private static final int MAX_DEPTH = 64;
+    // Bounded same-classloader coordination, shared by every document for a canonical path.
+    private static final Object[] WRITE_LOCKS = new Object[64];
+    static {
+        for (int index = 0; index < WRITE_LOCKS.length; index++) WRITE_LOCKS[index] = new Object();
+    }
     private final Path path;
     private final int maxBytes;
+    private final Object writeLock;
     private ConfigurationNode root;
     private String revision;
     private boolean editing;
@@ -67,6 +73,7 @@ public final class YamlConfigDocument implements ConfigDocument {
     private YamlConfigDocument(Path path, int maxBytes) {
         this.path = path;
         this.maxBytes = maxBytes;
+        this.writeLock = WRITE_LOCKS[Math.floorMod(path.hashCode(), WRITE_LOCKS.length)];
     }
 
     public static YamlConfigDocument open(Path path) throws IOException { return open(path, DEFAULT_MAX_BYTES); }
@@ -93,7 +100,7 @@ public final class YamlConfigDocument implements ConfigDocument {
         if (bytes.length > maxBytes) throw new IOException("Default configuration exceeds byte limit");
         ConfigurationNode candidate = parse(bytes);
         ConfigSnapshot result = new ConfigSnapshot(revisionOf(bytes), new ConfigurateConfigView(candidate.copy()));
-        replace(bytes);
+        replace(bytes, true);
         root = candidate;
         revision = result.revision();
         return result;
@@ -183,6 +190,16 @@ public final class YamlConfigDocument implements ConfigDocument {
     }
 
     private void replace(byte[] encoded) throws IOException {
+        replace(encoded, false);
+    }
+
+    private void replace(byte[] encoded, boolean initializeOnly) throws IOException {
+        synchronized (writeLock) {
+            replaceLocked(encoded, initializeOnly);
+        }
+    }
+
+    private void replaceLocked(byte[] encoded, boolean initializeOnly) throws IOException {
         requireUnchanged();
         Set<PosixFilePermission> permissions = null;
         if (Files.getFileAttributeView(path.getParent(), java.nio.file.attribute.PosixFileAttributeView.class) != null) {
@@ -199,7 +216,16 @@ public final class YamlConfigDocument implements ConfigDocument {
                 channel.force(true);
             }
             requireUnchanged();
-            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            if (initializeOnly) {
+                // ATOMIC_MOVE is allowed to replace an existing target even without REPLACE_EXISTING.
+                // A hard link publishes the complete staged inode only if the destination is absent.
+                try { Files.createLink(path, temporary); }
+                catch (UnsupportedOperationException unsupported) {
+                    throw new IOException("Atomic missing-file initialization is not supported", unsupported);
+                }
+            } else {
+                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            }
         } finally {
             Files.deleteIfExists(temporary);
         }
