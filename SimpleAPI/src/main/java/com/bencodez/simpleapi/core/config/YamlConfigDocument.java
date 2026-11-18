@@ -58,8 +58,14 @@ public final class YamlConfigDocument implements ConfigDocument {
     public static final int DEFAULT_MAX_BYTES = 1024 * 1024;
     private static final int MAX_NODES = 100_000;
     private static final int MAX_DEPTH = 64;
+    // Serialize publication per canonical parent, including case-alias target names.
+    private static final Object[] WRITE_LOCKS = new Object[64];
+    static {
+        for (int index = 0; index < WRITE_LOCKS.length; index++) WRITE_LOCKS[index] = new Object();
+    }
     private final Path path;
     private final int maxBytes;
+    private final Object writeLock;
     private ConfigurationNode root;
     private String revision;
     private boolean editing;
@@ -67,6 +73,7 @@ public final class YamlConfigDocument implements ConfigDocument {
     private YamlConfigDocument(Path path, int maxBytes) {
         this.path = path;
         this.maxBytes = maxBytes;
+        this.writeLock = WRITE_LOCKS[Math.floorMod(path.getParent().hashCode(), WRITE_LOCKS.length)];
     }
 
     public static YamlConfigDocument open(Path path) throws IOException { return open(path, DEFAULT_MAX_BYTES); }
@@ -85,6 +92,19 @@ public final class YamlConfigDocument implements ConfigDocument {
     }
 
     @Override public Path path() { return path; }
+
+    /** Seeds a missing document using the same parser, limits and atomic replacement as updates. */
+    synchronized ConfigSnapshot initializeFrom(byte[] bytes) throws IOException {
+        if (editing) throw new IllegalStateException("Cannot initialize inside an edit callback");
+        if (!revision.equals("missing")) return snapshot();
+        if (bytes.length > maxBytes) throw new IOException("Default configuration exceeds byte limit");
+        ConfigurationNode candidate = parse(bytes);
+        ConfigSnapshot result = new ConfigSnapshot(revisionOf(bytes), new ConfigurateConfigView(candidate.copy()));
+        replace(bytes, true);
+        root = candidate;
+        revision = result.revision();
+        return result;
+    }
 
     @Override public synchronized ConfigSnapshot snapshot() {
         return new ConfigSnapshot(revision, new ConfigurateConfigView(root.copy()));
@@ -170,6 +190,16 @@ public final class YamlConfigDocument implements ConfigDocument {
     }
 
     private void replace(byte[] encoded) throws IOException {
+        replace(encoded, false);
+    }
+
+    private void replace(byte[] encoded, boolean initializeOnly) throws IOException {
+        synchronized (writeLock) {
+            replaceLocked(encoded, initializeOnly);
+        }
+    }
+
+    private void replaceLocked(byte[] encoded, boolean initializeOnly) throws IOException {
         requireUnchanged();
         Set<PosixFilePermission> permissions = null;
         if (Files.getFileAttributeView(path.getParent(), java.nio.file.attribute.PosixFileAttributeView.class) != null) {
@@ -178,6 +208,7 @@ public final class YamlConfigDocument implements ConfigDocument {
                     : Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS);
         }
         Path temporary = Files.createTempFile(path.getParent(), ".simpleapi-config-", ".tmp");
+        boolean committed = false;
         try {
             if (permissions != null) Files.setPosixFilePermissions(temporary, permissions);
             try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
@@ -186,9 +217,24 @@ public final class YamlConfigDocument implements ConfigDocument {
                 channel.force(true);
             }
             requireUnchanged();
-            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            if (initializeOnly) {
+                // ATOMIC_MOVE is allowed to replace an existing target even without REPLACE_EXISTING.
+                // A hard link publishes the complete staged inode only if the destination is absent.
+                try { Files.createLink(path, temporary); }
+                catch (UnsupportedOperationException unsupported) {
+                    throw new IOException("Atomic missing-file initialization is not supported", unsupported);
+                }
+            } else {
+                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            }
+            committed = true;
         } finally {
-            Files.deleteIfExists(temporary);
+            try { Files.deleteIfExists(temporary); }
+            catch (IOException | SecurityException cleanupFailure) {
+                // Publication already succeeded: do not report a failed write or retain old active data.
+                // An unremovable staged sibling may require application-owned directory cleanup.
+                if (!committed) throw cleanupFailure;
+            }
         }
     }
 

@@ -37,7 +37,8 @@ public final class SharedRuntimeClasspath {
     public static void requirePlatformsAbsent(ClassLoader loader) throws Exception {
         for (String type : new String[] { "org.bukkit.Bukkit", "net.minecraft.server.MinecraftServer",
                 "net.md_5.bungee.api.ProxyServer", "com.velocitypowered.api.proxy.ProxyServer",
-                "net.fabricmc.api.ModInitializer", "net.minecraftforge.fml.ModList" }) {
+                "net.fabricmc.api.ModInitializer", "net.minecraftforge.fml.ModList",
+                "net.neoforged.fml.ModList", "net.neoforged.neoforge.common.NeoForge" }) {
             try {
                 loader.loadClass(type);
                 throw new AssertionError("Platform leaked into shared classpath: " + type);
