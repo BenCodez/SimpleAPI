@@ -17,8 +17,9 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -32,7 +33,13 @@ import javax.net.ssl.HttpsURLConnection;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.HandlerList;
+import org.bukkit.event.Listener;
+import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.RegisteredListener;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public class BStatsMetrics {
@@ -408,8 +415,7 @@ public class BStatsMetrics {
 
 		private static final String REPORT_URL = "https://bStats.org/api/v2/data/%s";
 
-		private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1,
-				task -> new Thread(task, "bStats-Metrics"));
+		private final ScheduledExecutorService scheduler;
 
 		/**
 		 * Gzips the given string.
@@ -504,9 +510,27 @@ public class BStatsMetrics {
 			this.logSentData = logSentData;
 			this.logResponseStatusText = logResponseStatusText;
 			checkRelocation();
+			// Each service owns its reporting lifetime; retiring one must not stop siblings.
+			ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1,
+					task -> new Thread(task, "bStats-Metrics"));
+			// Do not retain a retired owner until its delayed initial report becomes due.
+			scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+			this.scheduler = scheduler;
 			if (enabled) {
-				startSubmitting();
+				try {
+					startSubmitting();
+				} catch (RuntimeException | Error failure) {
+					scheduler.shutdownNow();
+					throw failure;
+				}
+			} else {
+				scheduler.shutdown();
 			}
+		}
+
+		/** Permanently retires this owner without affecting other metrics instances. */
+		public void shutdown() {
+			scheduler.shutdown();
 		}
 
 		public void addCustomChart(CustomChart chart) {
@@ -576,7 +600,15 @@ public class BStatsMetrics {
 					return;
 				}
 				if (submitTaskConsumer != null) {
-					submitTaskConsumer.accept(this::submitData);
+					try {
+						submitTaskConsumer.accept(this::submitData);
+					} catch (RuntimeException rejection) {
+						// A platform may reject work as its owner disables. Otherwise keep
+						// the periodic check alive so a later handoff can recover.
+						if (!checkServiceEnabledSupplier.get()) {
+							shutdown();
+						}
+					}
 				} else {
 					this.submitData();
 				}
@@ -600,6 +632,10 @@ public class BStatsMetrics {
 		}
 
 		private void submitData() {
+			// A platform handoff may run after this owner's scheduled callback retired it.
+			if (scheduler.isShutdown() || !enabled || !checkServiceEnabledSupplier.get()) {
+				return;
+			}
 			final JsonObjectBuilder baseJsonBuilder = new JsonObjectBuilder();
 			appendPlatformDataConsumer.accept(baseJsonBuilder);
 			final JsonObjectBuilder serviceJsonBuilder = new JsonObjectBuilder();
@@ -613,17 +649,22 @@ public class BStatsMetrics {
 			baseJsonBuilder.appendField("serverUUID", serverUuid);
 			baseJsonBuilder.appendField("metricsVersion", METRICS_VERSION);
 			JsonObjectBuilder.JsonObject data = baseJsonBuilder.build();
-			scheduler.execute(() -> {
-				try {
-					// Send the data
-					sendData(data);
-				} catch (Exception e) {
-					// Something went wrong! :(
-					if (logErrors) {
-						errorLogger.accept("Could not submit bStats metrics data", e);
+			try {
+				scheduler.execute(() -> {
+					try {
+						// Send the data
+						sendData(data);
+					} catch (Exception e) {
+						// Something went wrong! :(
+						if (logErrors) {
+							errorLogger.accept("Could not submit bStats metrics data", e);
+						}
 					}
-				}
-			});
+				});
+			} catch (RejectedExecutionException rejected) {
+				// Retirement can race a previously accepted platform collection callback.
+				if (!scheduler.isShutdown()) throw rejected;
+			}
 		}
 	}
 
@@ -799,6 +840,37 @@ public class BStatsMetrics {
 				plugin::isEnabled, (message, error) -> this.plugin.getLogger().log(Level.WARNING, message, error),
 				(message) -> this.plugin.getLogger().log(Level.INFO, message), logErrors, logSentData,
 				logResponseStatusText);
+		if (enabled) {
+			try {
+				MetricsLifecycle lifecycle = new MetricsLifecycle(plugin, metricsBase);
+				// HandlerList supports registration before enable. PluginManager's
+				// registerEvents rejects onLoad callers; dispatch still belongs to Bukkit.
+				PluginDisableEvent.getHandlerList().register(new RegisteredListener(lifecycle,
+						(listener, event) -> lifecycle.onDisable((PluginDisableEvent) event),
+						EventPriority.MONITOR, plugin, false));
+			} catch (RuntimeException | Error failure) {
+				metricsBase.shutdown();
+				throw failure;
+			}
+		}
+	}
+
+	private static final class MetricsLifecycle implements Listener {
+		private final Plugin owner;
+		private final MetricsBase metrics;
+
+		private MetricsLifecycle(Plugin owner, MetricsBase metrics) {
+			this.owner = owner;
+			this.metrics = metrics;
+		}
+
+		@EventHandler
+		public void onDisable(PluginDisableEvent event) {
+			if (event.getPlugin() == owner) {
+				metrics.shutdown();
+				HandlerList.unregisterAll(this);
+			}
+		}
 	}
 
 	/**
