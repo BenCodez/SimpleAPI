@@ -153,9 +153,13 @@ snapshot. External edits, stale revisions, serialization limits and filesystem
 failures are reported instead of truncating the original file. Reload after an
 external edit before retrying. Old snapshots remain detached across updates.
 Document instances from the same defining classloader coordinate final revision
-checks and publication by canonical path, so stale same-process writers cannot
+checks and publication by canonical parent directory, including case-alias target
+names, so stale same-process writers cannot
 both succeed and silently lose one edit. Cross-process writer exclusion remains
 the application's responsibility.
+After successful publication, a temporary-sibling deletion failure does not undo
+the committed result or make the operation report failure. Such a sibling may
+require application-owned directory cleanup after the filesystem fault is resolved.
 
 Defaults are 1 MiB input/output (configurable up to 16 MiB), 64 levels and 100,000
 nodes. The parent directory must exist and be trusted; the application owns

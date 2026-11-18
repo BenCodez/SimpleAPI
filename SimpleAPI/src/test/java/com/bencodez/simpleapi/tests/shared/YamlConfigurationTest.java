@@ -2,6 +2,8 @@ package com.bencodez.simpleapi.tests.shared;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.argThat;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -20,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.bencodez.simpleapi.core.config.YamlConfiguration;
+import com.google.common.jimfs.Configuration;
+import com.google.common.jimfs.Jimfs;
 
 class YamlConfigurationTest {
     @TempDir Path directory;
@@ -195,6 +199,54 @@ class YamlConfigurationTest {
         };
         try { return YamlConfiguration.load(path, stream).getInt("Points"); }
         catch (IOException stale) { return null; }
+    }
+
+    @Test void caseAliasTargetsOnCaseInsensitiveStoreCannotLoseConcurrentEdits() throws Exception {
+        var workers = Executors.newFixedThreadPool(2);
+        try (var filesystem = Jimfs.newFileSystem(Configuration.osX().toBuilder()
+                .setPathEqualityUsesCanonicalForm(false).build())) {
+            Path parent = filesystem.getPath("/config");
+            Files.createDirectory(parent);
+            for (int trial = 0; trial < 50; trial++) {
+                Path firstPath = parent.resolve("Settings-" + trial + ".yml");
+                Path secondPath = parent.resolve("settings-" + trial + ".yml");
+                Files.writeString(firstPath, "First: 0\nSecond: 0\n");
+                assertNotEquals(firstPath, secondPath, "Paths must retain spelling-sensitive equality");
+                assertNotEquals(firstPath.hashCode(), secondPath.hashCode());
+                assertTrue(Files.isSameFile(firstPath, secondPath), "Store must resolve case aliases");
+                var first = YamlConfiguration.load(firstPath);
+                var second = YamlConfiguration.load(secondPath);
+                var gate = new CyclicBarrier(2);
+                var one = workers.submit(() -> editAtBarrier(first, "First", gate));
+                var two = workers.submit(() -> editAtBarrier(second, "Second", gate));
+                boolean firstSucceeded = one.get(10, TimeUnit.SECONDS);
+                boolean secondSucceeded = two.get(10, TimeUnit.SECONDS);
+                assertNotEquals(firstSucceeded, secondSucceeded, "Case aliases must share revision coordination");
+                var disk = YamlConfiguration.load(firstPath);
+                assertEquals(firstSucceeded ? 1 : 0, disk.getInt("First"));
+                assertEquals(secondSucceeded ? 1 : 0, disk.getInt("Second"));
+            }
+        } finally {
+            workers.shutdownNow();
+            assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test void committedResourceInitializationRemainsSuccessfulAfterUnlinkFailure() throws Exception {
+        try (var files = mockStatic(Files.class, CALLS_REAL_METHODS)) {
+            files.when(() -> Files.deleteIfExists(argThat((Path staged) -> staged != null
+                    && staged.getFileName().toString().startsWith(".simpleapi-config-"))))
+                    .thenThrow(new IOException("synthetic staged unlink failure"));
+            var config = YamlConfiguration.load(path(), new TrackedStream("Points: 7\n"));
+            assertEquals(7, config.getInt("Points"));
+            assertEquals(config.snapshot().revision(), YamlConfiguration.load(path()).snapshot().revision());
+            assertEquals("Points: 7\n", Files.readString(path()));
+        }
+        try (var children = Files.list(directory)) {
+            var staged = children.filter(file -> file.getFileName().toString().startsWith(".simpleapi-config-")).toList();
+            assertEquals(1, staged.size(), "Injected cleanup failure should leave exactly its staged sibling");
+            for (Path file : staged) Files.delete(file);
+        }
     }
 
     private static boolean editAtBarrier(YamlConfiguration config, String key, CyclicBarrier gate) throws Exception {

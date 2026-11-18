@@ -58,7 +58,7 @@ public final class YamlConfigDocument implements ConfigDocument {
     public static final int DEFAULT_MAX_BYTES = 1024 * 1024;
     private static final int MAX_NODES = 100_000;
     private static final int MAX_DEPTH = 64;
-    // Bounded same-classloader coordination, shared by every document for a canonical path.
+    // Serialize publication per canonical parent, including case-alias target names.
     private static final Object[] WRITE_LOCKS = new Object[64];
     static {
         for (int index = 0; index < WRITE_LOCKS.length; index++) WRITE_LOCKS[index] = new Object();
@@ -73,7 +73,7 @@ public final class YamlConfigDocument implements ConfigDocument {
     private YamlConfigDocument(Path path, int maxBytes) {
         this.path = path;
         this.maxBytes = maxBytes;
-        this.writeLock = WRITE_LOCKS[Math.floorMod(path.hashCode(), WRITE_LOCKS.length)];
+        this.writeLock = WRITE_LOCKS[Math.floorMod(path.getParent().hashCode(), WRITE_LOCKS.length)];
     }
 
     public static YamlConfigDocument open(Path path) throws IOException { return open(path, DEFAULT_MAX_BYTES); }
@@ -208,6 +208,7 @@ public final class YamlConfigDocument implements ConfigDocument {
                     : Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS);
         }
         Path temporary = Files.createTempFile(path.getParent(), ".simpleapi-config-", ".tmp");
+        boolean committed = false;
         try {
             if (permissions != null) Files.setPosixFilePermissions(temporary, permissions);
             try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
@@ -226,8 +227,14 @@ public final class YamlConfigDocument implements ConfigDocument {
             } else {
                 Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             }
+            committed = true;
         } finally {
-            Files.deleteIfExists(temporary);
+            try { Files.deleteIfExists(temporary); }
+            catch (IOException | SecurityException cleanupFailure) {
+                // Publication already succeeded: do not report a failed write or retain old active data.
+                // An unremovable staged sibling may require application-owned directory cleanup.
+                if (!committed) throw cleanupFailure;
+            }
         }
     }
 
