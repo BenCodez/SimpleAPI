@@ -156,6 +156,15 @@
                                         <!-- The final artifact deliberately is not multi-release,
                                              so these implementations are unreachable. -->
                                         <exclude>META-INF/versions/**</exclude>
+                                        <!-- These compile-time annotations are not runtime services.
+                                             Keep the library APIs and all service descriptors. -->
+                                        <exclude>org/checkerframework/**</exclude>
+                                        <exclude>org/jspecify/**</exclude>
+                                        <!-- The shaded distribution is not a JPMS module.
+                                             Keep non-POM runtime metadata and all licenses. -->
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>META-INF/maven/**/pom.xml</exclude>
+                                        <exclude>META-INF/maven/**/pom.properties</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
