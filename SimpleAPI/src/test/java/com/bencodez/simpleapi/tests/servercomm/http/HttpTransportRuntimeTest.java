@@ -1375,7 +1375,15 @@ class HttpTransportRuntimeTest {
 	@Execution(ExecutionMode.CONCURRENT)
 	void longPollWakesAtTheOldestDeliveryRetryDeadline() throws Exception {
 		AtomicLong nanoTime = new AtomicLong(1L);
-		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState(nanoTime::get);
+		AtomicInteger pollClockReads = new AtomicInteger();
+		java.util.concurrent.atomic.AtomicBoolean polling = new java.util.concurrent.atomic.AtomicBoolean();
+		HttpTestAccess.BackendState state = new HttpTestAccess.BackendState(() -> {
+			// The second poll-clock read follows the first timed wait. Advancing here
+			// avoids making the deadline depend on a separately scheduled clock thread.
+			if (polling.get() && pollClockReads.incrementAndGet() == 2)
+				nanoTime.addAndGet(TimeUnit.MILLISECONDS.toNanos(100));
+			return nanoTime.get();
+		});
 		String session = java.util.UUID.randomUUID().toString();
 		HttpProtocolAccess.Delivery first = new HttpProtocolAccess.Delivery(
 				java.util.UUID.randomUUID().toString(), JsonEnvelope.builder("first").build());
@@ -1390,16 +1398,9 @@ class HttpTransportRuntimeTest {
 		assertTrue(state.enqueue(second));
 		assertEquals(java.util.List.of(second), state.await("lobby-1", session, 1).messages());
 		assertTrue(state.acceptSession(session, 2));
-		Thread clock = new Thread(() -> {
-			try { Thread.sleep(50L); }
-			catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
-			nanoTime.addAndGet(TimeUnit.MILLISECONDS.toNanos(100));
-		}, "HTTP-retry-test-clock");
-		clock.setDaemon(true);
+		polling.set(true);
 		long started = System.nanoTime();
-		clock.start();
 		assertEquals(java.util.List.of(first), state.await("lobby-1", session, 2).messages());
-		clock.join();
 		assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(1),
 				"the poll must wake at the oldest delivery deadline, not a fresh long-poll deadline");
 	}
